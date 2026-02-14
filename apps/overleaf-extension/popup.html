@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>zeta</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="zeta-popup">
+      <header class="zeta-brand">
+        <img
+          class="zeta-logo"
+          src="assets/zeta-black-white-2048.png"
+          alt="zeta logo"
+          width="56"
+          height="56"
+        />
+        <div class="zeta-brand-copy">
+          <h1>zeta</h1>
+          <p>Grammarly for Math</p>
+        </div>
+      </header>
+
+      <section class="zeta-mode-section">
+        <p class="zeta-section-label">Inference Mode</p>
+        <div class="zeta-mode-toggle" role="tablist" aria-label="zeta speed mode">
+          <span class="zeta-mode-indicator" aria-hidden="true"></span>
+          <button
+            type="button"
+            class="zeta-mode-btn"
+            data-mode="fast"
+            role="tab"
+            aria-selected="false"
+          >
+            fast
+          </button>
+          <button
+            type="button"
+            class="zeta-mode-btn"
+            data-mode="accurate"
+            role="tab"
+            aria-selected="false"
+          >
+            accurate
+          </button>
+          <button
+            type="button"
+            class="zeta-mode-btn"
+            data-mode="auto"
+            role="tab"
+            aria-selected="false"
+          >
+            auto
+          </button>
+        </div>
+        <p id="zeta-mode-note" class="zeta-mode-note"></p>
+      </section>
+
+      <section class="zeta-legend">
+        <p class="zeta-section-label">Live Underlines</p>
+        <div class="zeta-legend-item">
+          <span class="zeta-legend-sample zeta-legend-apple"></span>
+          <span>apple</span>
+        </div>
+        <div class="zeta-legend-item">
+          <span class="zeta-legend-sample zeta-legend-banana"></span>
+          <span>banana</span>
+        </div>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

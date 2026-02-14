@@ -19,7 +19,7 @@ def main() -> None:
         default="Std",
         help="Comma-separated Lean imports. Example: Std,Mathlib",
     )
-    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--lean-timeout-seconds", type=int, default=20)
     parser.add_argument("--include-raw-model-output", action="store_true")

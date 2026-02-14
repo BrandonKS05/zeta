@@ -1,19 +1,128 @@
-.herald-highlight-layer {
-  position: absolute;
+@font-face {
+  font-family: "DM Sans";
+  src: url("assets/fonts/dm-sans.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --zeta-cardinal: #8c1515;
+  --zeta-gold: #e7c34d;
+  --zeta-ink: #2e2d29;
+  --zeta-gray: #4d4f53;
+  --zeta-fog: #f4f4f4;
+  --zeta-stone: #d2c295;
+}
+
+.zeta-highlight-layer {
+  position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 100;
+  z-index: 2147483642;
 }
 
-.herald-highlight {
-  position: absolute;
-  border-radius: 2px;
+.zeta-highlight {
+  position: fixed;
+  pointer-events: none;
+  background: transparent;
+  border-bottom-width: 3px;
+  border-bottom-style: solid;
+  border-radius: 1px;
+  transition: opacity 140ms ease;
 }
 
-.herald-highlight-apple {
-  background: rgba(255, 0, 0, 0.35);
+.zeta-highlight-apple {
+  border-bottom-color: var(--zeta-cardinal);
+  border-bottom-style: dotted;
 }
 
-.herald-highlight-banana {
-  background: rgba(255, 255, 0, 0.45);
+.zeta-highlight-banana {
+  border-bottom-color: var(--zeta-gold);
+}
+
+.zeta-suggestion-popover {
+  position: fixed;
+  width: min(340px, calc(100vw - 24px));
+  border: 1px solid #d9d4cb;
+  border-radius: 14px;
+  background: linear-gradient(165deg, #ffffff 0%, var(--zeta-fog) 100%);
+  box-shadow: 0 20px 38px rgba(25, 20, 20, 0.26);
+  padding: 12px;
+  z-index: 2147483647;
+  font-family: "DM Sans", "Segoe UI", sans-serif;
+  color: var(--zeta-ink);
+  animation: zeta-pop-in 180ms ease;
+}
+
+@keyframes zeta-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.zeta-suggestion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.zeta-suggestion-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.zeta-mode-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--zeta-cardinal);
+  border-radius: 999px;
+  border: 1px solid #d8c2b8;
+  background: #fff8f4;
+  padding: 2px 9px;
+}
+
+.zeta-suggestion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.zeta-suggestion-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  border: 1px solid #d7d1c8;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--zeta-ink);
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 10px;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.zeta-suggestion-option:hover {
+  border-color: var(--zeta-cardinal);
+  background: #fffdf9;
+}
+
+.zeta-suggestion-replacement {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.zeta-suggestion-reason {
+  font-size: 11px;
+  color: var(--zeta-gray);
+  margin-top: 3px;
+  line-height: 1.35;
 }

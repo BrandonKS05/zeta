@@ -1,0 +1,77 @@
+[
+  {
+    "id": "proofnetsharp-Artin_exercise_2_11_3",
+    "text": "Prove that a group of even order contains an element of order $2 .$",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Pair up if possible each element of $G$ with its inverse, and observe that\n\n$$\n\ng^2 \\neq e \\Longleftrightarrow g \\neq g^{-1} \\Longleftrightarrow \\text { there exists the pair }\\left(g, g^{-1}\\right)\n\n$$\n\nNow, there is one element that has no pairing: the unit $e$ (since indeed $e=e^{-1} \\Longleftrightarrow e^2=e$ ), so since the number of elements of $G$ is even there must be at least one element more, say $e \\neq a \\in G$, without a pairing, and thus $a=a^{-1} \\Longleftrightarrow a^2=e$\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_2_11_3",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_2_11_3",
+      "proof_word_count": 84
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_3_5_6",
+    "text": "Let $V$ be a vector space which is spanned by a countably infinite set. Prove that every linearly independent subset of $V$ is finite or countably infinite.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $A$ be the countable generating set, and let $U$ be an uncountable linearly independent set. It can be extended to a basis $B$ of the whole space. Now consider the subset $C$ of elements of $B$ that appear in the $B$-decompositions of elements of $A$.\n\nSince only finitely many elements are involved in the decomposition of each element of $A$, the set $C$ is countable. But $C$ also clearly generates the vector space $V$. This contradicts the fact that it is a proper subset of the basis $B$ (since $B$ is uncountable).\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_3_5_6",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_3_5_6",
+      "proof_word_count": 95
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_6_1_14",
+    "text": "Let $Z$ be the center of a group $G$. Prove that if $G / Z$ is a cyclic group, then $G$ is abelian and hence $G=Z$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    We have that $G / Z(G)$ is cyclic, and so there is an element $x \\in G$ such that $G / Z(G)=\\langle x Z(G)\\rangle$, where $x Z(G)$ is the coset with representative $x$. Now let $g \\in G$\n\nWe know that $g Z(G)=(x Z(G))^m$ for some $m$, and by definition $(x Z(G))^m=x^m Z(G)$.\n\nNow, in general, if $H \\leq G$, we have by definition too that $a H=b H$ if and only if $b^{-1} a \\in H$.\n\nIn our case, we have that $g Z(G)=x^m Z(G)$, and this happens if and only if $\\left(x^m\\right)^{-1} g \\in Z(G)$.\n\nThen, there's a $z \\in Z(G)$ such that $\\left(x^m\\right)^{-1} g=z$, and so $g=x^m z$.\n\n\n\n$g, h \\in G$ implies that $g=x^{a_1} z_1$ and $h=x^{a_2} z_2$, so\n\n$$\n\n\\begin{aligned}\n\ng h & =\\left(x^{a_1} z_1\\right)\\left(x^{a_2} z_2\\right) \\\\\n\n& =x^{a_1} x^{a_2} z_1 z_2 \\\\\n\n& =x^{a_1+a_2} z_2 z_1 \\\\\n\n& =\\ldots=\\left(x^{a_2} z_2\\right)\\left(x^{a_1} z_1\\right)=h g .\n\n\\end{aligned}\n\n$$\n\nTherefore, $G$ is abelian.\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_6_1_14",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_6_1_14",
+      "proof_word_count": 157
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_10_2_4",
+    "text": "Prove that in the ring $\\mathbb{Z}[x],(2) \\cap(x)=(2 x)$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $f(x) \\in(2 x)$. Then there exists some polynomial $g(x) \\in \\mathbb{Z}$ such that\n\n$$\n\nf(x)=2 x g(x)\n\n$$\n\nBut this means that $f(x) \\in(2)$ (because $x g(x)$ is a polynomial), and $f(x) \\in$ $(x)$ (because $2 g(x)$ is a polynomial). Thus, $f(x) \\in(2) \\cap(x)$, and\n\n$$\n\n(2 x) \\subseteq(2) \\cap(x)\n\n$$\n\nOn the other hand, let $p(x) \\in(2) \\cap(x)$. Since $p(x) \\in(2)$, there exists some polynomial $h(x) \\in \\mathbb{Z}[x]$ such that\n\n$$\n\np(x)=2 h(x)\n\n$$\n\nFurthermore, $p(x) \\in(x)$, so\n\n$$\n\np(x)=x h_2(x)\n\n$$\n\nSo, $2 h(x)=x h_2(x)$, for some $h_2(x) \\in \\mathbb{Z}[x]$. This means that $h(0)=0$, so $x$ divides $h(x)$; that is,\n\n$$\n\nh(x)=x q(x)\n\n$$\n\nfor some $q(x) \\in \\mathbb{Z}[x]$, and\n\n$$\n\np(x)=2 x q(x)\n\n$$\n\nThus, $p(x) \\in(2 x)$, and\n\n$$\n\n\\text { (2) } \\cap(x) \\subseteq(2 x)\n\n$$\n\nFinally,\n\n(2) $\\cap(x)=(2 x)$,\n\nas required.\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_10_2_4",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_10_2_4",
+      "proof_word_count": 140
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_1_8",
+    "text": "Prove that the intersection of any collection of subspaces of $V$ is a subspace of $V$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\nLet $V_1, V_2, \\ldots, V_n$ be subspaces of the vector space $V$ over the field $F$. We must show that their intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$ is also a subspace of $V$.\n\n\n\nTo begin, we observe that the additive identity $0$ of $V$ is in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. This is because $0$ is in each subspace $V_i$, as they are subspaces and hence contain the additive identity.\n\n\n\nNext, we show that the intersection of subspaces is closed under addition. Let $u$ and $v$ be vectors in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. By definition, $u$ and $v$ belong to each of the subspaces $V_i$. Since each $V_i$ is a subspace and therefore closed under addition, it follows that $u+v$ belongs to each $V_i$. Thus, $u+v$ belongs to the intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$.\n\n\n\nFinally, we show that the intersection of subspaces is closed under scalar multiplication. Let $a$ be a scalar in $F$ and let $v$ be a vector in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. Since $v$ belongs to each $V_i$, we have $av$ belongs to each $V_i$ as well, as $V_i$ are subspaces and hence closed under scalar multiplication. Therefore, $av$ belongs to the intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$.\n\n\n\nThus, we have shown that $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$ is a subspace of $V$.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_1_8",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_1_8",
+      "proof_word_count": 235
+    }
+  }
+]

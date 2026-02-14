@@ -1,0 +1,302 @@
+[
+  {
+    "id": "proofnetsharp-Artin_exercise_2_11_3",
+    "text": "Prove that a group of even order contains an element of order $2 .$",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Pair up if possible each element of $G$ with its inverse, and observe that\n\n$$\n\ng^2 \\neq e \\Longleftrightarrow g \\neq g^{-1} \\Longleftrightarrow \\text { there exists the pair }\\left(g, g^{-1}\\right)\n\n$$\n\nNow, there is one element that has no pairing: the unit $e$ (since indeed $e=e^{-1} \\Longleftrightarrow e^2=e$ ), so since the number of elements of $G$ is even there must be at least one element more, say $e \\neq a \\in G$, without a pairing, and thus $a=a^{-1} \\Longleftrightarrow a^2=e$\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_2_11_3",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_2_11_3",
+      "proof_word_count": 84
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_3_5_6",
+    "text": "Let $V$ be a vector space which is spanned by a countably infinite set. Prove that every linearly independent subset of $V$ is finite or countably infinite.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $A$ be the countable generating set, and let $U$ be an uncountable linearly independent set. It can be extended to a basis $B$ of the whole space. Now consider the subset $C$ of elements of $B$ that appear in the $B$-decompositions of elements of $A$.\n\nSince only finitely many elements are involved in the decomposition of each element of $A$, the set $C$ is countable. But $C$ also clearly generates the vector space $V$. This contradicts the fact that it is a proper subset of the basis $B$ (since $B$ is uncountable).\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_3_5_6",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_3_5_6",
+      "proof_word_count": 95
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_6_1_14",
+    "text": "Let $Z$ be the center of a group $G$. Prove that if $G / Z$ is a cyclic group, then $G$ is abelian and hence $G=Z$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    We have that $G / Z(G)$ is cyclic, and so there is an element $x \\in G$ such that $G / Z(G)=\\langle x Z(G)\\rangle$, where $x Z(G)$ is the coset with representative $x$. Now let $g \\in G$\n\nWe know that $g Z(G)=(x Z(G))^m$ for some $m$, and by definition $(x Z(G))^m=x^m Z(G)$.\n\nNow, in general, if $H \\leq G$, we have by definition too that $a H=b H$ if and only if $b^{-1} a \\in H$.\n\nIn our case, we have that $g Z(G)=x^m Z(G)$, and this happens if and only if $\\left(x^m\\right)^{-1} g \\in Z(G)$.\n\nThen, there's a $z \\in Z(G)$ such that $\\left(x^m\\right)^{-1} g=z$, and so $g=x^m z$.\n\n\n\n$g, h \\in G$ implies that $g=x^{a_1} z_1$ and $h=x^{a_2} z_2$, so\n\n$$\n\n\\begin{aligned}\n\ng h & =\\left(x^{a_1} z_1\\right)\\left(x^{a_2} z_2\\right) \\\\\n\n& =x^{a_1} x^{a_2} z_1 z_2 \\\\\n\n& =x^{a_1+a_2} z_2 z_1 \\\\\n\n& =\\ldots=\\left(x^{a_2} z_2\\right)\\left(x^{a_1} z_1\\right)=h g .\n\n\\end{aligned}\n\n$$\n\nTherefore, $G$ is abelian.\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_6_1_14",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_6_1_14",
+      "proof_word_count": 157
+    }
+  },
+  {
+    "id": "proofnetsharp-Artin_exercise_10_2_4",
+    "text": "Prove that in the ring $\\mathbb{Z}[x],(2) \\cap(x)=(2 x)$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $f(x) \\in(2 x)$. Then there exists some polynomial $g(x) \\in \\mathbb{Z}$ such that\n\n$$\n\nf(x)=2 x g(x)\n\n$$\n\nBut this means that $f(x) \\in(2)$ (because $x g(x)$ is a polynomial), and $f(x) \\in$ $(x)$ (because $2 g(x)$ is a polynomial). Thus, $f(x) \\in(2) \\cap(x)$, and\n\n$$\n\n(2 x) \\subseteq(2) \\cap(x)\n\n$$\n\nOn the other hand, let $p(x) \\in(2) \\cap(x)$. Since $p(x) \\in(2)$, there exists some polynomial $h(x) \\in \\mathbb{Z}[x]$ such that\n\n$$\n\np(x)=2 h(x)\n\n$$\n\nFurthermore, $p(x) \\in(x)$, so\n\n$$\n\np(x)=x h_2(x)\n\n$$\n\nSo, $2 h(x)=x h_2(x)$, for some $h_2(x) \\in \\mathbb{Z}[x]$. This means that $h(0)=0$, so $x$ divides $h(x)$; that is,\n\n$$\n\nh(x)=x q(x)\n\n$$\n\nfor some $q(x) \\in \\mathbb{Z}[x]$, and\n\n$$\n\np(x)=2 x q(x)\n\n$$\n\nThus, $p(x) \\in(2 x)$, and\n\n$$\n\n\\text { (2) } \\cap(x) \\subseteq(2 x)\n\n$$\n\nFinally,\n\n(2) $\\cap(x)=(2 x)$,\n\nas required.\n\n\\end{proof}",
+    "theorem_name": "Artin_exercise_10_2_4",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_10_2_4",
+      "proof_word_count": 140
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_1_8",
+    "text": "Prove that the intersection of any collection of subspaces of $V$ is a subspace of $V$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\nLet $V_1, V_2, \\ldots, V_n$ be subspaces of the vector space $V$ over the field $F$. We must show that their intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$ is also a subspace of $V$.\n\n\n\nTo begin, we observe that the additive identity $0$ of $V$ is in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. This is because $0$ is in each subspace $V_i$, as they are subspaces and hence contain the additive identity.\n\n\n\nNext, we show that the intersection of subspaces is closed under addition. Let $u$ and $v$ be vectors in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. By definition, $u$ and $v$ belong to each of the subspaces $V_i$. Since each $V_i$ is a subspace and therefore closed under addition, it follows that $u+v$ belongs to each $V_i$. Thus, $u+v$ belongs to the intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$.\n\n\n\nFinally, we show that the intersection of subspaces is closed under scalar multiplication. Let $a$ be a scalar in $F$ and let $v$ be a vector in $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$. Since $v$ belongs to each $V_i$, we have $av$ belongs to each $V_i$ as well, as $V_i$ are subspaces and hence closed under scalar multiplication. Therefore, $av$ belongs to the intersection $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$.\n\n\n\nThus, we have shown that $V_1 \\cap V_2 \\cap \\ldots \\cap V_n$ is a subspace of $V$.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_1_8",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_1_8",
+      "proof_word_count": 235
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_4_4",
+    "text": "Suppose $p \\in \\mathcal{P}(\\mathbf{C})$ has degree $m$. Prove that $p$ has $m$ distinct roots if and only if $p$ and its derivative $p^{\\prime}$ have no roots in common.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    First, let $p$ have $m$ distinct roots. Since $p$ has the degree of $m$, then this could imply that $p$ can be actually written in the form of $p(z)=c\\left(z-\\lambda_1\\right) \\ldots\\left(z-\\lambda_m\\right)$, which you have $\\lambda_1, \\ldots, \\lambda_m$ being distinct.\n\nTo prove that both $p$ and $p^{\\prime}$ have no roots in commons, we must now show that $p^{\\prime}\\left(\\lambda_j\\right) \\neq 0$ for every $j$. So, to do so, just fix $j$. The previous expression for $p$ shows that we can now write $p$ in the form of $p(z)=\\left(z-\\lambda_j\\right) q(z)$, which $q$ is a polynomial such that $q\\left(\\lambda_j\\right) \\neq 0$.\n\n\n\nWhen you differentiate both sides of the previous equation, then you would then have $p^{\\prime}(z)=(z-$ $\\left.\\lambda_j\\right) q^{\\prime}(z)+q(z)$\n\n\n\nTherefore: $\\left.=p^{\\prime}\\left(\\lambda_j\\right)=q \\lambda_j\\right)$\n\nEquals: $p^{\\prime}\\left(\\lambda_j\\right) \\neq 0$\n\n\n\nNow, to prove the other direction, we would now prove the contrapositive, which means that we will be proving that if $p$ has actually less than $m$ distinct roots, then both $p$ and $p^{\\prime}$ have at least one root in common.\n\n\n\nNow, for some root of $\\lambda$ of $p$, we can write $p$ is in the form of $\\left.p(z)=(z-\\lambda)^n q(z)\\right)$, which is where both $n \\geq 2$ and $q$ is a polynomial. When differentiating both sides of the previous equations, we would then have $p^{\\prime}(z)=(z-\\lambda)^n q^{\\prime}(z)+n(z-\\lambda)^{n-1} q(z)$.\n\nTherefore, $p^{\\prime}(\\lambda)=0$, which would make $\\lambda$ is a common root of both $p$ and $p^{\\prime}$.\n\n\\end{p",
+    "theorem_name": "Axler_exercise_4_4",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_4_4",
+      "proof_word_count": 224
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_5_12",
+    "text": "Suppose $T \\in \\mathcal{L}(V)$ is such that every vector in $V$ is an eigenvector of $T$. Prove that $T$ is a scalar multiple of the identity operator.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    For every single $v \\in V$, there does exist $a_v \\in F$ such that $T v=a_v v$. Since $T 0=0$, then we have to make $a_0$ be the any number in F. However, for every single $v \\in V\\{0\\}$, then the value of $a_V$ is uniquely determined by the previous equation of $T v=a_v v$.\n\n\n\nNow, to show that $T$ is a scalar multiple of the identity, then me must show that $a_v$ is independent of $v$ for $v \\in V\\{0\\}$. We would now want to show that $a_v=a_w$.\n\n\n\nFirst, just make the case of where $(v, w)$ is linearly dependent. Then, there does exist $b \\in F$ such that $w=b v$. Now, you would have the following: $a_W w=T w=T(b v)=b T v=b\\left(a_v v\\right)=a_v w$. This is showing that $a_v=a_w$.\n\nFinally, make the consideration to make $(v, w)$ be linearly independent. Now, we would have the following: $\\left.a_{(} v+w\\right)(v+w)=T(v+w)=T v+T w=a_v v+a_w w$.\n\n\n\nThat previous equation implies the following: $\\left.\\left.\\left(a_{(} v+w\\right)-a_v\\right) v+\\left(a_{(} v+w\\right)-a_w\\right) w=0$. Since $(v, w)$ is linearly independent, this would imply that both $\\left.a_{(} v+w\\right)=a_v$ and $\\left.a_{(} v+w\\right)=a_w$. Therefore, $a_v=a_w$.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_5_12",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_5_12",
+      "proof_word_count": 185
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_5_20",
+    "text": "Suppose that $T \\in \\mathcal{L}(V)$ has $\\operatorname{dim} V$ distinct eigenvalues and that $S \\in \\mathcal{L}(V)$ has the same eigenvectors as $T$ (not necessarily with the same eigenvalues). Prove that $S T=T S$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    First off, let $n=\\operatorname{dim} V$. so, there is a basis of $\\left(v_1, \\ldots, v_j\\right)$ of $V$ that consist of eigenvectors of $T$. Now, let $\\lambda_1, \\ldots, \\lambda_n$ be the corresponding eigenvalues, then we would have $T v_j=\\lambda_1 v_j$ for every single $j$.\n\n\n\nNow, for every $v_j$ is also an eigenvector of S, so $S v_j=a_j v_j$ for some $a_j \\in F$. For each $j$, we would then have $(S T) v_j=S\\left(T v_j\\right)=\\lambda_j S v_j=a_j \\lambda_j v_j$ and $(T S) v_j=T\\left(S v_j\\right)=a_j T v_j=a_j \\lambda_j v_j$. Since both operators, which are $S T$ and $T S$, agree on a basis, then both are equal.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_5_20",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_5_20",
+      "proof_word_count": 105
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_6_2",
+    "text": "Suppose $u, v \\in V$. Prove that $\\langle u, v\\rangle=0$ if and only if $\\|u\\| \\leq\\|u+a v\\|$ for all $a \\in \\mathbf{F}$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    First off, let us suppose that $(u, v)=0$.\n\nNow, let $a \\in \\mathbb{F}$. Next, $u, a v$ are orthogonal.\n\nThe Pythagorean theorem thus implies that\n\n$$\n\n\\begin{aligned}\n\n\\|u+a v\\|^2 & =\\|u\\|^2+\\|a v\\|^2 \\\\\n\n& \\geq\\|u\\|^2\n\n\\end{aligned}\n\n$$\n\nSo, by taking the square roots, this will now give us $\\|u\\| \\leq\\|u+a v\\|$.\n\nNow, to prove the implication in the other direction, we must now let $\\|u\\| \\leq$ $\\|u+a v\\|$ for all $a \\in \\mathbb{F}$. Squaring this inequality, we get both:\n\n$$\n\n\\begin{gathered}\n\n\\|u\\|^2 a n d \\leq\\|u+a v\\|^2 \\\\\n\n=(u+a v, u+a v) \\\\\n\n=(u, u)+(u, a v)+(a v, u)+(a v, a v) \\\\\n\n=\\|u\\|^2+\\bar{a}(u, v)+a \\overline{(u, v)}+|a|^2\\|v\\|^2 \\\\\n\n\\|u\\|^2+2 \\Re \\bar{a}(u, v)+|a|^2\\|v\\|^2\n\n\\end{gathered}\n\n$$\n\nfor all $a \\in \\mathbb{F}$.\n\nTherefore,\n\n$$\n\n-2 \\Re \\bar{a}(u, v) \\leq|a|^2\\|v\\|^2\n\n$$\n\nfor all $a \\in \\mathbb{F}$. In particular, we can let $a$ equal $-t(u, v)$ for $t>0$. Substituting this value for $a$ into the inequality above gives\n\n$$\n\n2 t|(u, v)|^2 \\leq t^2|(u, v)|^2\\|v\\|^2\n\n$$\n\nfor all $t>0$.\n\nStep 4\n\n4 of 4\n\nDivide both sides of the inequality above by $t$, getting\n\n$$\n\n2|(u, v)|^2 \\leq t \\mid(u, v)^2\\|v\\|^2\n\n$$\n\nfor all $t>0$. If $v=0$, then $(u, v)=0$, as desired. If $v \\neq 0$, set $t$ equal to $1 /\\|v\\|^2$ in the inequality above, getting\n\n$$\n\n2|(u, v)|^2 \\leq|(u, v)|^2,\n\n$$\n\nwhich implies that $(u, v)=0$.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_6_2",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_6_2",
+      "proof_word_count": 225
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_6_7",
+    "text": "Prove that if $V$ is a complex inner-product space, then $\\langle u, v\\rangle=\\frac{\\|u+v\\|^{2}-\\|u-v\\|^{2}+\\|u+i v\\|^{2} i-\\|u-i v\\|^{2} i}{4}$ for all $u, v \\in V$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\nLet $V$ be an inner-product space and $u, v\\in V$. Then \n\n$$\n\n\\begin{aligned}\n\n\\|u+v\\|^2 & =\\langle u+v, v+v\\rangle \\\\\n\n& =\\|u\\|^2+\\langle u, v\\rangle+\\langle v, u\\rangle+\\|v\\|^2 \\\\\n\n-\\|u-v\\|^2 & =-\\langle u-v, u-v\\rangle \\\\\n\n& =-\\|u\\|^2+\\langle u, v\\rangle+\\langle v, u\\rangle-\\|v\\|^2 \\\\\n\ni\\|u+i v\\|^2 & =i\\langle u+i v, u+i v\\rangle \\\\\n\n& =i\\|u\\|^2+\\langle u, v\\rangle-\\langle v, u\\rangle+i\\|v\\|^2 \\\\\n\n-i\\|u-i v\\|^2 & =-i\\langle u-i v, u-i v\\rangle \\\\\n\n& =-i\\|u\\|^2+\\langle u, v\\rangle-\\langle v, u\\rangle-i\\|v\\|^2 .\n\n\\end{aligned}\n\n$$\n\nThus $\\left(\\|u+v\\|^2\\right)-\\|u-v\\|^2+\\left(i\\|u+i v\\|^2\\right)-i\\|u-i v\\|^2=4\\langle u, v\\rangle.$\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_6_7",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_6_7",
+      "proof_word_count": 81
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_7_6",
+    "text": "Prove that if $T \\in \\mathcal{L}(V)$ is normal, then $\\operatorname{range} T=\\operatorname{range} T^{*}.$",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $T \\in \\mathcal{L}(V)$ to be a normal operator.\n\nSuppose $u \\in \\operatorname{null} T$. Then, by $7.20$,\n\n$$\n\n0=\\|T u\\|=\\left\\|T^* u\\right\\|,\n\n$$\n\nwhich implies that $u \\in \\operatorname{null} T^*$.\n\nHence\n\n$$\n\n\\operatorname{null} T=\\operatorname{null} T^*\n\n$$\n\nbecause $\\left(T^*\\right)^*=T$ and the same argument can be repeated.\n\nNow we have\n\n$$\n\n\\begin{aligned}\n\n\\text { range } T & =\\left(\\text { null } T^*\\right)^{\\perp} \\\\\n\n& =(\\text { null } T)^{\\perp} \\\\\n\n& =\\operatorname{range} T^*,\n\n\\end{aligned}\n\n$$\n\nwhere the first and last equality follow from items (d) and (b) of 7.7.\n\nHence, range $T=$ range $T^*$.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_7_6",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_7_6",
+      "proof_word_count": 94
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_7_10",
+    "text": "Suppose $V$ is a complex inner-product space and $T \\in \\mathcal{L}(V)$ is a normal operator such that $T^{9}=T^{8}$. Prove that $T$ is self-adjoint and $T^{2}=T$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Based on the complex spectral theorem, there is an orthonormal basis of $\\left(e_1, \\ldots, e_n\\right)$ of $V$ consisting of eigenvectors of $T$. Now, let $\\lambda_1, \\ldots, \\lambda_n$ be the corresponding eigenvalues. Therefore,\n\n$$\n\nT e_1=\\lambda_j e_j\n\n$$\n\nfor $j=1 \\ldots n$.\n\n\n\nNext, by applying $T$ repeatedly to both sides of the equation above, we get $T^9 e_j=\\left(\\lambda_j\\right)^9 e_j$ and rei =8ej. Thus $T^8 e_j=\\left(\\lambda_j\\right)^8 e_j$, which implies that $\\lambda_j$ equals 0 or 1 . In particular, all the eigenvalues of $T$ are real. This would then imply that $T$ is self-adjoint.\n\n\n\nNow, by applying $T$ to both sides of the equation above, we get\n\n$$\n\n\\begin{aligned}\n\nT^2 e_j & =\\left(\\lambda_j\\right)^2 e_j \\\\\n\n& =\\lambda_j e_j \\\\\n\n& =T e_j\n\n\\end{aligned}\n\n$$\n\nwhich is where the second equality holds because $\\lambda_j$ equals 0 or 1 . Because $T^2$ and $T$ agree on a basis, they must be equal.\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_7_10",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_7_10",
+      "proof_word_count": 149
+    }
+  },
+  {
+    "id": "proofnetsharp-Axler_exercise_7_14",
+    "text": "Suppose $T \\in \\mathcal{L}(V)$ is self-adjoint, $\\lambda \\in \\mathbf{F}$, and $\\epsilon>0$. Prove that if there exists $v \\in V$ such that $\\|v\\|=1$ and $\\|T v-\\lambda v\\|<\\epsilon,$ then $T$ has an eigenvalue $\\lambda^{\\prime}$ such that $\\left|\\lambda-\\lambda^{\\prime}\\right|<\\epsilon$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Let $T \\in \\mathcal{L}(V)$ be a self-adjoint, and let $\\lambda \\in \\mathbf{F}$ and $\\epsilon>0$.\n\nBy the Spectral Theorem, there is $e_1, \\ldots, e_n$ an orthonormal basis of $V$ consisting of eigenvectors of $T$ and let $\\lambda_1, \\ldots, \\lambda_n$ denote their corresponding eigenvalues.\n\nChoose an eigenvalue $\\lambda^{\\prime}$ of $T$ such that $\\left|\\lambda^{\\prime}-\\lambda\\right|^2$ is minimized.\n\nThere are $a_1, \\ldots, a_n \\in \\mathbb{F}$ such that\n\n$$\n\nv=a_1 e_1+\\cdots+a_n e_n .\n\n$$\n\nThus, we have\n\n$$\n\n\\begin{aligned}\n\n\\epsilon^2 & >|| T v-\\left.\\lambda v\\right|^2 \\\\\n\n& =\\left|\\left\\langle T v-\\lambda v, e_1\\right\\rangle\\right|^2+\\cdots+\\left|\\left\\langle T v-\\lambda v, e_n\\right\\rangle\\right|^2 \\\\\n\n& =\\left|\\lambda_1 a_1-\\lambda a_1\\right|^2+\\cdots+\\left|\\lambda_n a_n-\\lambda a_n\\right|^2 \\\\\n\n& =\\left|a_1\\right|^2\\left|\\lambda_1-\\lambda\\right|^2+\\cdots+\\left|a_n\\right|^2\\left|\\lambda_n-\\lambda\\right|^2 \\\\\n\n& \\geq\\left|a_1\\right|^2\\left|\\lambda^{\\prime}-\\lambda\\right|^2+\\cdots+\\left|a_n\\right|^2\\left|\\lambda^{\\prime}-\\lambda\\right|^2 \\\\\n\n& =\\left|\\lambda^{\\prime}-\\lambda\\right|^2\n\n\\end{aligned}\n\n$$\n\nwhere the second and fifth lines follow from $6.30$ (the fifth because $\\|v\\|=1$ ). Now, we taking the square root.\n\nHence, $T$ has an eigenvalue $\\lambda^{\\prime}$ such that $\\left|\\lambda^{\\prime}-\\lambda\\right|<\\epsilon$\n\n\\end{proof}",
+    "theorem_name": "Axler_exercise_7_14",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Axler|exercise_7_14",
+      "proof_word_count": 139
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_1_1_22a",
+    "text": "If $x$ and $g$ are elements of the group $G$, prove that $|x|=\\left|g^{-1} x g\\right|$.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    First we prove a technical lemma:\n\n\n\n    {\\bf Lemma.} For all $a, b \\in G$ and $n \\in \\mathbb{Z},\\left(b^{-1} a b\\right)^n=b^{-1} a^n b$.\n\nThe statement is clear for $n=0$. We prove the case $n>0$ by induction; the base case $n=1$ is clear. Now suppose $\\left(b^{-1} a b\\right)^n=b^{-1} a^n b$ for some $n \\geq 1$; then\n\n$$\n\n\\left(b^{-1} a b\\right)^{n+1}=\\left(b^{-1} a b\\right)\\left(b^{-1} a b\\right)^n=b^{-1} a b b^{-1} a^n b=b^{-1} a^{n+1} b .\n\n$$\n\nBy induction the statement holds for all positive $n$.\n\nNow suppose $n<0$; we have\n\n$$\n\n\\left(b^{-1} a b\\right)^n=\\left(\\left(b^{-1} a b\\right)^{-n}\\right)^{-1}=\\left(b^{-1} a^{-n} b\\right)^{-1}=b^{-1} a^n b .\n\n$$\n\nHence, the statement holds for all integers $n$.\n\nNow to the main result. Suppose first that $|x|$ is infinity and that $\\left|g^{-1} x g\\right|=n$ for some positive integer $n$. Then we have\n\n$$\n\n\\left(g^{-1} x g\\right)^n=g^{-1} x^n g=1,\n\n$$\n\nand multiplying on the left by $g$ and on the right by $g^{-1}$ gives us that $x^n=1$, a contradiction. Thus if $|x|$ is infinity, so is $\\left|g^{-1} x g\\right|$. Similarly, if $\\left|g^{-1} x g\\right|$ is infinite and $|x|=n$, we have\n\n$$\n\n\\left(g^{-1} x g\\right)^n=g^{-1} x^n g=g^{-1} g=1,\n\n$$\n\na contradiction. Hence if $\\left|g^{-1} x g\\right|$ is infinite, so is $|x|$.\n\nSuppose now that $|x|=n$ and $\\left|g^{-1} x g\\right|=m$ for some positive integers $n$ and $m$. We have\n\n$$\n\n\\left(g^{-1} x g\\right)^n=g^{-1} x^n g=g^{-1} g=1,\n\n$$\n\nSo that $m \\leq n$, and\n\n$$\n\n\\left(g^{-1} x g\\right)^m=g^{-1} x^m g=1,\n\n$$\n\nso that $x^m=1$ and $n \\leq m$. Thus $n=m$.\n\n\\end{p",
+    "theorem_name": "Dummit_Foote_exercise_1_1_22a",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_1_1_22a",
+      "proof_word_count": 245
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_1_6_4",
+    "text": "Prove that the multiplicative groups $\\mathbb{R}-\\{0\\}$ and $\\mathbb{C}-\\{0\\}$ are not isomorphic.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Isomorphic groups necessarily have the same number of elements of order $n$ for all finite $n$.\n\n\n\nNow let $x \\in \\mathbb{R}^{\\times}$. If $x=1$ then $|x|=1$, and if $x=-1$ then $|x|=2$. If (with bars denoting absolute value) $|x|<1$, then we have\n\n$$\n\n1>|x|>\\left|x^2\\right|>\\cdots,\n\n$$\n\nand in particular, $1>\\left|x^n\\right|$ for all $n$. So $x$ has infinite order in $\\mathbb{R}^{\\times}$.\n\nSimilarly, if $|x|>1$ (absolute value) then $x$ has infinite order in $\\mathbb{R}^{\\times}$. So $\\mathbb{R}^{\\times}$has 1 element of order 1,1 element of order 2 , and all other elements have infinite order.\n\nIn $\\mathbb{C}^{\\times}$, on the other hand, $i$ has order 4 . Thus $\\mathbb{R}^{\\times}$and $\\mathbb{C}^{\\times}$are not isomorphic.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_1_6_4",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_1_6_4",
+      "proof_word_count": 106
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_2_4_16b",
+    "text": "Show that the subgroup of all rotations in a dihedral group is a maximal subgroup.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Fix a positive integer $n>1$ and let $H \\leq D_{2 n}$ consist of the rotations of $D_{2 n}$. That is, $H=\\langle r\\rangle$. Now, this subgroup is proper since it does not contain $s$. If $H$ is not maximal, then by the previous proof we know there is a maximal subset $K$ containing $H$. Then $K$ must contain a reflection $s r^k$ for $k \\in\\{0,1, \\ldots, n-1\\}$. Then since $s r^k \\in K$ and $r^{n-k} \\in K$, it follows by closure that\n\n$$\n\ns=\\left(s r^k\\right)\\left(r^{n-k}\\right) \\in K .\n\n$$\n\nBut $D_{2 n}=\\langle r, s\\rangle$, so this shows that $K=D_{2 n}$, which is a contradiction. Therefore $H$ must be maximal.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_2_4_16b",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_2_4_16b",
+      "proof_word_count": 110
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_3_1_3a",
+    "text": "Let $A$ be an abelian group and let $B$ be a subgroup of $A$. Prove that $A / B$ is abelian.",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Lemma: Let $G$ be a group. If $|G|=2$, then $G \\cong Z_2$.\n\nProof: Since $G=\\{e a\\}$ has an identity element, say $e$, we know that $e e=e, e a=a$, and $a e=a$. If $a^2=a$, we have $a=e$, a contradiction. Thus $a^2=e$. We can easily see that $G \\cong Z_2$.\n\n\n\nIf $A$ is abelian, every subgroup of $A$ is normal; in particular, $B$ is normal, so $A / B$ is a group. Now let $x B, y B \\in A / B$. Then\n\n$$\n\n(x B)(y B)=(x y) B=(y x) B=(y B)(x B) .\n\n$$\n\nHence $A / B$ is abelian.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_3_1_3a",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_3_1_3a",
+      "proof_word_count": 102
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_3_1_22b",
+    "text": "Prove that the intersection of an arbitrary nonempty collection of normal subgroups of a group is a normal subgroup (do not assume the collection is countable).",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\nLet $\\left\\{H_i \\mid i \\in I\\right\\}$ be an arbitrary collection of normal subgroups of $G$ and consider the intersection\n\n$$\n\n\\bigcap_{i \\in I} H_i\n\n$$\n\nTake an element $a$ in the intersection and an arbitrary element $g \\in G$. Then $g a g^{-1} \\in H_i$ because $H_i$ is normal for any $i \\in H$\n\nBy the definition of the intersection, this shows that $g a g^{-1} \\in \\bigcap_{i \\in I} H_i$ and therefore it is a normal subgroup.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_3_1_22b",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_3_1_22b",
+      "proof_word_count": 80
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_3_2_11",
+    "text": "Let $H \\leq K \\leq G$. Prove that $|G: H|=|G: K| \\cdot|K: H|$ (do not assume $G$ is finite).",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Proof. Let $G$ be a group and let $I$ be a nonempty set of indices, not necessarily countable. Consider the collection of subgroups $\\left\\{N_\\alpha \\mid \\alpha \\in I\\right\\}$, where $N_\\alpha \\unlhd G$ for each $\\alpha \\in I$. Let\n\n$$\n\nN=\\bigcap_{\\alpha \\in I} N_\\alpha .\n\n$$\n\nWe know $N$ is a subgroup of $G$. \n\nFor any $g \\in G$ and any $n \\in N$, we must have $n \\in N_\\alpha$ for each $\\alpha$. And since $N_\\alpha \\unlhd G$, we have $g n g^{-1} \\in N_\\alpha$ for each $\\alpha$. Therefore $g n g^{-1} \\in N$, which shows that $g N g^{-1} \\subseteq N$ for each $g \\in G$. As before, this is enough to complete the proof.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_3_2_11",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_3_2_11",
+      "proof_word_count": 117
+    }
+  },
+  {
+    "id": "proofnetsharp-Dummit_Foote_exercise_3_4_1",
+    "text": "Prove that if $G$ is an abelian simple group then $G \\cong Z_{p}$ for some prime $p$ (do not assume $G$ is a finite group).",
+    "context": "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n\\begin{proof}\n\n    Solution: Let $G$ be an abelian simple group.\n\nSuppose $G$ is infinite. If $x \\in G$ is a nonidentity element of finite order, then $\\langle x\\rangle<G$ is a nontrivial normal subgroup, hence $G$ is not simple. If $x \\in G$ is an element of infinite order, then $\\left\\langle x^2\\right\\rangle$ is a nontrivial normal subgroup, so $G$ is not simple.\n\n\n\nSuppose $G$ is finite; say $|G|=n$. If $n$ is composite, say $n=p m$ for some prime $p$ with $m \\neq 1$, then by Cauchy's Theorem $G$ contains an element $x$ of order $p$ and $\\langle x\\rangle$ is a nontrivial normal subgroup. Hence $G$ is not simple. Thus if $G$ is an abelian simple group, then $|G|=p$ is prime. We saw previously that the only such group up to isomorphism is $\\mathbb{Z} /(p)$, so that $G \\cong \\mathbb{Z} /(p)$. Moreover, these groups are indeed simple.\n\n\\end{proof}",
+    "theorem_name": "Dummit_Foote_exercise_3_4_1",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Dummit-Foote|exercise_3_4_1",
+      "proof_word_count": 145
+    }
+  }
+]

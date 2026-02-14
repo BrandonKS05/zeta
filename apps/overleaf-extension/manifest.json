@@ -1,26 +1,35 @@
 {
   "manifest_version": 3,
-  "name": "Herald Overleaf Highlighter",
-  "version": "0.1.0",
-  "description": "Highlights target words in Overleaf's source editor.",
-  "permissions": [
-    "storage"
-  ],
-  "host_permissions": [
-    "https://*.modal.run/*"
+  "name": "zeta",
+  "version": "0.3.0",
+  "description": "Grammarly for Math",
+  "permissions": ["storage"],
+  "host_permissions": ["https://*.modal.run/*"],
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "action": {
+    "default_title": "zeta - Grammarly for Math",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/fonts/dm-sans.woff2"],
+      "matches": ["https://www.overleaf.com/*", "https://*.overleaf.com/*"]
+    }
   ],
   "content_scripts": [
     {
-      "matches": [
-        "https://www.overleaf.com/*",
-        "https://*.overleaf.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "content.css"
-      ],
+      "matches": ["https://www.overleaf.com/*", "https://*.overleaf.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ]

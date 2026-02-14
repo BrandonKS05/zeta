@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from copy import deepcopy
 import json
 import os
 import re
@@ -10,13 +12,14 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 
 import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-lean-normalize-v2"
+APP_VERSION = "2026-02-14-mathlib-fastcache-v2"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -25,7 +28,29 @@ MODEL_ROOT_DIR = Path("/cache/models")
 MODEL_LOCAL_DIR = MODEL_ROOT_DIR / MODEL_ID.replace("/", "__")
 
 LEAN_BIN = "/root/.elan/bin/lean"
+LAKE_BIN = "/root/.elan/bin/lake"
 LEAN_CHECK_TIMEOUT_SECONDS = 20
+LEAN_CHECK_DECLARATION_NAME = "_candidate_statement"
+MATHLIB_PROJECT_DIR = Path("/cache/lean/mathlib_checker")
+MATHLIB_MARKER_FILE = MATHLIB_PROJECT_DIR / ".mathlib_ready"
+MATHLIB_GIT_URL = "https://github.com/leanprover-community/mathlib4.git"
+MATHLIB_REVISION = os.environ.get("MATHLIB_REVISION")
+MATHLIB_IMPORT = "Mathlib"
+MATHLIB_IDENTIFIER_TO_IMPORT = (
+    ("Real", "Mathlib.Data.Real.Basic"),
+    ("Complex", "Mathlib.Data.Complex.Basic"),
+    ("Differentiable", "Mathlib.Analysis.Calculus.Deriv.Basic"),
+    ("Continuous", "Mathlib.Topology.Basic"),
+    ("Measure", "Mathlib.MeasureTheory.Measure.Basic"),
+    ("TopologicalSpace", "Mathlib.Topology.Basic"),
+    ("Normed", "Mathlib.Analysis.NormedSpace.Basic"),
+)
+ANALYZE_CACHE_TTL_SECONDS = int(os.environ.get("ANALYZE_CACHE_TTL_SECONDS", "600"))
+ANALYZE_CACHE_MAX_ENTRIES = int(os.environ.get("ANALYZE_CACHE_MAX_ENTRIES", "512"))
+MODEL_OUTPUT_CACHE_TTL_SECONDS = int(os.environ.get("MODEL_OUTPUT_CACHE_TTL_SECONDS", "600"))
+MODEL_OUTPUT_CACHE_MAX_ENTRIES = int(os.environ.get("MODEL_OUTPUT_CACHE_MAX_ENTRIES", "512"))
+LEAN_CHECK_CACHE_TTL_SECONDS = int(os.environ.get("LEAN_CHECK_CACHE_TTL_SECONDS", "1200"))
+LEAN_CHECK_CACHE_MAX_ENTRIES = int(os.environ.get("LEAN_CHECK_CACHE_MAX_ENTRIES", "1024"))
 
 SYSTEM_PROMPT = """You convert informal math to Lean 4.
 Return JSON only with keys:
@@ -116,6 +141,16 @@ inference_image = (
 hf_cache = modal.Volume.from_name("herald-hf-model-cache", create_if_missing=True)
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def _resolve_secret(secret_name_env: str, secret_value_env: str) -> modal.Secret | None:
     secret_name = os.environ.get(secret_name_env)
     if secret_name:
@@ -137,6 +172,15 @@ gpu_function_kwargs: dict[str, Any] = {
     "scaledown_window": 600,
     "volumes": {"/cache": hf_cache},
 }
+gpu_min_containers = _env_int("GPU_MIN_CONTAINERS", 1)
+gpu_buffer_containers = _env_int("GPU_BUFFER_CONTAINERS", 0)
+gpu_max_containers = _env_int("GPU_MAX_CONTAINERS", 1)
+if gpu_min_containers > 0:
+    gpu_function_kwargs["min_containers"] = gpu_min_containers
+if gpu_buffer_containers > 0:
+    gpu_function_kwargs["buffer_containers"] = gpu_buffer_containers
+if gpu_max_containers > 0:
+    gpu_function_kwargs["max_containers"] = gpu_max_containers
 gpu_secrets = [secret for secret in [hf_secret] if secret is not None]
 if gpu_secrets:
     gpu_function_kwargs["secrets"] = gpu_secrets
@@ -145,11 +189,23 @@ api_function_kwargs: dict[str, Any] = {
     "image": api_image,
     "timeout": 900,
 }
+api_min_containers = _env_int("API_MIN_CONTAINERS", 1)
+api_max_containers = _env_int("API_MAX_CONTAINERS", 1)
+if api_min_containers > 0:
+    api_function_kwargs["min_containers"] = api_min_containers
+if api_max_containers > 0:
+    api_function_kwargs["max_containers"] = api_max_containers
 api_secrets = [secret for secret in [api_secret] if secret is not None]
 if api_secrets:
     api_function_kwargs["secrets"] = api_secrets
 
 _runtime = None
+_runtime_lock = Lock()
+_mathlib_lock = Lock()
+_cache_lock = Lock()
+_analyze_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_model_output_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+_lean_check_cache: OrderedDict[str, tuple[float, tuple[bool, list[dict[str, Any]], str]]] = OrderedDict()
 
 
 @dataclass
@@ -164,8 +220,9 @@ class AnalyzeRequest(BaseModel):
     theorem_name: str | None = Field(default=None)
     imports: list[str] = Field(default_factory=lambda: ["Std"])
     temperature: float = Field(default=0.0, ge=0.0, le=1.5)
-    max_new_tokens: int = Field(default=192, ge=32, le=512)
+    max_new_tokens: int = Field(default=128, ge=32, le=512)
     lean_timeout_seconds: int = Field(default=LEAN_CHECK_TIMEOUT_SECONDS, ge=2, le=60)
+    skip_lean_check: bool = False
     include_raw_model_output: bool = False
 
     @field_validator("imports")
@@ -191,18 +248,20 @@ class LeanDiagnostic(BaseModel):
 
 class AnalyzeResponse(BaseModel):
     model: str
-    status: Literal["ok", "needs_revision", "model_parse_error", "runtime_error"]
+    status: Literal["ok", "needs_revision", "model_parse_error", "runtime_error", "unchecked"]
     input_text: str
     normalized_text: str
     assumptions: list[str] = Field(default_factory=list)
     notes: str = ""
     statement_type: str | None = None
     declaration_name: str | None = None
+    imports_used: list[str] = Field(default_factory=list)
     lean_declaration: str | None = None
     lean_source: str | None = None
     diagnostics: list[LeanDiagnostic] = Field(default_factory=list)
     feedback: list[str] = Field(default_factory=list)
     is_valid_lean: bool = False
+    cache_hit: bool = False
     model_output: str | None = None
     latency_ms: int = 0
 
@@ -229,8 +288,128 @@ def _sanitize_declaration_name(name: str | None) -> str:
     return candidate
 
 
+def _dedupe_imports(imports: list[str]) -> list[str]:
+    return list(dict.fromkeys(imports))
+
+
+def _canonical_imports(imports: list[str]) -> list[str]:
+    return sorted(dict.fromkeys(imports))
+
+
+def _cache_get(cache: OrderedDict[str, tuple[float, Any]], key: str, ttl_seconds: int) -> Any | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _cache_lock:
+        row = cache.get(key)
+        if row is None:
+            return None
+        created_at, payload = row
+        if (now - created_at) > ttl_seconds:
+            cache.pop(key, None)
+            return None
+        cache.move_to_end(key)
+        return deepcopy(payload)
+
+
+def _cache_put(cache: OrderedDict[str, tuple[float, Any]], key: str, payload: Any, max_entries: int) -> None:
+    if max_entries <= 0:
+        return
+    with _cache_lock:
+        cache[key] = (time.time(), deepcopy(payload))
+        cache.move_to_end(key)
+        while len(cache) > max_entries:
+            cache.popitem(last=False)
+
+
+def _analyze_cache_key(request: AnalyzeRequest) -> str:
+    normalized_text = _normalize_input_text(request.text)
+    context = request.context.strip() if request.context else None
+    if context == "":
+        context = None
+    return json.dumps(
+        {
+            "version": APP_VERSION,
+            "normalized_text": normalized_text,
+            "context": context,
+            "theorem_name": request.theorem_name,
+            "imports": _canonical_imports(request.imports),
+            "temperature": request.temperature,
+            "max_new_tokens": request.max_new_tokens,
+            "lean_timeout_seconds": request.lean_timeout_seconds,
+            "skip_lean_check": request.skip_lean_check,
+            "include_raw_model_output": request.include_raw_model_output,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _model_output_cache_key(request: AnalyzeRequest, normalized_text: str) -> str:
+    context = request.context.strip() if request.context else None
+    if context == "":
+        context = None
+    return json.dumps(
+        {
+            "version": APP_VERSION,
+            "normalized_text": normalized_text,
+            "context": context,
+            "imports": _canonical_imports(request.imports),
+            "temperature": request.temperature,
+            "max_new_tokens": request.max_new_tokens,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _lean_check_cache_key(statement_type: str, imports: list[str]) -> str:
+    return json.dumps(
+        {
+            "version": APP_VERSION,
+            "statement_type": statement_type,
+            "imports": _canonical_imports(imports),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _requires_mathlib(imports: list[str], statement_type: str | None) -> bool:
+    if any(item == MATHLIB_IMPORT or item.startswith(f"{MATHLIB_IMPORT}.") for item in imports):
+        return True
+    if not statement_type:
+        return False
+    return any(token in statement_type for token, _ in MATHLIB_IDENTIFIER_TO_IMPORT)
+
+
+def _auto_mathlib_imports(statement_type: str | None) -> list[str]:
+    if not statement_type:
+        return []
+    imports: list[str] = []
+    for token, module_import in MATHLIB_IDENTIFIER_TO_IMPORT:
+        if token in statement_type:
+            imports.append(module_import)
+    return _dedupe_imports(imports)
+
+
+def _resolve_effective_imports(imports: list[str], statement_type: str | None) -> tuple[list[str], bool]:
+    effective = _dedupe_imports(imports)
+    auto_enabled = False
+    has_explicit_mathlib = any(item == MATHLIB_IMPORT or item.startswith(f"{MATHLIB_IMPORT}.") for item in effective)
+    if not has_explicit_mathlib:
+        inferred_imports = _auto_mathlib_imports(statement_type)
+        if inferred_imports:
+            effective = _dedupe_imports([*inferred_imports, *effective])
+            auto_enabled = True
+        elif _requires_mathlib(effective, statement_type):
+            effective = [MATHLIB_IMPORT, *effective]
+            auto_enabled = True
+    return effective, auto_enabled
+
+
 def _user_prompt(request: AnalyzeRequest, normalized_text: str) -> str:
-    imports_text = ", ".join(request.imports)
+    imports_text = ", ".join(_canonical_imports(request.imports))
     context_block = f"Context:\n{request.context.strip()}\n\n" if request.context and request.context.strip() else ""
     return (
         f"{context_block}"
@@ -265,32 +444,53 @@ def _load_runtime() -> Runtime:
     if _runtime is not None:
         return _runtime
 
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    with _runtime_lock:
+        if _runtime is not None:
+            return _runtime
 
-    model_dir = _ensure_model_downloaded()
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_dir.as_posix(),
-        token=os.environ.get("HF_TOKEN"),
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir.as_posix(),
-        token=os.environ.get("HF_TOKEN"),
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
-        device_map="auto",
-    )
-    model.eval()
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-        tokenizer.pad_token = tokenizer.eos_token
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
-    _runtime = Runtime(tokenizer=tokenizer, model=model)
-    return _runtime
+        model_dir = _ensure_model_downloaded()
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_dir.as_posix(),
+            token=os.environ.get("HF_TOKEN"),
+            local_files_only=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_dir.as_posix(),
+            token=os.environ.get("HF_TOKEN"),
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            device_map="auto",
+            local_files_only=True,
+        )
+        model.eval()
+
+        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        if model.generation_config is not None:
+            model.generation_config.use_cache = True
+            if tokenizer.eos_token_id is not None:
+                model.generation_config.eos_token_id = tokenizer.eos_token_id
+            if tokenizer.pad_token_id is not None:
+                model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+        _runtime = Runtime(tokenizer=tokenizer, model=model)
+        return _runtime
 
 
 def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str:
     import torch
+
+    model_key = _model_output_cache_key(request, normalized_text)
+    cached_output = _cache_get(_model_output_cache, model_key, MODEL_OUTPUT_CACHE_TTL_SECONDS)
+    if isinstance(cached_output, str):
+        return cached_output
 
     runtime = _load_runtime()
     tokenizer = runtime.tokenizer
@@ -314,8 +514,11 @@ def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str
         **inputs,
         "max_new_tokens": request.max_new_tokens,
         "do_sample": do_sample,
-        "pad_token_id": tokenizer.eos_token_id,
+        "use_cache": True,
+        "pad_token_id": tokenizer.pad_token_id,
     }
+    if tokenizer.eos_token_id is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
     if do_sample:
         kwargs["temperature"] = request.temperature
         kwargs["top_p"] = 0.95
@@ -325,7 +528,9 @@ def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str
 
     input_tokens = inputs["input_ids"].shape[1]
     generated = outputs[0][input_tokens:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+    text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    _cache_put(_model_output_cache, model_key, text, MODEL_OUTPUT_CACHE_MAX_ENTRIES)
+    return text
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -430,21 +635,108 @@ def _parse_lean_diagnostics(output: str) -> list[LeanDiagnostic]:
     return diagnostics
 
 
-def _run_lean_check(lean_source: str, timeout_seconds: int) -> tuple[bool, list[LeanDiagnostic], str]:
+def _mathlib_lakefile_contents() -> str:
+    revision = f' @ "{MATHLIB_REVISION}"' if MATHLIB_REVISION else ""
+    return (
+        "import Lake\n"
+        "open Lake DSL\n\n"
+        "package «mathlib_checker» where\n\n"
+        "require mathlib from git\n"
+        f'  "{MATHLIB_GIT_URL}"{revision}\n'
+    )
+
+
+def _ensure_mathlib_project() -> Path:
+    with _mathlib_lock:
+        if MATHLIB_MARKER_FILE.exists():
+            return MATHLIB_PROJECT_DIR
+        try:
+            hf_cache.reload()
+        except Exception:  # noqa: BLE001
+            # Reload can fail if other /cache files are open (e.g. loaded model weights).
+            # For a warm container, local filesystem state is already usable.
+            pass
+        if MATHLIB_MARKER_FILE.exists():
+            return MATHLIB_PROJECT_DIR
+
+        MATHLIB_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+        (MATHLIB_PROJECT_DIR / "lean-toolchain").write_text("stable\n", encoding="utf-8")
+        (MATHLIB_PROJECT_DIR / "lakefile.lean").write_text(_mathlib_lakefile_contents(), encoding="utf-8")
+
+        subprocess.run(
+            [LAKE_BIN, "update"],
+            cwd=MATHLIB_PROJECT_DIR.as_posix(),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [LAKE_BIN, "exe", "cache", "get"],
+            cwd=MATHLIB_PROJECT_DIR.as_posix(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        MATHLIB_MARKER_FILE.write_text("ready\n", encoding="utf-8")
+        try:
+            hf_cache.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        return MATHLIB_PROJECT_DIR
+
+
+def _run_lean_check(
+    statement_type: str,
+    timeout_seconds: int,
+    imports: list[str],
+) -> tuple[bool, list[LeanDiagnostic], str]:
+    effective_imports = _canonical_imports(imports)
+    cache_key = _lean_check_cache_key(statement_type, effective_imports)
+    cached = _cache_get(_lean_check_cache, cache_key, LEAN_CHECK_CACHE_TTL_SECONDS)
+    if isinstance(cached, tuple) and len(cached) == 3:
+        cached_ok, cached_diagnostics_payload, cached_output = cached
+        diagnostics = [LeanDiagnostic.model_validate(item) for item in cached_diagnostics_payload]
+        return bool(cached_ok), diagnostics, str(cached_output)
+
+    lean_source = _compose_lean_source(
+        imports=effective_imports,
+        declaration_name=LEAN_CHECK_DECLARATION_NAME,
+        statement_type=statement_type,
+    )
+    use_mathlib = any(
+        item == MATHLIB_IMPORT or item.startswith(f"{MATHLIB_IMPORT}.") for item in effective_imports
+    )
     with tempfile.TemporaryDirectory(prefix="lean-check-") as tmpdir:
         check_file = Path(tmpdir) / "Candidate.lean"
         check_file.write_text(lean_source, encoding="utf-8")
 
+        command = [LEAN_BIN, check_file.as_posix()]
+        cwd = None
+        if use_mathlib:
+            try:
+                project_dir = _ensure_mathlib_project()
+            except subprocess.CalledProcessError as exc:
+                message = (
+                    (exc.stderr or "").strip()
+                    or (exc.stdout or "").strip()
+                    or f"Failed to initialize Mathlib project: {exc}"
+                )
+                return False, [LeanDiagnostic(severity="error", message=message)], message
+            command = [LAKE_BIN, "env", LEAN_BIN, check_file.as_posix()]
+            cwd = project_dir.as_posix()
+
         try:
             proc = subprocess.run(
-                [LEAN_BIN, check_file.as_posix()],
+                command,
+                cwd=cwd,
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
             )
         except FileNotFoundError:
-            message = f"Lean binary not found at {LEAN_BIN}."
+            message = f"Required binary not found while running `{command[0]}`."
             return False, [LeanDiagnostic(severity="error", message=message)], message
         except subprocess.TimeoutExpired:
             message = f"Lean check timed out after {timeout_seconds}s."
@@ -463,7 +755,14 @@ def _run_lean_check(lean_source: str, timeout_seconds: int) -> tuple[bool, list[
             ]
             has_error = True
 
-        return (not has_error and proc.returncode == 0, diagnostics, output)
+        result = (not has_error and proc.returncode == 0, diagnostics, output)
+        _cache_put(
+            _lean_check_cache,
+            cache_key,
+            (result[0], [item.model_dump() for item in diagnostics], output),
+            LEAN_CHECK_CACHE_MAX_ENTRIES,
+        )
+        return result
 
 
 def _build_feedback(
@@ -551,32 +850,80 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         )
 
     declaration_name = _sanitize_declaration_name(request.theorem_name)
+    effective_imports, auto_enabled_mathlib = _resolve_effective_imports(request.imports, statement_type)
     lean_source = _compose_lean_source(
-        imports=request.imports,
+        imports=effective_imports,
         declaration_name=declaration_name,
         statement_type=statement_type,
     )
-    is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
-        lean_source=lean_source,
-        timeout_seconds=request.lean_timeout_seconds,
-    )
+    if request.skip_lean_check:
+        feedback = _build_feedback(statement_type, [], assumptions, notes)
+        feedback.append("Lean check skipped (`skip_lean_check=true`).")
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return AnalyzeResponse(
+            model=MODEL_ID,
+            status="unchecked",
+            input_text=request.text,
+            normalized_text=normalized_text,
+            assumptions=assumptions,
+            notes=notes,
+            statement_type=statement_type,
+            declaration_name=declaration_name,
+            imports_used=effective_imports,
+            lean_declaration=f"axiom {declaration_name} : {statement_type}",
+            lean_source=lean_source,
+            diagnostics=[],
+            feedback=feedback,
+            is_valid_lean=False,
+            model_output=raw_output if request.include_raw_model_output else None,
+            latency_ms=latency_ms,
+        )
+    try:
+        is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
+            statement_type=statement_type,
+            timeout_seconds=request.lean_timeout_seconds,
+            imports=effective_imports,
+        )
+    except Exception as exc:  # noqa: BLE001
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return AnalyzeResponse(
+            model=MODEL_ID,
+            status="runtime_error",
+            input_text=request.text,
+            normalized_text=normalized_text,
+            assumptions=assumptions,
+            notes=notes,
+            statement_type=statement_type,
+            declaration_name=declaration_name,
+            imports_used=effective_imports,
+            lean_declaration=f"axiom {declaration_name} : {statement_type}",
+            lean_source=lean_source,
+            diagnostics=[LeanDiagnostic(severity="error", message=f"Lean check failed: {exc}")],
+            feedback=["Lean runtime setup failed while validating this statement."],
+            is_valid_lean=False,
+            model_output=raw_output if request.include_raw_model_output else None,
+            latency_ms=latency_ms,
+        )
 
     rewritten_statement_type, used_fallback = _apply_identifier_fallbacks(statement_type, diagnostics)
     if not is_valid_lean and used_fallback:
         statement_type = rewritten_statement_type
         lean_source = _compose_lean_source(
-            imports=request.imports,
+            imports=effective_imports,
             declaration_name=declaration_name,
             statement_type=statement_type,
         )
         is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
-            lean_source=lean_source,
+            statement_type=statement_type,
             timeout_seconds=request.lean_timeout_seconds,
+            imports=effective_imports,
         )
 
     feedback = _build_feedback(statement_type, diagnostics, assumptions, notes)
     if used_fallback:
         feedback.append("Applied identifier fallback rewrite (e.g. `ℕ` -> `Nat`) before re-checking.")
+    if auto_enabled_mathlib:
+        feedback.append("Auto-enabled Mathlib imports based on detected identifiers in the statement.")
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     return AnalyzeResponse(
@@ -588,6 +935,7 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         notes=notes,
         statement_type=statement_type,
         declaration_name=declaration_name,
+        imports_used=effective_imports,
         lean_declaration=f"axiom {declaration_name} : {statement_type}",
         lean_source=lean_source,
         diagnostics=diagnostics,
@@ -601,23 +949,18 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 @app.function(**gpu_function_kwargs)
 def analyze_rpc(request: dict[str, Any]) -> dict[str, Any]:
     parsed = AnalyzeRequest.model_validate(request)
+    key = _analyze_cache_key(parsed)
+    cached_response = _cache_get(_analyze_cache, key, ANALYZE_CACHE_TTL_SECONDS)
+    if isinstance(cached_response, dict):
+        cached_response["cache_hit"] = True
+        cached_response["latency_ms"] = min(int(cached_response.get("latency_ms", 0)), 5)
+        return cached_response
+
     response = _analyze(parsed)
-    return response.model_dump()
-
-
-@app.function(**gpu_function_kwargs)
-def warmup_rpc() -> dict[str, Any]:
-    _load_runtime()
-    probe = AnalyzeRequest(
-        text="For every natural number n, n + 0 equals n.",
-        include_raw_model_output=False,
-    )
-    result = _analyze(probe)
-    return {
-        "status": "ready",
-        "model": MODEL_ID,
-        "probe_is_valid_lean": result.is_valid_lean,
-    }
+    payload = response.model_dump()
+    payload["cache_hit"] = False
+    _cache_put(_analyze_cache, key, payload, ANALYZE_CACHE_MAX_ENTRIES)
+    return payload
 
 
 @app.function(**api_function_kwargs)
@@ -672,6 +1015,15 @@ def api():
     ) -> dict[str, Any]:
         return analyze_rpc.remote(request.model_dump())
 
+    @app_api.post("/v1/generate")
+    def generate_endpoint(
+        request: AnalyzeRequest,
+        _auth: None = Depends(require_api_key),
+    ) -> dict[str, Any]:
+        payload = request.model_dump()
+        payload["skip_lean_check"] = True
+        return analyze_rpc.remote(payload)
+
     @app_api.post("/v1/analyze/jobs")
     def analyze_job_endpoint(
         request: AnalyzeRequest,
@@ -702,7 +1054,28 @@ def api():
 
     @app_api.post("/v1/warmup")
     def warmup_endpoint(_auth: None = Depends(require_api_key)) -> dict[str, Any]:
-        return warmup_rpc.remote()
+        probe = AnalyzeRequest(
+            text="For all real numbers x, x = x.",
+            theorem_name="warmup_real_refl",
+            imports=["Mathlib.Data.Real.Basic"],
+            temperature=0.0,
+            max_new_tokens=64,
+            lean_timeout_seconds=max(LEAN_CHECK_TIMEOUT_SECONDS, 30),
+            include_raw_model_output=False,
+        )
+        result = analyze_rpc.remote(probe.model_dump())
+        imports_used = result.get("imports_used") if isinstance(result, dict) else []
+        return {
+            "status": "ready",
+            "model": MODEL_ID,
+            "probe_status": result.get("status") if isinstance(result, dict) else "runtime_error",
+            "probe_is_valid_lean": bool(result.get("is_valid_lean")) if isinstance(result, dict) else False,
+            "mathlib_warmed": bool(
+                isinstance(imports_used, list)
+                and any(item == MATHLIB_IMPORT or item.startswith(f"{MATHLIB_IMPORT}.") for item in imports_used)
+            ),
+            "latency_ms": int(result.get("latency_ms", 0)) if isinstance(result, dict) else 0,
+        }
 
     return app_api
 

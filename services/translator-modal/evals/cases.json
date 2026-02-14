@@ -1,0 +1,58 @@
+[
+  {
+    "id": "order-transitivity",
+    "text": "For all $a,b,c \\in \\mathbb{N}$, if $a \\le b$ and $b \\le c$, then $a \\le c$.",
+    "context": "Use Nat and <=.",
+    "theorem_name": "le_trans_nat",
+    "imports": ["Std"]
+  },
+  {
+    "id": "left-distributivity",
+    "text": "For all $a,b,c \\in \\mathbb{N}$, we have $a\\cdot(b+c)=a\\cdot b+a\\cdot c$.",
+    "context": "Arithmetic identity on Nat.",
+    "theorem_name": "mul_add_nat",
+    "imports": ["Std"]
+  },
+  {
+    "id": "successor-existence",
+    "text": "For every $n \\in \\mathbb{N}$, there exists $m \\in \\mathbb{N}$ such that $m=n+1$.",
+    "context": "Existential witness over Nat.",
+    "theorem_name": "succ_exists",
+    "imports": ["Std"]
+  },
+  {
+    "id": "prop-commutativity",
+    "text": "For all propositions $P,Q$, if $P \\land Q$ then $Q \\land P$.",
+    "context": "Pure Prop-level formula.",
+    "theorem_name": "and_comm_imp",
+    "imports": ["Std"]
+  },
+  {
+    "id": "funext-style",
+    "text": "For all functions $f,g: \\mathbb{N} \\to \\mathbb{N}$, if for every $n$, $f(n)=g(n)$, then $f=g$.",
+    "context": "Nat -> Nat functions.",
+    "theorem_name": "funext_style_nat",
+    "imports": ["Std"]
+  },
+  {
+    "id": "dvd-transitivity",
+    "text": "For all $a,b,c \\in \\mathbb{N}$, if $a$ divides $b$ and $b$ divides $c$, then $a$ divides $c$.",
+    "context": "Use Nat divisibility.",
+    "theorem_name": "dvd_trans_nat",
+    "imports": ["Std"]
+  },
+  {
+    "id": "real-nonneg-square",
+    "text": "For all $x \\in \\mathbb{R}$, we have $x^2 \\ge 0$.",
+    "context": "Real analysis style statement.",
+    "theorem_name": "sq_nonneg_real",
+    "imports": ["Mathlib"]
+  },
+  {
+    "id": "differentiable-implies-continuous",
+    "text": "If $f$ is differentiable on $\\mathbb{R}$, then $f$ is continuous on $\\mathbb{R}$.",
+    "context": "Calculus proposition.",
+    "theorem_name": "diff_implies_cont",
+    "imports": ["Mathlib"]
+  }
+]

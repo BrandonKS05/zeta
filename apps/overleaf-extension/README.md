@@ -1,11 +1,29 @@
-# Overleaf extension (MVP)
+# zeta (Overleaf extension)
 
-This extension runs only on Overleaf pages and highlights:
+**Grammarly for Math**
 
-- `apple` in red
-- `banana` in yellow
+This extension runs on Overleaf source editors and applies live underlines while you type:
 
-The highlighting is applied in the source editor (`.cm-editor`) and not on rendered PDF text.
+- `apple` in red underline
+- `banana` in yellow underline
+
+Clicking an underline opens a Grammarly-style suggestion popup with replacement options.
+
+Editor detection targets both Overleaf editor DOM variants (`.cm-editor` and `.ace_editor`) to keep live underlines working across projects.
+
+## Mode toggle
+
+Use the extension popup to choose a Cursor-like mode toggle:
+
+- `fast`: immediate updates
+- `accurate`: slight delay for cleaner suggestion updates
+- `auto`: stays fast unless the editor content becomes very large
+
+## Branding
+
+- Extension name: `zeta`
+- Tagline: `Grammarly for Math`
+- Logo asset: `assets/zeta-black-white-2048.png` (high-res black-on-white zeta)
 
 ## Load in Chrome
 
@@ -17,10 +35,7 @@ The highlighting is applied in the source editor (`.cm-editor`) and not on rende
 ## Test
 
 1. Open an Overleaf project
-2. In the left source editor, type text containing `apple` and `banana`
-3. Confirm red/yellow highlights appear while typing
-
-## Notes
-
-- This is an overlay-based highlighter for fast iteration.
-- Next step is swapping token logic for actual grammar/model suggestions.
+2. Type `apple` and `banana` in the source editor
+3. Confirm underlines appear while typing
+4. Click the underlined text and verify the suggestion popup appears
+5. Switch mode in the extension popup and verify behavior updates
