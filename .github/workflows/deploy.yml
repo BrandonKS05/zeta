@@ -16,9 +16,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd /home/${{ secrets.EC2_USER }}/apps/app
+            cd /home/ubuntu/treehacks-2026/services/lean-backend
             git fetch --all
             git reset --hard origin/main
             docker compose pull || true
             docker compose up -d --build
             docker image prune -f
+
