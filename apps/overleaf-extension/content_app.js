@@ -22,6 +22,7 @@
     storageLocalGet,
     storageLocalSet,
     normalizeSeverity,
+    logTrace,
     DomLineAdapter,
     TextareaAdapter,
     ContentEditableAdapter,
@@ -456,6 +457,14 @@ class ZetaApp {
     }, delay);
   }
 
+  resolveScopeForReason(reason) {
+    // Always analyze the full editor while typing to keep backend context complete.
+    if (reason === "typing" || reason === "init" || reason === "adapter-switch") {
+      return "document";
+    }
+    return normalizeScope(this.settings.scope);
+  }
+
   async runAnalysis(reason, force = false) {
     const adapter = this.activeAdapter;
     if (!adapter || !adapter.isConnected()) {
@@ -464,8 +473,16 @@ class ZetaApp {
       return;
     }
 
-    const snapshot = adapter.getScopeSnapshot(this.settings.scope);
+    const effectiveScope = this.resolveScopeForReason(reason);
+    const snapshot = adapter.getScopeSnapshot(effectiveScope);
     const scopeText = String(snapshot.text || "");
+    logTrace("analysis_begin", {
+      reason,
+      force,
+      requestedScope: this.settings.scope,
+      effectiveScope,
+      chars: scopeText.length,
+    });
     if (!scopeText.trim()) {
       this.lastRun = {
         snapshot,
@@ -486,6 +503,11 @@ class ZetaApp {
 
     const localIssues = this.detectLocalMathTypos(scopeText);
     const sentencePlan = this.buildSentencePlan(snapshot, force);
+    logTrace("analysis_plan", {
+      cachedSentences: sentencePlan.cachedCount,
+      pendingSentences: sentencePlan.pending.length,
+      localIssues: localIssues.length,
+    });
     const signature = shortHash(
       JSON.stringify({
         scope: snapshot.scope,
@@ -549,6 +571,12 @@ class ZetaApp {
 
       const sentenceEntry = sentencePlan.pending[i];
       const remaining = sentencePlan.pending.length - i;
+      logTrace("sentence_check_start", {
+        index: i + 1,
+        total: sentencePlan.pending.length,
+        sentenceKey: sentenceEntry.key,
+        chars: sentenceEntry.text.length,
+      });
       this.panel.setStatus(
         "analyzing",
         `Analyzing sentence ${i + 1}/${sentencePlan.pending.length} (${modeToLabel(this.settings.mode)})...`
@@ -556,6 +584,12 @@ class ZetaApp {
       this.panel.setInferenceTime(this.lastInferenceMs, remaining);
 
       await this.analyzeSentenceEntry(sentenceEntry, snapshot, reason);
+      logTrace("sentence_check_done", {
+        sentenceKey: sentenceEntry.key,
+        status: sentenceEntry.status,
+        inferenceMs: sentenceEntry.inferenceMs,
+        issueCount: ensureArray(sentenceEntry.issues).length,
+      });
 
       if (requestId !== this.activeRequestId) {
         return;
@@ -942,12 +976,42 @@ class ZetaApp {
     };
   }
 
+  logBackendPipeline(responseJson) {
+    const pipeline = responseJson?.pipeline;
+    if (!pipeline || !Array.isArray(pipeline.stages)) {
+      return;
+    }
+
+    logTrace("backend_pipeline", {
+      totalDurationMs: pipeline.total_duration_ms,
+      semantic: pipeline.semantic || null,
+    });
+
+    for (const stage of pipeline.stages) {
+      logTrace("backend_stage", {
+        stage: stage.stage,
+        attempted: stage.attempted,
+        success: stage.success,
+        durationMs: stage.duration_ms,
+        details: stage.details || {},
+      });
+    }
+  }
+
   async sendBackendRequest(request) {
     const attempts = Math.max(0, Number(this.settings.retries) || 0) + 1;
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      logTrace("backend_request_send", {
+        attempt,
+        attempts,
+        url: request.requestUrl,
+        timeoutMs: this.settings.requestTimeoutMs,
+        requestKeys: Object.keys(request.requestBody || {}),
+      });
       try {
+        const startedAt = performance.now();
         const response = await this.sendHttpMessage({
           url: request.requestUrl,
           method: "POST",
@@ -955,9 +1019,20 @@ class ZetaApp {
           body: JSON.stringify(request.requestBody),
           timeoutMs: this.settings.requestTimeoutMs,
         });
+        logTrace("backend_response_received", {
+          attempt,
+          status: response.status,
+          ok: response.ok,
+          durationMs: performance.now() - startedAt,
+        });
 
         if (!response.ok) {
           const detail = response.json?.detail || response.text || response.statusText || "Request failed";
+          logTrace("backend_response_error", {
+            attempt,
+            status: response.status,
+            detail,
+          });
           throw new Error(`Backend ${response.status || "error"}: ${detail}`);
         }
 
@@ -965,9 +1040,15 @@ class ZetaApp {
           throw new Error("Backend returned non-JSON response.");
         }
 
+        this.logBackendPipeline(response.json);
+
         return response.json;
       } catch (error) {
         lastError = error;
+        logTrace("backend_request_failed", {
+          attempt,
+          message: String(error?.message || error),
+        });
         const retryable = attempt < attempts;
         if (!retryable) {
           break;
@@ -1114,6 +1195,7 @@ class ZetaApp {
     const interpretationItems = ensureArray(response.interpretation?.items);
     const topSuggestions = ensureArray(response.interpretation?.suggestions);
     const feedbackItems = ensureArray(response.feedback);
+    const semanticReasons = ensureArray(response.pipeline?.semantic?.reasons);
 
     const issues = [];
 
@@ -1201,6 +1283,30 @@ class ZetaApp {
       });
     }
 
+    for (const reason of semanticReasons) {
+      const text = String(reason || "").trim();
+      if (!text) {
+        continue;
+      }
+      issues.push({
+        id: `semantic-${issues.length + 1}`,
+        key: this.buildIssueKey({
+          category: "semantic-validation",
+          message: text,
+          targetText: null,
+          replacement: null,
+        }),
+        category: "semantic-validation",
+        severity: "error",
+        message: text,
+        start: null,
+        end: null,
+        targetText: null,
+        replacement: null,
+        source: "backend",
+      });
+    }
+
     for (const issue of issues) {
       if (
         !Number.isInteger(issue.start) &&
@@ -1218,6 +1324,7 @@ class ZetaApp {
     const hasCompileErrors =
       response.compile?.success === false ||
       response.is_valid_lean === false ||
+      response.pipeline?.semantic?.success === false ||
       diagnostics.some((diag) => normalizeSeverity(diag.severity) === "error");
 
     return {
