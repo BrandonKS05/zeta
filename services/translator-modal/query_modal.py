@@ -1,4 +1,4 @@
-"""Query the deployed Modal function directly from Python."""
+"""Query the deployed Modal `analyze_rpc` function."""
 
 from __future__ import annotations
 
@@ -10,25 +10,36 @@ import modal
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--app-name", default="herald-translator")
+    parser.add_argument("--app-name", default="herald-math-grammarly")
     parser.add_argument("--text", required=True)
-    parser.add_argument("--source-lang", default="English")
-    parser.add_argument("--target-lang", default="Spanish")
-    parser.add_argument("--max-new-tokens", type=int, default=128)
-    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--context", default=None)
+    parser.add_argument("--theorem-name", default=None)
+    parser.add_argument(
+        "--imports",
+        default="Std",
+        help="Comma-separated Lean imports. Example: Std,Mathlib",
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--lean-timeout-seconds", type=int, default=20)
+    parser.add_argument("--include-raw-model-output", action="store_true")
     args = parser.parse_args()
 
-    fn = modal.Function.from_name(args.app_name, "translate_rpc")
-    result = fn.remote(
-        text=args.text,
-        source_lang=args.source_lang,
-        target_lang=args.target_lang,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-    )
+    fn = modal.Function.from_name(args.app_name, "analyze_rpc")
+    payload = {
+        "text": args.text,
+        "context": args.context,
+        "theorem_name": args.theorem_name,
+        "imports": [item.strip() for item in args.imports.split(",") if item.strip()],
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": args.temperature,
+        "lean_timeout_seconds": args.lean_timeout_seconds,
+        "include_raw_model_output": args.include_raw_model_output,
+    }
+
+    result = fn.remote(payload)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     main()
-

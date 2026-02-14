@@ -1,9 +1,31 @@
-# Modal backend (`FrenzyMath/Herald_translator`)
+# Modal backend for math Grammarly (`FrenzyMath/Herald_translator`)
+
+This service deploys a full NL -> Lean backend on Modal:
+
+- GPU inference with `FrenzyMath/Herald_translator`
+- Lean syntax/type checking with `lean`
+- HTTP API for extension/frontend integration
+- Modal RPC function for direct Python calls
+
+## Endpoints and functions
+
+- Modal function: `analyze_rpc` (GPU)
+- Modal function: `warmup_rpc` (GPU)
+- Modal ASGI app: `api` (HTTP)
+
+HTTP routes under the `api` endpoint:
+
+- `GET /healthz`
+- `POST /v1/analyze`
+- `POST /v1/query` (alias of analyze)
+- `POST /v1/analyze/jobs` (async submit)
+- `GET /v1/analyze/jobs/{call_id}` (async poll)
+- `POST /v1/warmup`
 
 ## 1. Prerequisites
 
 - Python 3.11+
-- Modal account and credits
+- Modal account with credits
 
 ## 2. Local setup
 
@@ -15,49 +37,122 @@ pip install -r requirements-local.txt
 modal setup
 ```
 
-Optional (recommended for model download reliability):
+## 3. Optional secrets and env
+
+You can pass values directly via env vars, or reference existing Modal secrets by name.
 
 ```bash
+# Hugging Face access
 export HF_TOKEN=hf_xxx
+# or: export HF_SECRET_NAME=your-hf-secret-name
+
+# Optional API key protection for HTTP endpoints
+export API_KEY=replace-with-random-string
+# or: export GRAMMAR_API_SECRET_NAME=your-api-secret-name
+
+# Optional CORS config for extension/frontend
+export CORS_ALLOW_ORIGINS="*"
 ```
 
-## 3. Deploy
+## 4. Deploy
 
 ```bash
 cd /Users/aryan/Desktop/treehacks-2026
 modal deploy services/translator-modal/modal_app.py
 ```
 
-Deployment creates:
+After deploy, Modal prints a URL for `api`. Use that as your backend base URL.
 
-- `translate_rpc` (GPU function)
-- `translate_http` (HTTP POST endpoint)
+## 5. Warm up model (recommended once after deploy)
 
-## 4. Test with Python (Modal SDK direct call)
+```bash
+cd /Users/aryan/Desktop/treehacks-2026/services/translator-modal
+source .venv/bin/activate
+python query_http.py \
+  --base-url "https://<your-api-endpoint>.modal.run" \
+  --text "For all natural numbers n, n + 0 = n." \
+  --context "Assume n is a natural number." \
+  --theorem-name add_zero_right
+```
+
+Or hit:
+
+```bash
+curl -X POST "https://<your-api-endpoint>.modal.run/v1/warmup"
+```
+
+## 6. Query via Modal SDK (Python)
 
 ```bash
 cd /Users/aryan/Desktop/treehacks-2026/services/translator-modal
 source .venv/bin/activate
 python query_modal.py \
-  --text "Hello, how are you?" \
-  --source-lang English \
-  --target-lang French
+  --text "If a and b are real numbers and a = b, then b = a." \
+  --context "This is a symmetry property of equality over real numbers." \
+  --theorem-name eq_symm_real \
+  --imports Std
 ```
 
-## 5. Test with Python (HTTP call)
-
-Use the URL printed by `modal deploy` for `translate_http`.
+## 7. Query via HTTP (Python)
 
 ```bash
 python query_http.py \
-  --url "https://<your-endpoint>.modal.run" \
-  --text "This is a test." \
-  --source-lang English \
-  --target-lang Spanish
+  --base-url "https://<your-api-endpoint>.modal.run" \
+  --text "The sum of two even natural numbers is even." \
+  --context "Use Nat and the Even predicate." \
+  --theorem-name even_add \
+  --imports Std
 ```
 
-## 6. Notes on cost + scaling
+## 8. Async query flow (recommended for Chrome extension)
 
-- The model is large (~27.6GB repo files), so first cold start can take time.
-- Keep `scaledown_window` non-trivial to reduce repeated cold starts.
-- Start with one GPU container, measure latency and spend, then scale.
+Submit:
+
+```bash
+curl -X POST "https://<your-api-endpoint>.modal.run/v1/analyze/jobs" \
+  -H "content-type: application/json" \
+  -d '{
+    "text": "For all natural numbers n, n + 0 = n.",
+    "context": "Simple arithmetic identity.",
+    "theorem_name": "add_zero_right",
+    "imports": ["Std"]
+  }'
+```
+
+Poll:
+
+```bash
+curl "https://<your-api-endpoint>.modal.run/v1/analyze/jobs/<call_id>"
+```
+
+If `API_KEY` is enabled:
+
+```bash
+python query_http.py \
+  --base-url "https://<your-api-endpoint>.modal.run" \
+  --text "Every natural number is less than or equal to itself." \
+  --context "Reflexivity of <= on natural numbers." \
+  --theorem-name le_refl_nat \
+  --api-key "replace-with-random-string"
+```
+
+## 9. Response shape (high-level)
+
+`/v1/analyze` returns:
+
+- `statement_type` (generated Lean proposition/type)
+- `lean_declaration` and full `lean_source`
+- `diagnostics` from Lean compiler output
+- `is_valid_lean` boolean
+- `feedback` list (human-readable correction guidance)
+
+Input accepts optional `context` to disambiguate nearby math prose.
+
+## 10. Cost and reliability notes
+
+- First cold start is expensive because model weights are large.
+- Keep `scaledown_window` non-trivial to avoid repeated cold starts.
+- Start with one `L4`, measure end-to-end latency, then tune throughput.
+- Run `/v1/warmup` after deploy to prime container + model cache.
+- Prefer async jobs for browser clients so cold starts do not block a single long HTTP request.
+- Current image validates Lean with `Std` out of the box. `Mathlib` imports require an additional Lean image setup step.
