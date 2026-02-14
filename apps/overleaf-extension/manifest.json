@@ -38,7 +38,13 @@
   "content_scripts": [
     {
       "matches": ["https://www.overleaf.com/*", "https://*.overleaf.com/*"],
-      "js": ["content.js"],
+      "js": [
+        "content_shared.js",
+        "content_adapters.js",
+        "content_ui.js",
+        "content_app.js",
+        "content_bootstrap.js"
+      ],
       "css": ["content.css"],
       "run_at": "document_idle"
     }

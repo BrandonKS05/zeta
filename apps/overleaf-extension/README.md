@@ -13,6 +13,18 @@ zeta now ships a real frontend shell for math statement checking:
 - persisted settings (`backend URL`, mode, scope, timeout, retries, notation strictness)
 - keyboard shortcuts for panel + issue navigation
 
+## Content Script Organization
+
+The injected frontend is split into multiple files for maintainability:
+
+- `content_shared.js` - constants, helpers, storage utilities
+- `content_adapters.js` - editor adapters (CodeMirror, Ace, textarea, contenteditable)
+- `content_ui.js` - overlay, popover, panel UI classes
+- `content_app.js` - main app/controller logic
+- `content_bootstrap.js` - guard + app startup/shutdown wiring
+
+`content.js` is now a tiny deprecated shim and is no longer loaded by `manifest.json`.
+
 ## Backend compatibility
 
 Works with both response styles:
