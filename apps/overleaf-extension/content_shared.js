@@ -10,7 +10,7 @@
   const MAX_HIGHLIGHT_RECTS = 120;
 
   const DEFAULT_SETTINGS = {
-    backendUrl: "http://localhost:8000/v1/lean/solve",
+    backendUrl: "http://13.57.35.202:8000/v1/lean/solve'",
     mode: "auto",
     scope: "paragraph",
     theme: "dark",
