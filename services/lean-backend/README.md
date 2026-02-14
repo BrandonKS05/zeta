@@ -103,38 +103,6 @@ docker compose up --build
 
 `INSTALL_LEAN` defaults to `true` in Docker, so Lean/Lake are installed unless you explicitly set `INSTALL_LEAN=false`.
 
-## Deploy on Render
-
-Use Docker runtime (recommended), not native Python runtime.
-
-### Option A: Blueprint (recommended)
-
-1. Connect this repo to Render and create a Blueprint service.
-2. Render will use `/Users/williamfeng/Documents/treehacks-2026/render.yaml`.
-3. Set secret env values in Render dashboard:
-   - `MODAL_ENDPOINT_URL` (required)
-   - `MODAL_API_KEY` (optional)
-   - `LLM_API_KEY` (optional)
-
-Blueprint already sets:
-- `dockerContext=services/lean-backend`
-- `dockerfilePath=services/lean-backend/Dockerfile`
-- Docker runtime
-- `/healthz` health check
-- `INSTALL_LEAN=true` (build arg via env var)
-
-### Option B: Manual Web Service setup
-
-- Runtime: Docker
-- Root Directory: leave empty
-- Dockerfile Path: `services/lean-backend/Dockerfile`
-- Docker Context: `services/lean-backend`
-- Health Check Path: `/healthz`
-- Environment Variables:
-  - `INSTALL_LEAN=true`
-  - `MODAL_ENDPOINT_URL=...` (required)
-  - plus optional Modal/LLM variables from `.env.example`
-
 ## Example Request
 
 ```bash

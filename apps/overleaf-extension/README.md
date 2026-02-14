@@ -11,7 +11,7 @@ zeta now ships a real frontend shell for math statement checking:
 - inline issue underlines and caret-persistent suggestion popup
 - issue actions (`apply`, `ignore`, `regenerate`) plus activity/history with undo
 - persisted settings (`backend URL`, mode, scope, timeout, retries, notation strictness)
-- keyboard shortcuts for panel + issue navigation
+- keyboard shortcuts for issue navigation
 
 ## Content Script Organization
 
@@ -43,7 +43,6 @@ Configure the endpoint in the panel Settings section.
 
 ## Keyboard shortcuts
 
-- `Alt+Shift+Z` toggle panel
 - `Alt+Shift+N` next issue
 - `Alt+Shift+P` previous issue
 - `Ctrl/Cmd+Enter` run check now

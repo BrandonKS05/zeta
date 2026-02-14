@@ -248,12 +248,6 @@ class ZetaPanel {
     this.root.setAttribute("role", "complementary");
     this.root.setAttribute("aria-label", "zeta math checker panel");
 
-    this.fab = document.createElement("button");
-    this.fab.type = "button";
-    this.fab.className = "zeta-fab";
-    this.fab.setAttribute("aria-label", "Toggle zeta panel");
-    this.fab.innerHTML = `<img src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />`;
-
     this.root.innerHTML = `
       <header class="zeta-header">
         <div class="zeta-header-top">
@@ -270,7 +264,6 @@ class ZetaPanel {
               <span id="zeta-global-text">global · idle</span>
             </div>
             <button type="button" id="zeta-theme-btn" class="zeta-icon-btn">Light</button>
-            <button type="button" id="zeta-collapse-btn" class="zeta-icon-btn">Hide</button>
           </div>
         </div>
         <div class="zeta-status-row">
@@ -370,7 +363,6 @@ class ZetaPanel {
             <button type="button" id="zeta-save-settings" class="zeta-btn zeta-btn--primary">Save Settings</button>
           </div>
           <ul class="zeta-shortcuts">
-            <li><code>Alt+Shift+Z</code> toggle panel</li>
             <li><code>Alt+Shift+N</code> next issue</li>
             <li><code>Alt+Shift+P</code> previous issue</li>
             <li><code>Ctrl/Cmd+Enter</code> run check now</li>
@@ -381,7 +373,7 @@ class ZetaPanel {
       </div>
     `;
 
-    document.body.append(this.root, this.fab);
+    document.body.append(this.root);
 
     this.refs = {
       statusDot: this.root.querySelector("#zeta-status-dot"),
@@ -410,7 +402,6 @@ class ZetaPanel {
       settingsBtn: this.root.querySelector("#zeta-settings-btn"),
       themeBtn: this.root.querySelector("#zeta-theme-btn"),
       settingsCard: this.root.querySelector("#zeta-settings-card"),
-      collapseBtn: this.root.querySelector("#zeta-collapse-btn"),
       backendUrl: this.root.querySelector("#zeta-backend-url"),
       timeout: this.root.querySelector("#zeta-timeout"),
       retries: this.root.querySelector("#zeta-retries"),
@@ -424,8 +415,6 @@ class ZetaPanel {
   }
 
   bindEvents() {
-    this.fab.addEventListener("click", () => this.handlers.onTogglePanel());
-    this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel(false));
     this.refs.themeBtn.addEventListener("click", () => this.handlers.onToggleTheme());
     this.refs.runBtn.addEventListener("click", () => this.handlers.onRunNow());
     this.refs.regenerateBtn.addEventListener("click", () => this.handlers.onRegenerate());
@@ -491,13 +480,11 @@ class ZetaPanel {
 
   setOpen(open) {
     this.root.classList.toggle("is-collapsed", !open);
-    this.fab.classList.toggle("is-hidden", !!open);
   }
 
   setTheme(theme) {
     const next = normalizeTheme(theme);
     this.root.setAttribute("data-theme", next);
-    this.fab.setAttribute("data-theme", next);
     document.documentElement.setAttribute("data-zeta-theme", next);
     this.refs.themeBtn.textContent = next === "dark" ? "Light" : "Dark";
   }
@@ -640,7 +627,6 @@ class ZetaPanel {
 
   remove() {
     this.root.remove();
-    this.fab.remove();
   }
 }
 

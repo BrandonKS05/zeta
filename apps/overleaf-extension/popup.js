@@ -3,6 +3,7 @@
 
   const MODE_KEY = "zetaMode";
   const SETTINGS_KEY = "zetaSettings";
+  const TELEMETRY_KEY = "zetaTelemetry";
   const FALLBACK_MODE = "auto";
   const MODE_COPY = {
     fast: "Fast applies immediate underlines while typing.",
@@ -14,6 +15,8 @@
   const note = document.getElementById("zeta-mode-note");
   const toggle = document.querySelector(".zeta-mode-toggle");
   const indicator = document.querySelector(".zeta-mode-indicator");
+  const inferenceValue = document.getElementById("zeta-last-inference");
+  const statusLabel = document.getElementById("zeta-last-status");
 
   let hasInitialized = false;
 
@@ -39,6 +42,55 @@
     const left = buttonRect.left - toggleRect.left;
     indicator.style.width = `${buttonRect.width}px`;
     indicator.style.transform = `translateX(${left}px)`;
+  }
+
+  function formatStatus(status) {
+    const value = String(status || "idle").toLowerCase();
+    if (value === "ready") {
+      return "ready";
+    }
+    if (value === "analyzing") {
+      return "analyzing";
+    }
+    if (value === "error") {
+      return "error";
+    }
+    if (value === "offline") {
+      return "offline";
+    }
+    return "idle";
+  }
+
+  function renderTelemetry(telemetry) {
+    const data = telemetry && typeof telemetry === "object" ? telemetry : {};
+    const inferenceMs = Number(data.inferenceMs);
+    const pendingCount = Number(data.pendingCount) || 0;
+    const updatedAt = Number(data.updatedAt);
+
+    if (inferenceValue) {
+      inferenceValue.textContent = Number.isFinite(inferenceMs) ? `${Math.round(inferenceMs)} ms` : "--";
+    }
+
+    if (!statusLabel) {
+      return;
+    }
+
+    const parts = [formatStatus(data.status)];
+    if (pendingCount > 0) {
+      parts.push(`${pendingCount} queued`);
+    }
+    if (Number.isFinite(updatedAt) && updatedAt > 0) {
+      parts.push(
+        new Date(updatedAt).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      );
+    } else {
+      parts.push("waiting for a run");
+    }
+    statusLabel.textContent = parts.join(" · ");
   }
 
   function setActiveMode(mode) {
@@ -97,12 +149,32 @@
     }
   });
 
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === "sync" && changes[MODE_KEY]) {
+        setActiveMode(normalizeMode(changes[MODE_KEY].newValue));
+      }
+      if (areaName === "local" && changes[TELEMETRY_KEY]) {
+        renderTelemetry(changes[TELEMETRY_KEY].newValue);
+      }
+    });
+  }
+
   if (typeof chrome === "undefined" || !chrome.storage?.sync) {
     setActiveMode(FALLBACK_MODE);
+    renderTelemetry(null);
     return;
   }
 
   chrome.storage.sync.get({ [MODE_KEY]: FALLBACK_MODE }, (result) => {
     setActiveMode(normalizeMode(result[MODE_KEY]));
   });
+
+  if (chrome.storage?.local) {
+    chrome.storage.local.get({ [TELEMETRY_KEY]: null }, (result) => {
+      renderTelemetry(result[TELEMETRY_KEY]);
+    });
+  } else {
+    renderTelemetry(null);
+  }
 })();

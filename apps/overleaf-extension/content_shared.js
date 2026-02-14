@@ -6,11 +6,12 @@
   const SETTINGS_KEY = "zetaSettings";
   const MODE_KEY = "zetaMode";
   const IGNORED_KEY = "zetaIgnoredIssueKeys";
+  const TELEMETRY_KEY = "zetaTelemetry";
   const CACHE_TTL_MS = 90 * 1000;
   const MAX_HIGHLIGHT_RECTS = 120;
 
   const DEFAULT_SETTINGS = {
-    backendUrl: "http://13.57.35.202:8000/v1/lean/solve'",
+    backendUrl: "http://13.57.35.202:8000/v1/lean/solve",
     mode: "auto",
     scope: "paragraph",
     theme: "dark",
@@ -141,6 +142,7 @@
     SETTINGS_KEY,
     MODE_KEY,
     IGNORED_KEY,
+    TELEMETRY_KEY,
     CACHE_TTL_MS,
     MAX_HIGHLIGHT_RECTS,
     DEFAULT_SETTINGS,

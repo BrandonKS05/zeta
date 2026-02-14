@@ -94,39 +94,6 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
   color: var(--popover-muted);
 }
 
-.zeta-fab {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 2147483620;
-  width: 54px;
-  height: 54px;
-  border-radius: 999px;
-  border: 1px solid #2f2f2f;
-  background: #101010;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.4);
-  cursor: pointer;
-  padding: 0;
-  transition: transform 160ms ease, opacity 160ms ease;
-}
-
-.zeta-fab[data-theme="light"] {
-  border-color: #cfcfcf;
-  background: #f9f9f9;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
-}
-
-.zeta-fab img {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-}
-
-.zeta-fab.is-hidden {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(10px);
-}
 
 .zeta-shell {
   --zeta-bg: #0f0f0f;
@@ -640,8 +607,4 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
     justify-content: flex-start;
   }
 
-  .zeta-fab {
-    right: 12px;
-    bottom: 12px;
-  }
 }

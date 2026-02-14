@@ -6,6 +6,7 @@
     SETTINGS_KEY,
     MODE_KEY,
     IGNORED_KEY,
+    TELEMETRY_KEY,
     CACHE_TTL_MS,
     DEFAULT_SETTINGS,
     SEVERITY_WEIGHT,
@@ -42,7 +43,6 @@ class ZetaApp {
     );
 
     this.panel = new ZetaPanel({
-      onTogglePanel: (explicit) => this.togglePanel(explicit),
       onToggleTheme: () => this.toggleTheme(),
       onRunNow: () => this.runAnalysis("manual", true),
       onRegenerate: () => this.runAnalysis("regenerate", true),
@@ -69,6 +69,7 @@ class ZetaApp {
     this.responseCache = new Map();
     this.sentenceCache = new Map();
     this.lastInferenceMs = null;
+    this.lastTelemetry = null;
     this.activityEntries = [];
     this.undoStack = [];
 
@@ -81,14 +82,20 @@ class ZetaApp {
 
   async init() {
     await this.loadSettings();
+    this.settings.panelOpen = true;
     this.panel.setSettings(this.settings);
-    this.panel.setOpen(this.settings.panelOpen);
+    this.panel.setOpen(true);
     this.panel.setStatus("idle", "Idle");
     this.panel.setGlobalState("ready", "global · waiting");
     this.panel.setInferenceTime(null, 0);
     this.panel.setSentenceStats(0, 0);
     this.panel.setHealth(100);
     this.panel.setActivity(this.activityEntries, false);
+    this.persistTelemetry({
+      status: "idle",
+      pendingCount: 0,
+      inferenceMs: null,
+    });
 
     this.refreshAdapters();
     this.activateInitialAdapter();
@@ -99,6 +106,10 @@ class ZetaApp {
     } else {
       this.panel.setStatus("idle", "Focus a text editor to start.");
       this.panel.setGlobalState("offline", "global · no editor");
+      this.persistTelemetry({
+        status: "offline",
+        pendingCount: 0,
+      });
     }
 
     this.scanTimer = window.setInterval(() => {
@@ -344,12 +355,6 @@ class ZetaApp {
   }
 
   handleKeyDown(event) {
-    if (event.altKey && event.shiftKey && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      this.togglePanel();
-      return;
-    }
-
     if (event.altKey && event.shiftKey && event.key.toLowerCase() === "n") {
       event.preventDefault();
       this.focusNextIssue();
@@ -429,13 +434,37 @@ class ZetaApp {
     this.scheduleAnalysis("settings-save", true);
   }
 
-  togglePanel(explicit) {
-    const nextOpen = typeof explicit === "boolean" ? explicit : !this.settings.panelOpen;
-    this.settings.panelOpen = nextOpen;
-    this.panel.setOpen(nextOpen);
-    storageSyncSet({
-      [SETTINGS_KEY]: this.settings,
-      [MODE_KEY]: this.settings.mode,
+  togglePanel() {
+    // Floating launcher is removed; keep panel visible.
+    this.settings.panelOpen = true;
+    this.panel.setOpen(true);
+  }
+
+  persistTelemetry(partial = {}) {
+    const next = {
+      inferenceMs: Number.isFinite(this.lastInferenceMs) ? Math.round(this.lastInferenceMs) : null,
+      status: "idle",
+      pendingCount: 0,
+      mode: this.settings.mode,
+      scope: this.settings.scope,
+      updatedAt: Date.now(),
+      ...partial,
+    };
+
+    const sameAsLast =
+      this.lastTelemetry &&
+      this.lastTelemetry.inferenceMs === next.inferenceMs &&
+      this.lastTelemetry.status === next.status &&
+      this.lastTelemetry.pendingCount === next.pendingCount &&
+      this.lastTelemetry.mode === next.mode &&
+      this.lastTelemetry.scope === next.scope;
+    if (sameAsLast) {
+      return;
+    }
+
+    this.lastTelemetry = next;
+    storageLocalSet({
+      [TELEMETRY_KEY]: next,
     });
   }
 
@@ -461,6 +490,10 @@ class ZetaApp {
     if (!adapter || !adapter.isConnected()) {
       this.panel.setStatus("error", "No active editor.");
       this.panel.setGlobalState("offline", "global · no editor");
+      this.persistTelemetry({
+        status: "offline",
+        pendingCount: 0,
+      });
       return;
     }
 
@@ -479,6 +512,10 @@ class ZetaApp {
       this.panel.setGlobalState("ready", "global · waiting");
       this.panel.setInferenceTime(this.lastInferenceMs, 0);
       this.panel.setSentenceStats(0, 0);
+      this.persistTelemetry({
+        status: "idle",
+        pendingCount: 0,
+      });
       this.overlay.clear();
       this.popover.close();
       return;
@@ -528,11 +565,19 @@ class ZetaApp {
 
     this.panel.setSentenceStats(sentencePlan.cachedCount, sentencePlan.pending.length);
     this.panel.setInferenceTime(this.lastInferenceMs, sentencePlan.pending.length);
+    this.persistTelemetry({
+      status: sentencePlan.pending.length > 0 ? "analyzing" : "ready",
+      pendingCount: sentencePlan.pending.length,
+    });
     rerenderFromCache();
 
     if (sentencePlan.pending.length === 0) {
       this.panel.setStatus("success", "All cached sentences are up to date.");
       this.panel.setGlobalState("ready", "global · synced");
+      this.persistTelemetry({
+        status: "ready",
+        pendingCount: 0,
+      });
       this.syncPopoverWithCaret();
       return;
     }
@@ -564,6 +609,10 @@ class ZetaApp {
       const pendingLeft = sentencePlan.pending.length - i - 1;
       this.panel.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
       this.panel.setInferenceTime(this.lastInferenceMs, pendingLeft);
+      this.persistTelemetry({
+        status: pendingLeft > 0 ? "analyzing" : "ready",
+        pendingCount: pendingLeft,
+      });
       rerenderFromCache();
     }
 
@@ -575,6 +624,10 @@ class ZetaApp {
       hasError ? "Completed with actionable feedback." : "Check complete."
     );
     this.panel.setGlobalState(hasError ? "error" : "ready", hasError ? "global · review needed" : "global · synced");
+    this.persistTelemetry({
+      status: hasError ? "error" : "ready",
+      pendingCount: 0,
+    });
 
     if (reason !== "typing" || hasError) {
       this.addActivity(

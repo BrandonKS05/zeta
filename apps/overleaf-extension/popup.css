@@ -162,3 +162,22 @@ body {
   line-height: 1.45;
   color: var(--cool-gray);
 }
+
+.zeta-metric {
+  display: grid;
+  gap: 2px;
+}
+
+.zeta-metric-value {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.zeta-metric-subtle {
+  margin: 0;
+  font-size: 11px;
+  color: var(--cool-gray);
+}
