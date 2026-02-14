@@ -43,19 +43,19 @@ def test_print_summary_handles_missing_response(capsys) -> None:
 
 
 def test_post_async_and_poll_success(monkeypatch) -> None:
-    def fake_post(*args, **kwargs):  # noqa: ANN002, ANN003
-        return _FakeResponse({"call_id": "abc123", "status": "pending"})
-
     calls = {"polls": 0}
 
-    def fake_get(*args, **kwargs):  # noqa: ANN002, ANN003
+    def fake_request(method, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        if method == "POST":
+            return _FakeResponse({"call_id": "abc123", "status": "pending"})
+        if method != "GET":
+            raise AssertionError(f"unexpected method {method}")
         calls["polls"] += 1
         if calls["polls"] == 1:
             return _FakeResponse({"status": "pending", "call_id": "abc123"})
         return _FakeResponse({"status": "completed", "call_id": "abc123", "result": {"status": "ok"}})
 
-    monkeypatch.setattr(suite.requests, "post", fake_post)
-    monkeypatch.setattr(suite.requests, "get", fake_get)
+    monkeypatch.setattr(suite.requests, "request", fake_request)
 
     result, error = suite._post_async_and_poll(
         base_url="https://example.modal.run",
@@ -64,6 +64,8 @@ def test_post_async_and_poll_success(monkeypatch) -> None:
         submit_timeout_seconds=10,
         poll_interval_seconds=0.0,
         max_poll_seconds=5,
+        retries=0,
+        retry_backoff_seconds=0.0,
     )
     assert error is None
     assert result == {"status": "ok"}
@@ -82,7 +84,8 @@ def test_main_writes_report(monkeypatch, tmp_path: Path) -> None:
     )
     results_dir = tmp_path / "results"
 
-    def fake_post(*args, **kwargs):  # noqa: ANN002, ANN003
+    def fake_request(method, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        assert method == "POST"
         return _FakeResponse(
             {
                 "status": "ok",
@@ -92,7 +95,7 @@ def test_main_writes_report(monkeypatch, tmp_path: Path) -> None:
             }
         )
 
-    monkeypatch.setattr(suite.requests, "post", fake_post)
+    monkeypatch.setattr(suite.requests, "request", fake_request)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -116,3 +119,26 @@ def test_main_writes_report(monkeypatch, tmp_path: Path) -> None:
     assert len(report_payload["rows"]) == 2
     assert report_payload["rows"][0]["response"]["status"] == "ok"
 
+
+def test_request_json_with_retries(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_request(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise requests.RequestException("temporary DNS failure")
+        return _FakeResponse({"ok": True})
+
+    monkeypatch.setattr(suite.requests, "request", fake_request)
+    payload, error = suite._request_json_with_retries(
+        method="GET",
+        url="https://example.modal.run/healthz",
+        headers={},
+        json_payload=None,
+        timeout_seconds=5,
+        retries=3,
+        retry_backoff_seconds=0.0,
+    )
+    assert error is None
+    assert payload == {"ok": True}
+    assert calls["count"] == 3

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "proofnetsharp-Artin_exercise_2_11_3",
+    "text": "\\begin{proof}\n\n    Pair up if possible each element of $G$ with its inverse, and observe that\n\n$$\n\ng^2 \\neq e \\Longleftrightarrow g \\neq g^{-1} \\Longleftrightarrow \\text { there exists the pair }\\left(g, g^{-1}\\right)\n\n$$\n\nNow, there is one element that has no pairing: the unit $e$ (since indeed $e=e^{-1} \\Longleftrightarrow e^2=e$ ), so since the number of elements of $G$ is even there must be at least one element more, say $e \\neq a \\in G$, without a pairing, and thus $a=a^{-1} \\Longleftrightarrow a^2=e$\n\n\\end{proof}",
+    "context": "From this proof sketch, infer and formalize only the main theorem statement.\n\nTarget informal statement:\nProve that a group of even order contains an element of order $2 .$",
+    "theorem_name": "Artin_exercise_2_11_3",
+    "imports": [
+      "Mathlib"
+    ],
+    "metadata": {
+      "dataset": "PAug/ProofNetSharp",
+      "split": "valid",
+      "source_id": "Artin|exercise_2_11_3",
+      "proof_word_count": 84,
+      "input_mode": "proof_with_statement_context"
+    }
+  }
+]

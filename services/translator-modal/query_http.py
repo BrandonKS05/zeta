@@ -11,6 +11,12 @@ import requests
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True, help="Modal endpoint base URL")
+    parser.add_argument(
+        "--mode",
+        default="analyze",
+        choices=["analyze", "generate"],
+        help="`generate` skips Lean checking for faster NL->Lean suggestions.",
+    )
     parser.add_argument("--text", required=True)
     parser.add_argument("--context", default=None)
     parser.add_argument("--theorem-name", default=None)
@@ -22,6 +28,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--lean-timeout-seconds", type=int, default=20)
+    parser.add_argument("--skip-lean-check", action="store_true")
     parser.add_argument("--include-raw-model-output", action="store_true")
     parser.add_argument("--api-key", default=None)
     args = parser.parse_args()
@@ -34,6 +41,7 @@ def main() -> None:
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
         "lean_timeout_seconds": args.lean_timeout_seconds,
+        "skip_lean_check": args.skip_lean_check,
         "include_raw_model_output": args.include_raw_model_output,
     }
     headers = {}
@@ -41,7 +49,8 @@ def main() -> None:
         headers["x-api-key"] = args.api_key
 
     base = args.base_url.rstrip("/")
-    resp = requests.post(f"{base}/v1/analyze", json=payload, headers=headers, timeout=180)
+    endpoint = "/v1/generate" if args.mode == "generate" else "/v1/analyze"
+    resp = requests.post(f"{base}{endpoint}", json=payload, headers=headers, timeout=180)
     resp.raise_for_status()
     print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
 

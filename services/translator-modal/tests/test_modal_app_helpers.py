@@ -36,3 +36,24 @@ def test_analyze_cache_key_distinguishes_skip_lean_check() -> None:
     req_full = app.AnalyzeRequest(text="n + 0 = n", skip_lean_check=False)
     req_fast = app.AnalyzeRequest(text="n + 0 = n", skip_lean_check=True)
     assert app._analyze_cache_key(req_full) != app._analyze_cache_key(req_fast)
+
+
+def test_validate_statement_type_rejects_keyword_only() -> None:
+    assert app._validate_statement_type("theorem") is not None
+    assert app._validate_statement_type("∀ n : Nat, n = n") is None
+
+
+def test_validate_statement_type_rejects_jsonish_payload() -> None:
+    bad = '{ "lean_statement_type": "∀ n : Nat, n = n" }'
+    assert app._validate_statement_type(bad) is not None
+
+
+def test_extract_statement_payload_jsonish_fallback() -> None:
+    raw = (
+        '{ "lean_statement_type": "∀ n : Nat, n + 0 = n", '
+        '"assumptions": [], "notes": "ok", "extra": "unterminated'
+    )
+    statement, assumptions, notes = app._extract_statement_payload(raw)
+    assert statement == "∀ n : Nat, n + 0 = n"
+    assert assumptions == []
+    assert notes == ""

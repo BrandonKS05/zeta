@@ -156,29 +156,9 @@ body {
   min-height: 18px;
 }
 
-.zeta-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.zeta-hint {
+  margin: 0;
   font-size: 12px;
-  color: var(--ink);
-}
-
-.zeta-legend-item + .zeta-legend-item {
-  margin-top: 8px;
-}
-
-.zeta-legend-sample {
-  width: 56px;
-  border-bottom-width: 3px;
-  border-bottom-style: solid;
-}
-
-.zeta-legend-apple {
-  border-bottom-color: var(--cardinal);
-  border-bottom-style: dotted;
-}
-
-.zeta-legend-banana {
-  border-bottom-color: #e7c34d;
+  line-height: 1.45;
+  color: var(--cool-gray);
 }

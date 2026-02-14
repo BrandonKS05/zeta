@@ -145,6 +145,7 @@ python query_http.py \
 - `diagnostics` from Lean compiler output
 - `is_valid_lean` boolean
 - `feedback` list (human-readable correction guidance)
+- `timings_ms` with separate `generation` and `lean_check` timings
 
 Input accepts optional `context` to disambiguate nearby math prose.
 
@@ -218,6 +219,15 @@ python run_eval_suite.py \
   --async-jobs
 ```
 
+If your network is flaky during long evals, increase retries/backoff:
+
+```bash
+python run_eval_suite.py \
+  --base-url "https://<your-api-endpoint>.modal.run" \
+  --request-retries 5 \
+  --retry-backoff-seconds 1.0
+```
+
 ## 13. Pytest
 
 ```bash
@@ -226,3 +236,49 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest
 ```
+
+## 14. Error-detection benchmark (Herald vs GPT)
+
+This benchmark creates a labeled dataset without manual annotation:
+
+- start from real statements (for example `PAug/ProofNetSharp`)
+- generate corrupted variants with known synthetic errors
+- run both systems on identical inputs
+- report TP/TN/FP/FN and error-count closeness to gold labels
+
+### Build labeled benchmark cases
+
+```bash
+cd /Users/aryan/Desktop/treehacks-2026/services/translator-modal
+source .venv/bin/activate
+python evals/build_error_detection_cases.py \
+  --input-cases evals/cases_proofnetsharp_paragraph.json \
+  --max-base-cases 400 \
+  --corruptions-per-base 1 \
+  --max-errors-per-corrupted 2 \
+  --output evals/cases_error_detection_proofnetsharp.json
+```
+
+### Run Herald vs GPT benchmark
+
+```bash
+cd /Users/aryan/Desktop/treehacks-2026/services/translator-modal
+source .venv/bin/activate
+export OPENAI_API_KEY=sk-...
+python run_error_detection_benchmark.py \
+  --cases-file evals/cases_error_detection_proofnetsharp.json \
+  --herald-base-url "https://<your-api-endpoint>.modal.run" \
+  --herald-async-jobs \
+  --openai-model gpt-5-mini
+```
+
+Outputs are saved under:
+
+- `/Users/aryan/Desktop/treehacks-2026/services/translator-modal/evals/results/error-benchmark-*.json`
+
+Each report includes:
+
+- confusion matrix per system (`tp`, `tn`, `fp`, `fn`)
+- precision/recall/specificity/accuracy/F1
+- error-count metrics (`mae`, exact-count-match rate, total count gap)
+- pairwise count-closeness summary (`herald` vs `gpt`)

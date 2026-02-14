@@ -19,7 +19,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v2"
+APP_VERSION = "2026-02-14-mathlib-fastcache-v4"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -72,6 +72,10 @@ LEAN_DECL_RE = re.compile(
     r"^(theorem|lemma|example|axiom)\s+([A-Za-z_][A-Za-z0-9_']*)?\s*:\s*(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
+LEAN_STATEMENT_JSONISH_RE = re.compile(
+    r'"lean_statement_type"\s*:\s*"(?P<value>(?:\\.|[^"\\])*)"',
+    re.DOTALL,
+)
 LEAN_DIAGNOSTIC_RE = re.compile(
     r"^(?P<file>.+?):(?P<line>\d+):(?P<col>\d+): "
     r"(?P<severity>error|warning|info|information)(?:\([^)]+\))?: "
@@ -102,6 +106,23 @@ LEAN_IDENTIFIER_FALLBACKS = (
     ("ℚ", "Rat"),
     ("ℝ", "Real"),
     ("ℂ", "Complex"),
+)
+LEAN_RESERVED_STATEMENT_WORDS = {
+    "theorem",
+    "lemma",
+    "example",
+    "axiom",
+    "def",
+    "structure",
+    "inductive",
+}
+MAX_STATEMENT_TYPE_CHARS = int(os.environ.get("MAX_STATEMENT_TYPE_CHARS", "800"))
+LEAN_FORBIDDEN_STATEMENT_SNIPPETS = (
+    "import ",
+    "namespace ",
+    "set_option ",
+    "#check ",
+    "open ",
 )
 
 app = modal.App(APP_NAME)
@@ -263,6 +284,7 @@ class AnalyzeResponse(BaseModel):
     is_valid_lean: bool = False
     cache_hit: bool = False
     model_output: str | None = None
+    timings_ms: dict[str, int] = Field(default_factory=dict)
     latency_ms: int = 0
 
 
@@ -599,8 +621,40 @@ def _extract_statement_payload(raw_output: str) -> tuple[str | None, list[str], 
         statement_type = _normalize_statement_type(candidate)
         return (statement_type if statement_type else None, assumptions, notes)
 
+    jsonish_match = LEAN_STATEMENT_JSONISH_RE.search(raw_output)
+    if jsonish_match:
+        try:
+            jsonish_value = json.loads(f"\"{jsonish_match.group('value')}\"")
+            if isinstance(jsonish_value, str):
+                statement_type = _normalize_statement_type(jsonish_value)
+                return (statement_type if statement_type else None, assumptions, notes)
+        except json.JSONDecodeError:
+            pass
+
     statement_type = _normalize_statement_type(raw_output)
     return (statement_type if statement_type else None, assumptions, notes)
+
+
+def _validate_statement_type(statement_type: str) -> str | None:
+    normalized = statement_type.strip()
+    lowered = normalized.lower()
+    if not normalized:
+        return "Extracted statement is empty."
+    if lowered in LEAN_RESERVED_STATEMENT_WORDS:
+        return f"Extracted statement is only a Lean declaration keyword: `{normalized}`."
+    if any(lowered.startswith(f"{word} ") for word in LEAN_RESERVED_STATEMENT_WORDS):
+        return f"Extracted statement starts with Lean declaration syntax: `{normalized[:80]}`."
+    if normalized.startswith("{") or normalized.endswith("}") or '"lean_statement_type"' in normalized:
+        return "Extracted statement still looks like JSON, not a Lean proposition."
+    if len(normalized) > MAX_STATEMENT_TYPE_CHARS:
+        return (
+            f"Extracted statement is too long ({len(normalized)} chars > {MAX_STATEMENT_TYPE_CHARS}). "
+            "Likely malformed output."
+        )
+    for snippet in LEAN_FORBIDDEN_STATEMENT_SNIPPETS:
+        if snippet in lowered:
+            return f"Extracted statement contains non-type Lean code (`{snippet.strip()}`)."
+    return None
 
 
 def _compose_lean_source(imports: list[str], declaration_name: str, statement_type: str) -> str:
@@ -814,11 +868,15 @@ def _apply_identifier_fallbacks(statement_type: str, diagnostics: list[LeanDiagn
 
 def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     started = time.perf_counter()
+    generation_started = started
+    generation_ms = 0
+    lean_ms = 0
     normalized_text = _normalize_input_text(request.text)
 
     try:
         raw_output = _generate_model_output(request, normalized_text)
         statement_type, assumptions, notes = _extract_statement_payload(raw_output)
+        generation_ms = int((time.perf_counter() - generation_started) * 1000)
     except Exception as exc:  # noqa: BLE001
         latency_ms = int((time.perf_counter() - started) * 1000)
         return AnalyzeResponse(
@@ -830,6 +888,7 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             feedback=["Model runtime error during NL-to-Lean generation."],
             is_valid_lean=False,
             model_output=None,
+            timings_ms={"generation": generation_ms, "lean_check": lean_ms},
             latency_ms=latency_ms,
         )
 
@@ -846,6 +905,26 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             feedback=["Model output did not include a parseable `lean_statement_type`."],
             is_valid_lean=False,
             model_output=raw_output if request.include_raw_model_output else None,
+            timings_ms={"generation": generation_ms, "lean_check": lean_ms},
+            latency_ms=latency_ms,
+        )
+
+    statement_error = _validate_statement_type(statement_type)
+    if statement_error:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return AnalyzeResponse(
+            model=MODEL_ID,
+            status="model_parse_error",
+            input_text=request.text,
+            normalized_text=normalized_text,
+            assumptions=assumptions,
+            notes=notes,
+            statement_type=statement_type,
+            diagnostics=[LeanDiagnostic(severity="error", message=statement_error)],
+            feedback=["Model output produced an invalid Lean proposition form."],
+            is_valid_lean=False,
+            model_output=raw_output if request.include_raw_model_output else None,
+            timings_ms={"generation": generation_ms, "lean_check": lean_ms},
             latency_ms=latency_ms,
         )
 
@@ -876,15 +955,19 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             feedback=feedback,
             is_valid_lean=False,
             model_output=raw_output if request.include_raw_model_output else None,
+            timings_ms={"generation": generation_ms, "lean_check": lean_ms},
             latency_ms=latency_ms,
         )
     try:
+        lean_started = time.perf_counter()
         is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
             statement_type=statement_type,
             timeout_seconds=request.lean_timeout_seconds,
             imports=effective_imports,
         )
+        lean_ms = int((time.perf_counter() - lean_started) * 1000)
     except Exception as exc:  # noqa: BLE001
+        lean_ms = int((time.perf_counter() - lean_started) * 1000)
         latency_ms = int((time.perf_counter() - started) * 1000)
         return AnalyzeResponse(
             model=MODEL_ID,
@@ -902,6 +985,7 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             feedback=["Lean runtime setup failed while validating this statement."],
             is_valid_lean=False,
             model_output=raw_output if request.include_raw_model_output else None,
+            timings_ms={"generation": generation_ms, "lean_check": lean_ms},
             latency_ms=latency_ms,
         )
 
@@ -913,11 +997,13 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             declaration_name=declaration_name,
             statement_type=statement_type,
         )
+        lean_started = time.perf_counter()
         is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
             statement_type=statement_type,
             timeout_seconds=request.lean_timeout_seconds,
             imports=effective_imports,
         )
+        lean_ms += int((time.perf_counter() - lean_started) * 1000)
 
     feedback = _build_feedback(statement_type, diagnostics, assumptions, notes)
     if used_fallback:
@@ -942,6 +1028,7 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         feedback=feedback,
         is_valid_lean=is_valid_lean,
         model_output=raw_output if request.include_raw_model_output else None,
+        timings_ms={"generation": generation_ms, "lean_check": lean_ms},
         latency_ms=latency_ms,
     )
 

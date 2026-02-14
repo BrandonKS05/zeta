@@ -29,23 +29,59 @@ def _headers(api_key: str | None) -> dict[str, str]:
     return headers
 
 
+def _sleep_backoff(backoff_seconds: float, attempt: int) -> None:
+    if backoff_seconds <= 0:
+        return
+    time.sleep(backoff_seconds * (2**attempt))
+
+
+def _request_json_with_retries(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json_payload: dict[str, Any] | None,
+    timeout_seconds: int,
+    retries: int,
+    retry_backoff_seconds: float,
+) -> tuple[dict[str, Any] | None, str | None]:
+    attempt = 0
+    while True:
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json_payload,
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json(), None
+        except requests.RequestException as exc:
+            if attempt >= retries:
+                return None, str(exc)
+            _sleep_backoff(retry_backoff_seconds, attempt)
+            attempt += 1
+
+
 def _post_sync(
     base_url: str,
     api_key: str | None,
     case_payload: dict[str, Any],
     timeout_seconds: int,
+    retries: int,
+    retry_backoff_seconds: float,
+    endpoint_path: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        response = requests.post(
-            f"{base_url}/v1/analyze",
-            headers=_headers(api_key),
-            json=case_payload,
-            timeout=timeout_seconds,
-        )
-        response.raise_for_status()
-        return response.json(), None
-    except requests.RequestException as exc:
-        return None, str(exc)
+    return _request_json_with_retries(
+        method="POST",
+        url=f"{base_url}{endpoint_path}",
+        headers=_headers(api_key),
+        json_payload=case_payload,
+        timeout_seconds=timeout_seconds,
+        retries=retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+    )
 
 
 def _post_async_and_poll(
@@ -55,18 +91,22 @@ def _post_async_and_poll(
     submit_timeout_seconds: int,
     poll_interval_seconds: float,
     max_poll_seconds: int,
+    retries: int,
+    retry_backoff_seconds: float,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        submit_response = requests.post(
-            f"{base_url}/v1/analyze/jobs",
-            headers=_headers(api_key),
-            json=case_payload,
-            timeout=submit_timeout_seconds,
-        )
-        submit_response.raise_for_status()
-        submit_json = submit_response.json()
-    except requests.RequestException as exc:
-        return None, f"submit failed: {exc}"
+    submit_json, submit_error = _request_json_with_retries(
+        method="POST",
+        url=f"{base_url}/v1/analyze/jobs",
+        headers=_headers(api_key),
+        json_payload=case_payload,
+        timeout_seconds=submit_timeout_seconds,
+        retries=retries,
+        retry_backoff_seconds=retry_backoff_seconds,
+    )
+    if submit_error:
+        return None, f"submit failed: {submit_error}"
+    if submit_json is None:
+        return None, "submit failed: empty response body"
 
     call_id = submit_json.get("call_id")
     if not call_id:
@@ -74,16 +114,19 @@ def _post_async_and_poll(
 
     deadline = time.monotonic() + max_poll_seconds
     while time.monotonic() < deadline:
-        try:
-            poll_response = requests.get(
-                f"{base_url}/v1/analyze/jobs/{call_id}",
-                headers=_headers(api_key),
-                timeout=submit_timeout_seconds,
-            )
-            poll_response.raise_for_status()
-            poll_json = poll_response.json()
-        except requests.RequestException as exc:
-            return None, f"poll failed for {call_id}: {exc}"
+        poll_json, poll_error = _request_json_with_retries(
+            method="GET",
+            url=f"{base_url}/v1/analyze/jobs/{call_id}",
+            headers=_headers(api_key),
+            json_payload=None,
+            timeout_seconds=submit_timeout_seconds,
+            retries=retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+        )
+        if poll_error:
+            return None, f"poll failed for {call_id}: {poll_error}"
+        if poll_json is None:
+            return None, f"poll failed for {call_id}: empty response body"
 
         status = poll_json.get("status")
         if status == "completed":
@@ -136,6 +179,14 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--lean-timeout-seconds", type=int, default=20)
     parser.add_argument("--http-timeout-seconds", type=int, default=240)
+    parser.add_argument("--request-retries", type=int, default=3)
+    parser.add_argument("--retry-backoff-seconds", type=float, default=0.75)
+    parser.add_argument(
+        "--endpoint-path",
+        default="/v1/analyze",
+        choices=["/v1/analyze", "/v1/generate"],
+        help="Use /v1/generate for low-latency NL->Lean generation without Lean checking.",
+    )
     parser.add_argument("--async-jobs", action="store_true", help="Use /v1/analyze/jobs + polling.")
     parser.add_argument("--poll-interval-seconds", type=float, default=2.0)
     parser.add_argument("--max-poll-seconds", type=int, default=600)
@@ -172,6 +223,8 @@ def main() -> None:
                 submit_timeout_seconds=args.http_timeout_seconds,
                 poll_interval_seconds=args.poll_interval_seconds,
                 max_poll_seconds=args.max_poll_seconds,
+                retries=args.request_retries,
+                retry_backoff_seconds=args.retry_backoff_seconds,
             )
         else:
             response, error = _post_sync(
@@ -179,6 +232,9 @@ def main() -> None:
                 api_key=args.api_key,
                 case_payload=payload,
                 timeout_seconds=args.http_timeout_seconds,
+                retries=args.request_retries,
+                retry_backoff_seconds=args.retry_backoff_seconds,
+                endpoint_path=args.endpoint_path,
             )
         wall_ms = int((time.time() - started) * 1000)
         rows.append(

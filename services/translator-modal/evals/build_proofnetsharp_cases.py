@@ -41,6 +41,20 @@ def main() -> None:
     parser.add_argument("--max-cases", type=int, default=100)
     parser.add_argument("--min-proof-words", type=int, default=80)
     parser.add_argument("--max-context-chars", type=int, default=1600)
+    parser.add_argument(
+        "--input-mode",
+        default="statement_with_proof_context",
+        choices=[
+            "statement_with_proof_context",
+            "proof_with_statement_context",
+            "statement_only",
+            "proof_only",
+        ],
+        help=(
+            "How to map ProofNetSharp fields into request payload text/context. "
+            "Use `proof_with_statement_context` to test nl_proof-driven prompting."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -76,14 +90,31 @@ def main() -> None:
         source_id = str(row.get("id") or row.get("name") or f"proofnet_{idx}")
         theorem_name = _sanitize_name(source_id, idx)
 
+        text = statement
+        context = (
+            "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n"
+            f"{proof_excerpt}"
+        )
+        if args.input_mode == "proof_with_statement_context":
+            text = proof_excerpt
+            context = (
+                "From this proof sketch, infer and formalize only the main theorem statement.\n\n"
+                f"Target informal statement:\n{statement}"
+            )
+        elif args.input_mode == "statement_only":
+            text = statement
+            context = None
+        elif args.input_mode == "proof_only":
+            text = proof_excerpt
+            context = (
+                "Infer and formalize only the central theorem statement from this proof sketch."
+            )
+
         cases.append(
             {
                 "id": f"proofnetsharp-{theorem_name}",
-                "text": statement,
-                "context": (
-                    "Formalize only the central theorem statement from this paragraph-level proof sketch:\n\n"
-                    f"{proof_excerpt}"
-                ),
+                "text": text,
+                "context": context,
                 "theorem_name": theorem_name,
                 "imports": ["Mathlib"],
                 "metadata": {
@@ -91,6 +122,7 @@ def main() -> None:
                     "split": args.split,
                     "source_id": source_id,
                     "proof_word_count": _word_count(proof),
+                    "input_mode": args.input_mode,
                 },
             }
         )

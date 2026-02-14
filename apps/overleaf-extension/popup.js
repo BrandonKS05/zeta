@@ -2,11 +2,12 @@
   "use strict";
 
   const MODE_KEY = "zetaMode";
+  const SETTINGS_KEY = "zetaSettings";
   const FALLBACK_MODE = "auto";
   const MODE_COPY = {
     fast: "Fast applies immediate underlines while typing.",
     accurate: "Accurate waits briefly for more stable suggestions.",
-    auto: "Auto stays fast unless the editor becomes very large.",
+    auto: "Auto balances speed and stability for long text.",
   };
 
   const buttons = Array.from(document.querySelectorAll(".zeta-mode-btn"));
@@ -71,11 +72,14 @@
     }
 
     const normalized = normalizeMode(mode);
-    chrome.storage.sync.set({ [MODE_KEY]: normalized });
-
-    if (chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: "zeta-mode-changed", mode: normalized });
-    }
+    chrome.storage.sync.get({ [SETTINGS_KEY]: {} }, (result) => {
+      const settings = result[SETTINGS_KEY] || {};
+      settings.mode = normalized;
+      chrome.storage.sync.set({
+        [MODE_KEY]: normalized,
+        [SETTINGS_KEY]: settings,
+      });
+    });
   }
 
   for (const button of buttons) {
