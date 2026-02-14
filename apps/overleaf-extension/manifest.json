@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Herald Overleaf Highlighter",
+  "version": "0.1.0",
+  "description": "Highlights target words in Overleaf's source editor.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.modal.run/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.overleaf.com/*",
+        "https://*.overleaf.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

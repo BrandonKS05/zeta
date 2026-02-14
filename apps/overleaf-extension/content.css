@@ -1,0 +1,19 @@
+.herald-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.herald-highlight {
+  position: absolute;
+  border-radius: 2px;
+}
+
+.herald-highlight-apple {
+  background: rgba(255, 0, 0, 0.35);
+}
+
+.herald-highlight-banana {
+  background: rgba(255, 255, 0, 0.45);
+}
