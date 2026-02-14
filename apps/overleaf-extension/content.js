@@ -19,6 +19,7 @@
     backendUrl: "http://localhost:8000/v1/lean/solve",
     mode: "auto",
     scope: "paragraph",
+    theme: "dark",
     checkOnType: true,
     requestTimeoutMs: 18000,
     retries: 1,
@@ -28,6 +29,7 @@
 
   const MODE_SET = new Set(["fast", "accurate", "auto"]);
   const SCOPE_SET = new Set(["selection", "paragraph", "document"]);
+  const THEME_SET = new Set(["dark", "light"]);
   const SEVERITY_WEIGHT = {
     error: 18,
     warning: 8,
@@ -53,6 +55,10 @@
 
   function normalizeScope(scope) {
     return SCOPE_SET.has(scope) ? scope : DEFAULT_SETTINGS.scope;
+  }
+
+  function normalizeTheme(theme) {
+    return THEME_SET.has(theme) ? theme : DEFAULT_SETTINGS.theme;
   }
 
   function modeToDebounce(mode) {
@@ -895,11 +901,21 @@
 
       this.root.innerHTML = `
         <header class="zeta-header">
-          <div class="zeta-brand">
-            <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />
-            <div>
-              <h2>zeta</h2>
-              <p>Grammarly for Math</p>
+          <div class="zeta-header-top">
+            <div class="zeta-brand">
+              <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />
+              <div>
+                <h2>zeta</h2>
+                <p>Grammarly for Math</p>
+              </div>
+            </div>
+            <div class="zeta-top-right">
+              <div id="zeta-global-pill" class="zeta-global-pill">
+                <span id="zeta-global-dot" class="zeta-global-dot"></span>
+                <span id="zeta-global-text">global · idle</span>
+              </div>
+              <button type="button" id="zeta-theme-btn" class="zeta-icon-btn">Light</button>
+              <button type="button" id="zeta-collapse-btn" class="zeta-icon-btn">Hide</button>
             </div>
           </div>
           <div class="zeta-status-row">
@@ -907,11 +923,7 @@
               <span id="zeta-status-dot" class="zeta-status-dot"></span>
               <span id="zeta-status-text">Idle</span>
             </div>
-            <div class="zeta-header-actions">
-              <button type="button" id="zeta-run-btn" class="zeta-icon-btn">Check</button>
-              <button type="button" id="zeta-settings-btn" class="zeta-icon-btn">Settings</button>
-              <button type="button" id="zeta-collapse-btn" class="zeta-icon-btn">Hide</button>
-            </div>
+            <div id="zeta-inference-text" class="zeta-inference">inference --</div>
           </div>
         </header>
         <section class="zeta-toolbar">
@@ -931,41 +943,50 @@
               <button type="button" class="zeta-mode-btn" data-mode="auto">auto</button>
             </div>
           </div>
+          <div class="zeta-toolbar-actions">
+            <button type="button" id="zeta-run-btn" class="zeta-icon-btn">Check</button>
+            <button type="button" id="zeta-settings-btn" class="zeta-icon-btn">Settings</button>
+          </div>
         </section>
         <div class="zeta-content">
           <section class="zeta-card">
-            <h3>Document Health</h3>
+            <div class="zeta-card-header">
+              <h3>Document Health</h3>
+              <span id="zeta-sentence-stats" class="zeta-card-meta">0 cached · 0 pending</span>
+            </div>
             <div class="zeta-health">
               <div class="zeta-health-meter"><span id="zeta-health-fill"></span></div>
               <span id="zeta-health-label">100</span>
             </div>
-            <div class="zeta-item-actions" style="margin-top:8px">
-              <button type="button" id="zeta-regenerate-btn" class="zeta-btn">Regenerate</button>
-              <button type="button" id="zeta-next-btn" class="zeta-btn">Next Issue</button>
-              <button type="button" id="zeta-prev-btn" class="zeta-btn">Prev Issue</button>
+            <div class="zeta-item-actions zeta-item-actions--top">
+              <button type="button" id="zeta-regenerate-btn" class="zeta-btn">Refresh</button>
+              <button type="button" id="zeta-next-btn" class="zeta-btn">Next</button>
+              <button type="button" id="zeta-prev-btn" class="zeta-btn">Prev</button>
             </div>
           </section>
           <section class="zeta-card">
-            <h3>Activity & History</h3>
-            <div class="zeta-item-actions">
-              <button type="button" id="zeta-undo-btn" class="zeta-btn">Undo Last</button>
-              <button type="button" id="zeta-clear-history-btn" class="zeta-btn">Clear</button>
+            <div class="zeta-card-header">
+              <h3>Activity & History</h3>
+              <div class="zeta-item-actions zeta-item-actions--inline">
+                <button type="button" id="zeta-undo-btn" class="zeta-btn">Undo Last</button>
+                <button type="button" id="zeta-clear-history-btn" class="zeta-btn">Clear</button>
+              </div>
             </div>
             <ul id="zeta-activity" class="zeta-list"></ul>
             <p id="zeta-activity-empty" class="zeta-empty">No activity yet.</p>
           </section>
           <section class="zeta-card">
-            <h3>Compiler Diagnostics</h3>
-            <ul id="zeta-diagnostics" class="zeta-list"></ul>
-            <p id="zeta-diagnostics-empty" class="zeta-empty">No diagnostics.</p>
-          </section>
-          <section class="zeta-card">
-            <h3>Math Typos & Suggestions</h3>
+            <div class="zeta-card-header">
+              <h3>Live Feedback</h3>
+              <span id="zeta-feedback-count" class="zeta-card-meta">0</span>
+            </div>
             <ul id="zeta-issues" class="zeta-list"></ul>
             <p id="zeta-issues-empty" class="zeta-empty">No issues found.</p>
           </section>
           <section id="zeta-settings-card" class="zeta-card" style="display:none">
-            <h3>Settings</h3>
+            <div class="zeta-card-header">
+              <h3>Settings</h3>
+            </div>
             <div class="zeta-settings">
               <div class="zeta-field">
                 <label for="zeta-backend-url">Backend URL</label>
@@ -1010,14 +1031,19 @@
       this.refs = {
         statusDot: this.root.querySelector("#zeta-status-dot"),
         statusText: this.root.querySelector("#zeta-status-text"),
+        globalDot: this.root.querySelector("#zeta-global-dot"),
+        globalText: this.root.querySelector("#zeta-global-text"),
+        globalPill: this.root.querySelector("#zeta-global-pill"),
+        inferenceText: this.root.querySelector("#zeta-inference-text"),
+        sentenceStats: this.root.querySelector("#zeta-sentence-stats"),
+        feedbackCount: this.root.querySelector("#zeta-feedback-count"),
         scopeSelect: this.root.querySelector("#zeta-scope-select"),
+        modeToggle: this.root.querySelector(".zeta-mode-toggle"),
         modeButtons: Array.from(this.root.querySelectorAll(".zeta-mode-btn")),
         healthFill: this.root.querySelector("#zeta-health-fill"),
         healthLabel: this.root.querySelector("#zeta-health-label"),
         activity: this.root.querySelector("#zeta-activity"),
         activityEmpty: this.root.querySelector("#zeta-activity-empty"),
-        diagnostics: this.root.querySelector("#zeta-diagnostics"),
-        diagnosticsEmpty: this.root.querySelector("#zeta-diagnostics-empty"),
         issues: this.root.querySelector("#zeta-issues"),
         issuesEmpty: this.root.querySelector("#zeta-issues-empty"),
         runBtn: this.root.querySelector("#zeta-run-btn"),
@@ -1027,6 +1053,7 @@
         undoBtn: this.root.querySelector("#zeta-undo-btn"),
         clearHistoryBtn: this.root.querySelector("#zeta-clear-history-btn"),
         settingsBtn: this.root.querySelector("#zeta-settings-btn"),
+        themeBtn: this.root.querySelector("#zeta-theme-btn"),
         settingsCard: this.root.querySelector("#zeta-settings-card"),
         collapseBtn: this.root.querySelector("#zeta-collapse-btn"),
         backendUrl: this.root.querySelector("#zeta-backend-url"),
@@ -1044,6 +1071,7 @@
     bindEvents() {
       this.fab.addEventListener("click", () => this.handlers.onTogglePanel());
       this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel(false));
+      this.refs.themeBtn.addEventListener("click", () => this.handlers.onToggleTheme());
       this.refs.runBtn.addEventListener("click", () => this.handlers.onRunNow());
       this.refs.regenerateBtn.addEventListener("click", () => this.handlers.onRegenerate());
       this.refs.undoBtn.addEventListener("click", () => this.handlers.onUndoLast());
@@ -1108,6 +1136,29 @@
 
     setOpen(open) {
       this.root.classList.toggle("is-collapsed", !open);
+      this.fab.classList.toggle("is-hidden", !!open);
+    }
+
+    setTheme(theme) {
+      const next = normalizeTheme(theme);
+      this.root.setAttribute("data-theme", next);
+      this.fab.setAttribute("data-theme", next);
+      document.documentElement.setAttribute("data-zeta-theme", next);
+      this.refs.themeBtn.textContent = next === "dark" ? "Light" : "Dark";
+    }
+
+    setGlobalState(state, text) {
+      this.refs.globalPill.classList.remove("is-analyzing", "is-ready", "is-error", "is-offline");
+      if (state === "analyzing") {
+        this.refs.globalPill.classList.add("is-analyzing");
+      } else if (state === "error") {
+        this.refs.globalPill.classList.add("is-error");
+      } else if (state === "offline") {
+        this.refs.globalPill.classList.add("is-offline");
+      } else {
+        this.refs.globalPill.classList.add("is-ready");
+      }
+      this.refs.globalText.textContent = text;
     }
 
     setStatus(phase, message) {
@@ -1123,7 +1174,16 @@
       this.refs.statusText.textContent = message;
     }
 
+    setInferenceTime(lastMs, pendingCount = 0) {
+      const msLabel = Number.isFinite(lastMs) ? `${Math.round(lastMs)} ms` : "--";
+      const queueLabel = pendingCount > 0 ? ` · ${pendingCount} queued` : "";
+      this.refs.inferenceText.textContent = `inference ${msLabel}${queueLabel}`;
+    }
+
     setMode(mode) {
+      const indexByMode = { fast: 0, accurate: 1, auto: 2 };
+      const index = indexByMode[mode] ?? 2;
+      this.refs.modeToggle.style.setProperty("--zeta-mode-index", String(index));
       for (const button of this.refs.modeButtons) {
         button.classList.toggle("is-active", button.dataset.mode === mode);
       }
@@ -1137,6 +1197,10 @@
       const clamped = clamp(Math.round(score), 0, 100);
       this.refs.healthFill.style.width = `${clamped}%`;
       this.refs.healthLabel.textContent = `${clamped}`;
+    }
+
+    setSentenceStats(cachedCount, pendingCount) {
+      this.refs.sentenceStats.textContent = `${cachedCount} cached · ${pendingCount} pending`;
     }
 
     setActivity(entries, canUndo) {
@@ -1156,28 +1220,12 @@
       this.refs.undoBtn.disabled = !canUndo;
     }
 
-    setDiagnostics(diagnostics) {
-      const list = this.refs.diagnostics;
-      list.replaceChildren();
-      const items = ensureArray(diagnostics);
-      for (const diag of items) {
-        const li = document.createElement("li");
-        li.className = "zeta-item";
-        li.setAttribute("data-severity", normalizeSeverity(diag.severity));
-        const location =
-          Number.isInteger(diag.line) && Number.isInteger(diag.column)
-            ? ` (L${diag.line}:C${diag.column})`
-            : "";
-        li.innerHTML = `<strong>${normalizeSeverity(diag.severity)}${location}</strong><p>${diag.message || "Diagnostic"}</p>`;
-        list.appendChild(li);
-      }
-      this.refs.diagnosticsEmpty.style.display = items.length > 0 ? "none" : "block";
-    }
-
     setIssues(issues, focusedIndex) {
       const list = this.refs.issues;
       list.replaceChildren();
       const items = ensureArray(issues);
+      this.refs.feedbackCount.textContent = String(items.length);
+
       for (let i = 0; i < items.length; i += 1) {
         const issue = items[i];
         const li = document.createElement("li");
@@ -1185,7 +1233,7 @@
         li.setAttribute("data-severity", normalizeSeverity(issue.severity));
         li.setAttribute("data-issue-index", String(i));
         if (i === focusedIndex) {
-          li.style.outline = "2px solid #8c1515";
+          li.style.outline = "1px solid currentColor";
         }
 
         const targetLabel = issue.targetText ? ` · ${issue.targetText}` : "";
@@ -1225,6 +1273,7 @@
       this.refs.notation.value = settings.notationStrictness;
       this.setMode(settings.mode);
       this.setScope(settings.scope);
+      this.setTheme(settings.theme);
     }
 
     scrollIssueIntoView(index) {
@@ -1253,6 +1302,7 @@
 
       this.panel = new ZetaPanel({
         onTogglePanel: (explicit) => this.togglePanel(explicit),
+        onToggleTheme: () => this.toggleTheme(),
         onRunNow: () => this.runAnalysis("manual", true),
         onRegenerate: () => this.runAnalysis("regenerate", true),
         onUndoLast: () => this.undoLastAction(),
@@ -1276,6 +1326,8 @@
       this.lastRun = null;
       this.focusedIssueIndex = -1;
       this.responseCache = new Map();
+      this.sentenceCache = new Map();
+      this.lastInferenceMs = null;
       this.activityEntries = [];
       this.undoStack = [];
 
@@ -1291,6 +1343,9 @@
       this.panel.setSettings(this.settings);
       this.panel.setOpen(this.settings.panelOpen);
       this.panel.setStatus("idle", "Idle");
+      this.panel.setGlobalState("ready", "global · waiting");
+      this.panel.setInferenceTime(null, 0);
+      this.panel.setSentenceStats(0, 0);
       this.panel.setHealth(100);
       this.panel.setActivity(this.activityEntries, false);
 
@@ -1302,6 +1357,7 @@
         this.scheduleAnalysis("init", true);
       } else {
         this.panel.setStatus("idle", "Focus a text editor to start.");
+        this.panel.setGlobalState("offline", "global · no editor");
       }
 
       this.scanTimer = window.setInterval(() => {
@@ -1325,6 +1381,7 @@
       };
       merged.mode = normalizeMode(syncValues[MODE_KEY] || merged.mode);
       merged.scope = normalizeScope(merged.scope);
+      merged.theme = normalizeTheme(merged.theme);
       merged.requestTimeoutMs = clamp(Number(merged.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs, 2000, 120000);
       merged.retries = clamp(Number(merged.retries) || 0, 0, 4);
       merged.backendUrl = merged.backendUrl || DEFAULT_SETTINGS.backendUrl;
@@ -1384,6 +1441,7 @@
         };
         nextSettings.mode = normalizeMode(nextSettings.mode);
         nextSettings.scope = normalizeScope(nextSettings.scope);
+        nextSettings.theme = normalizeTheme(nextSettings.theme);
         this.settings = nextSettings;
         changed = true;
       }
@@ -1463,6 +1521,9 @@
 
       if (!this.activeAdapter) {
         this.activateInitialAdapter();
+        if (!this.activeAdapter) {
+          this.panel.setGlobalState("offline", "global · no editor");
+        }
       }
     }
 
@@ -1518,6 +1579,7 @@
       }
       this.activeAdapter = adapter;
       this.panel.setStatus("idle", `Ready on ${adapter.constructor.name}`);
+      this.panel.setGlobalState("ready", "global · editor connected");
       this.scheduleAnalysis("adapter-switch", true);
     }
 
@@ -1586,6 +1648,7 @@
       };
       next.mode = normalizeMode(next.mode);
       next.scope = normalizeScope(next.scope);
+      next.theme = normalizeTheme(next.theme);
 
       await storageSyncSet({
         [SETTINGS_KEY]: next,
@@ -1598,6 +1661,13 @@
       if (rerun) {
         this.scheduleAnalysis("settings", true);
       }
+    }
+
+    async toggleTheme() {
+      const nextTheme = this.settings.theme === "dark" ? "light" : "dark";
+      await this.updateSettings({ theme: nextTheme }, false);
+      this.panel.setStatus("idle", `Theme switched to ${nextTheme}.`);
+      this.panel.setGlobalState("ready", "global · theme updated");
     }
 
     async saveSettingsFromPanel(nextValues) {
@@ -1649,35 +1719,43 @@
       const adapter = this.activeAdapter;
       if (!adapter || !adapter.isConnected()) {
         this.panel.setStatus("error", "No active editor.");
+        this.panel.setGlobalState("offline", "global · no editor");
         return;
       }
 
       const snapshot = adapter.getScopeSnapshot(this.settings.scope);
-      const text = String(snapshot.text || "").trim();
-      if (!text) {
+      const scopeText = String(snapshot.text || "");
+      if (!scopeText.trim()) {
         this.lastRun = {
           snapshot,
           diagnostics: [],
           issues: [],
         };
+        this.focusedIssueIndex = -1;
         this.panel.setStatus("idle", "Nothing to analyze in this scope.");
-        this.panel.setDiagnostics([]);
         this.panel.setIssues([], -1);
         this.panel.setHealth(100);
+        this.panel.setGlobalState("ready", "global · waiting");
+        this.panel.setInferenceTime(this.lastInferenceMs, 0);
+        this.panel.setSentenceStats(0, 0);
         this.overlay.clear();
         this.popover.close();
         return;
       }
 
-      const signature = shortHash(JSON.stringify({
-        text,
-        scope: snapshot.scope,
-        mode: this.settings.mode,
-        notationStrictness: this.settings.notationStrictness,
-        backendUrl: this.settings.backendUrl,
-      }));
+      const localIssues = this.detectLocalMathTypos(scopeText);
+      const sentencePlan = this.buildSentencePlan(snapshot, force);
+      const signature = shortHash(
+        JSON.stringify({
+          scope: snapshot.scope,
+          mode: this.settings.mode,
+          notationStrictness: this.settings.notationStrictness,
+          backendUrl: this.settings.backendUrl,
+          signatures: sentencePlan.activeSignatures,
+        })
+      );
 
-      if (!force && signature === this.lastAnalyzedSignature) {
+      if (!force && signature === this.lastAnalyzedSignature && sentencePlan.pending.length === 0) {
         return;
       }
 
@@ -1685,67 +1763,379 @@
       const requestId = this.activeRequestId + 1;
       this.activeRequestId = requestId;
 
-      this.panel.setStatus("analyzing", `Analyzing (${modeToLabel(this.settings.mode)})...`);
+      const rerenderFromCache = () => {
+        const cachedSentenceIssues = this.collectSentenceIssues(sentencePlan.activeKeys);
+        const mergedIssues = this.mergeIssues(localIssues, cachedSentenceIssues)
+          .filter((issue) => !this.ignoredKeys.has(issue.key));
 
-      const localIssues = this.detectLocalMathTypos(snapshot.text);
-      this.renderState({
-        snapshot,
-        diagnostics: [],
-        issues: localIssues,
-      });
+        this.lastRun = {
+          snapshot,
+          diagnostics: [],
+          issues: mergedIssues,
+        };
 
-      let responsePayload = null;
-      try {
-        responsePayload = await this.fetchWithCache(signature, snapshot, reason);
-      } catch (error) {
+        if (mergedIssues.length === 0) {
+          this.focusedIssueIndex = -1;
+        } else if (this.focusedIssueIndex < 0) {
+          this.focusedIssueIndex = 0;
+        } else {
+          this.focusedIssueIndex = clamp(this.focusedIssueIndex, 0, mergedIssues.length - 1);
+        }
+
+        this.renderState(this.lastRun);
+      };
+
+      this.panel.setSentenceStats(sentencePlan.cachedCount, sentencePlan.pending.length);
+      this.panel.setInferenceTime(this.lastInferenceMs, sentencePlan.pending.length);
+      rerenderFromCache();
+
+      if (sentencePlan.pending.length === 0) {
+        this.panel.setStatus("success", "All cached sentences are up to date.");
+        this.panel.setGlobalState("ready", "global · synced");
+        this.syncPopoverWithCaret();
+        return;
+      }
+
+      this.panel.setGlobalState(
+        "analyzing",
+        `global · analyzing ${sentencePlan.pending.length} sentence${sentencePlan.pending.length === 1 ? "" : "s"}`
+      );
+
+      for (let i = 0; i < sentencePlan.pending.length; i += 1) {
         if (requestId !== this.activeRequestId) {
           return;
         }
-        const message = String(error?.message || error || "Request failed.");
-        this.panel.setStatus("error", message);
-        if (reason !== "typing") {
-          this.addActivity(`Check failed: ${message}`, "error");
+
+        const sentenceEntry = sentencePlan.pending[i];
+        const remaining = sentencePlan.pending.length - i;
+        this.panel.setStatus(
+          "analyzing",
+          `Analyzing sentence ${i + 1}/${sentencePlan.pending.length} (${modeToLabel(this.settings.mode)})...`
+        );
+        this.panel.setInferenceTime(this.lastInferenceMs, remaining);
+
+        await this.analyzeSentenceEntry(sentenceEntry, snapshot, reason);
+
+        if (requestId !== this.activeRequestId) {
+          return;
         }
-        this.renderState({
-          snapshot,
-          diagnostics: [],
-          issues: localIssues,
-        });
-        return;
+
+        const pendingLeft = sentencePlan.pending.length - i - 1;
+        this.panel.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
+        this.panel.setInferenceTime(this.lastInferenceMs, pendingLeft);
+        rerenderFromCache();
       }
 
-      if (requestId !== this.activeRequestId) {
-        return;
-      }
+      const finalIssues = ensureArray(this.lastRun?.issues);
+      const hasError = finalIssues.some((issue) => normalizeSeverity(issue.severity) === "error");
 
-      const normalized = this.normalizeBackendResponse(responsePayload, snapshot.text);
-      const mergedIssues = this.mergeIssues(localIssues, normalized.issues)
-        .filter((issue) => !this.ignoredKeys.has(issue.key));
-
-      this.lastRun = {
-        snapshot,
-        diagnostics: normalized.diagnostics,
-        issues: mergedIssues,
-      };
-      this.focusedIssueIndex = mergedIssues.length === 0 ? -1 : 0;
-
-      this.renderState(this.lastRun);
       this.panel.setStatus(
-        normalized.hasError ? "error" : "success",
-        normalized.hasError
-          ? `Completed with ${normalized.diagnostics.length} diagnostics`
-          : "Lean check complete"
+        hasError ? "error" : "success",
+        hasError ? "Completed with actionable feedback." : "Check complete."
       );
-      if (reason !== "typing" || normalized.hasError) {
+      this.panel.setGlobalState(hasError ? "error" : "ready", hasError ? "global · review needed" : "global · synced");
+
+      if (reason !== "typing" || hasError) {
         this.addActivity(
-          normalized.hasError
-            ? `Completed check with ${normalized.diagnostics.length} diagnostics and ${mergedIssues.length} suggestions.`
-            : `Completed check with ${mergedIssues.length} suggestions.`,
-          normalized.hasError ? "error" : "success"
+          hasError
+            ? `Completed check with ${finalIssues.length} feedback items needing attention.`
+            : `Completed check with ${finalIssues.length} feedback items.`,
+          hasError ? "error" : "success"
         );
       }
 
       this.syncPopoverWithCaret();
+    }
+
+    buildSentencePlan(snapshot, force) {
+      const segments = this.splitLatexAwareSentences(snapshot.text);
+      const now = Date.now();
+      const activeKeys = [];
+      const activeSignatures = [];
+      const pending = [];
+      const occurrenceByBase = new Map();
+
+      for (const segment of segments) {
+        const sentenceText = String(segment.text || "").trim();
+        if (!sentenceText) {
+          continue;
+        }
+
+        const base = shortHash(sentenceText);
+        const occurrence = occurrenceByBase.get(base) || 0;
+        occurrenceByBase.set(base, occurrence + 1);
+        const key = `${base}:${occurrence}`;
+
+        const signature = shortHash(
+          JSON.stringify({
+            text: sentenceText,
+            mode: this.settings.mode,
+            notationStrictness: this.settings.notationStrictness,
+            backendUrl: this.settings.backendUrl,
+          })
+        );
+
+        let entry = this.sentenceCache.get(key);
+        if (!entry || entry.signature !== signature) {
+          entry = {
+            key,
+            signature,
+            text: sentenceText,
+            start: segment.start,
+            end: segment.end,
+            status: "pending",
+            issues: [],
+            diagnostics: [],
+            hasError: false,
+            inferenceMs: null,
+            updatedAt: 0,
+            lastSeenAt: now,
+          };
+          this.sentenceCache.set(key, entry);
+        } else {
+          entry.text = sentenceText;
+          entry.start = segment.start;
+          entry.end = segment.end;
+          entry.lastSeenAt = now;
+        }
+
+        const stale = now - (entry.updatedAt || 0) > CACHE_TTL_MS;
+        const needsFetch = force || entry.status === "pending" || stale;
+        if (needsFetch) {
+          entry.status = "pending";
+          pending.push(entry);
+        }
+
+        activeKeys.push(key);
+        activeSignatures.push(signature);
+      }
+
+      const activeSet = new Set(activeKeys);
+      for (const [key, entry] of this.sentenceCache.entries()) {
+        if (activeSet.has(key)) {
+          continue;
+        }
+        if (now - (entry.lastSeenAt || 0) > 5 * 60 * 1000) {
+          this.sentenceCache.delete(key);
+        }
+      }
+
+      return {
+        activeKeys,
+        activeSignatures,
+        pending,
+        cachedCount: activeKeys.length,
+      };
+    }
+
+    splitLatexAwareSentences(text) {
+      const source = String(text || "");
+      const segments = [];
+      if (!source.trim()) {
+        return segments;
+      }
+
+      let rawStart = 0;
+      let i = 0;
+      let inInlineDollar = false;
+      let inDoubleDollar = false;
+      let inParenMath = false;
+      let inBracketMath = false;
+      let mathEnvDepth = 0;
+      const mathEnvPattern = /^(equation|align|gather|multline|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|split|math|displaymath|eqnarray|array)\*?$/;
+
+      const pushSegment = (rawEnd) => {
+        let start = clamp(rawStart, 0, source.length);
+        let end = clamp(rawEnd, 0, source.length);
+
+        while (start < end && /\s/.test(source[start])) {
+          start += 1;
+        }
+        while (end > start && /\s/.test(source[end - 1])) {
+          end -= 1;
+        }
+
+        if (end > start) {
+          segments.push({
+            start,
+            end,
+            text: source.slice(start, end),
+          });
+        }
+        rawStart = rawEnd;
+      };
+
+      while (i < source.length) {
+        if (source.startsWith("\\begin{", i)) {
+          const close = source.indexOf("}", i + 7);
+          const envName = close === -1 ? "" : source.slice(i + 7, close).trim();
+          if (mathEnvPattern.test(envName)) {
+            mathEnvDepth += 1;
+          }
+          i = close === -1 ? i + 6 : close + 1;
+          continue;
+        }
+        if (source.startsWith("\\end{", i)) {
+          const close = source.indexOf("}", i + 5);
+          const envName = close === -1 ? "" : source.slice(i + 5, close).trim();
+          if (mathEnvPattern.test(envName)) {
+            mathEnvDepth = Math.max(0, mathEnvDepth - 1);
+          }
+          i = close === -1 ? i + 4 : close + 1;
+          continue;
+        }
+        if (source.startsWith("\\(", i)) {
+          inParenMath = true;
+          i += 2;
+          continue;
+        }
+        if (source.startsWith("\\)", i)) {
+          inParenMath = false;
+          i += 2;
+          continue;
+        }
+        if (source.startsWith("\\[", i)) {
+          inBracketMath = true;
+          i += 2;
+          continue;
+        }
+        if (source.startsWith("\\]", i)) {
+          inBracketMath = false;
+          i += 2;
+          continue;
+        }
+
+        const ch = source[i];
+        if (ch === "\\") {
+          i += 2;
+          continue;
+        }
+
+        if (ch === "$") {
+          const escaped = i > 0 && source[i - 1] === "\\";
+          if (!escaped && source[i + 1] === "$") {
+            inDoubleDollar = !inDoubleDollar;
+            i += 2;
+            continue;
+          }
+          if (!escaped && !inDoubleDollar) {
+            inInlineDollar = !inInlineDollar;
+          }
+        }
+
+        const insideMath = inInlineDollar || inDoubleDollar || inParenMath || inBracketMath || mathEnvDepth > 0;
+        if (!insideMath) {
+          const next = source[i + 1] || "";
+          const prev = source[i - 1] || "";
+          const punctuationBreak = ".!?;".includes(ch) && (next === "" || /\s/.test(next));
+          const decimalPoint = ch === "." && /\d/.test(prev) && /\d/.test(next);
+          const blankLineBreak = ch === "\n" && next === "\n";
+
+          if ((punctuationBreak && !decimalPoint) || blankLineBreak) {
+            const consume = blankLineBreak ? 2 : 1;
+            pushSegment(i + consume);
+            i += consume;
+            continue;
+          }
+        }
+
+        i += 1;
+      }
+
+      pushSegment(source.length);
+      if (segments.length === 0 && source.trim()) {
+        const first = source.search(/\S/);
+        let last = source.length;
+        while (last > 0 && /\s/.test(source[last - 1])) {
+          last -= 1;
+        }
+        segments.push({
+          start: first === -1 ? 0 : first,
+          end: last,
+          text: source.slice(first === -1 ? 0 : first, last),
+        });
+      }
+      return segments;
+    }
+
+    collectSentenceIssues(activeKeys) {
+      const issues = [];
+      for (const key of activeKeys) {
+        const sentenceEntry = this.sentenceCache.get(key);
+        if (!sentenceEntry) {
+          continue;
+        }
+
+        const sentenceIssues = ensureArray(sentenceEntry.issues);
+        for (let i = 0; i < sentenceIssues.length; i += 1) {
+          const issue = sentenceIssues[i];
+          const startOffset = Number.isInteger(issue.start)
+            ? sentenceEntry.start + issue.start
+            : null;
+          const endOffset = Number.isInteger(issue.end)
+            ? sentenceEntry.start + issue.end
+            : null;
+
+          issues.push({
+            ...issue,
+            start: startOffset,
+            end: endOffset,
+            key: `${sentenceEntry.key}:${issue.key || i}:${startOffset ?? "na"}`,
+            sentenceKey: sentenceEntry.key,
+            sentenceInferenceMs: sentenceEntry.inferenceMs,
+          });
+        }
+      }
+      return issues;
+    }
+
+    async analyzeSentenceEntry(sentenceEntry, snapshot, reason) {
+      const sentenceSnapshot = {
+        ...snapshot,
+        text: sentenceEntry.text,
+        context: snapshot.context,
+      };
+
+      const startedAt = performance.now();
+      try {
+        const responsePayload = await this.fetchWithCache(
+          sentenceEntry.signature,
+          sentenceSnapshot,
+          `${reason}:sentence`
+        );
+        const normalized = this.normalizeBackendResponse(responsePayload, sentenceEntry.text);
+        sentenceEntry.issues = ensureArray(normalized.issues);
+        sentenceEntry.diagnostics = ensureArray(normalized.diagnostics);
+        sentenceEntry.hasError = !!normalized.hasError;
+        sentenceEntry.status = "ready";
+      } catch (error) {
+        const message = String(error?.message || error || "Request failed.");
+        sentenceEntry.hasError = true;
+        sentenceEntry.status = "error";
+        const priorIssues = ensureArray(sentenceEntry.issues).filter(
+          (item) => item?.id !== `sentence-error-${sentenceEntry.key}`
+        );
+        sentenceEntry.issues = [
+          ...priorIssues,
+          {
+            id: `sentence-error-${sentenceEntry.key}`,
+            key: `sentence-error-${sentenceEntry.key}`,
+            category: "backend",
+            severity: "error",
+            message: `Backend request failed: ${message}`,
+            start: null,
+            end: null,
+            targetText: null,
+            replacement: null,
+            source: "backend",
+          },
+        ];
+      } finally {
+        sentenceEntry.updatedAt = Date.now();
+        sentenceEntry.lastSeenAt = sentenceEntry.updatedAt;
+        sentenceEntry.inferenceMs = performance.now() - startedAt;
+        this.lastInferenceMs = sentenceEntry.inferenceMs;
+      }
     }
 
     async fetchWithCache(signature, snapshot, reason) {
@@ -2204,11 +2594,9 @@
 
     renderState(state) {
       const issues = ensureArray(state.issues);
-      const diagnostics = ensureArray(state.diagnostics);
 
       const score = this.computeHealthScore(issues);
       this.panel.setHealth(score);
-      this.panel.setDiagnostics(diagnostics);
       this.panel.setIssues(issues, this.focusedIssueIndex);
 
       if (this.activeAdapter && state.snapshot) {

@@ -6,18 +6,6 @@
   font-display: swap;
 }
 
-:root {
-  --zeta-cardinal: #8c1515;
-  --zeta-ink: #2e2d29;
-  --zeta-cool: #4d4f53;
-  --zeta-fog: #f4f4f4;
-  --zeta-stone: #d2c295;
-  --zeta-white: #ffffff;
-  --zeta-soft-red: #fdf0ef;
-  --zeta-soft-gold: #fff9e8;
-  --zeta-soft-blue: #ecf5ff;
-}
-
 .zeta-highlight-layer {
   position: fixed;
   inset: 0;
@@ -28,38 +16,49 @@
 .zeta-highlight {
   position: fixed;
   pointer-events: none;
-  border-bottom: 3px solid var(--zeta-cardinal);
+  border-bottom: 2px solid #ff2d2d;
   border-radius: 1px;
-  opacity: 0.96;
+  opacity: 0.98;
 }
 
 .zeta-highlight--warning {
-  border-bottom-color: #b08500;
-  border-bottom-style: dashed;
+  border-bottom-color: #ffd84a;
 }
 
 .zeta-highlight--info {
-  border-bottom-color: #2f5e8f;
+  border-bottom-color: #b4b4b4;
   border-bottom-style: dotted;
 }
 
 .zeta-suggestion-popover {
+  --popover-bg: #131313;
+  --popover-border: #2c2c2c;
+  --popover-text: #f5f5f5;
+  --popover-muted: #b6b6b6;
   position: fixed;
   width: min(360px, calc(100vw - 24px));
-  border: 1px solid #d9d4cb;
-  border-radius: 14px;
-  background: linear-gradient(170deg, #ffffff 0%, #f7f5f2 100%);
-  box-shadow: 0 20px 38px rgba(25, 20, 20, 0.26);
-  padding: 12px;
+  border: 1px solid var(--popover-border);
+  border-radius: 12px;
+  background: var(--popover-bg);
+  box-shadow: 0 20px 36px rgba(0, 0, 0, 0.48);
+  padding: 10px;
   z-index: 2147483647;
-  font-family: "DM Sans", "Segoe UI", sans-serif;
-  color: var(--zeta-ink);
+  font-family: "DM Sans", sans-serif;
+  color: var(--popover-text);
+}
+
+html[data-zeta-theme="light"] .zeta-suggestion-popover {
+  --popover-bg: #ffffff;
+  --popover-border: #d6d6d6;
+  --popover-text: #121212;
+  --popover-muted: #5c5c5c;
+  box-shadow: 0 20px 36px rgba(0, 0, 0, 0.2);
 }
 
 .zeta-suggestion-title {
   margin: 0 0 8px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .zeta-suggestion-list {
@@ -68,32 +67,31 @@
 }
 
 .zeta-suggestion-option {
-  border: 1px solid #d7d1c8;
-  border-radius: 10px;
-  background: #ffffff;
-  color: var(--zeta-ink);
+  border: 1px solid var(--popover-border);
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   text-align: left;
-  padding: 9px;
+  padding: 8px;
   font-family: inherit;
 }
 
 .zeta-suggestion-option:hover {
-  border-color: var(--zeta-cardinal);
-  background: #fffdf9;
+  border-color: #7a7a7a;
 }
 
 .zeta-suggestion-option strong {
   display: block;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .zeta-suggestion-option span {
   display: block;
-  font-size: 11px;
   margin-top: 2px;
-  color: var(--zeta-cool);
+  font-size: 11px;
+  color: var(--popover-muted);
 }
 
 .zeta-fab {
@@ -104,35 +102,80 @@
   width: 54px;
   height: 54px;
   border-radius: 999px;
-  border: 1px solid #d7d1c8;
-  background: linear-gradient(145deg, #ffffff 0%, #f3f0eb 100%);
-  box-shadow: 0 14px 26px rgba(46, 45, 41, 0.24);
+  border: 1px solid #2f2f2f;
+  background: #101010;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.4);
   cursor: pointer;
   padding: 0;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.zeta-fab[data-theme="light"] {
+  border-color: #cfcfcf;
+  background: #f9f9f9;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
 }
 
 .zeta-fab img {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
 }
 
+.zeta-fab.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+}
+
 .zeta-shell {
+  --zeta-bg: #0f0f0f;
+  --zeta-surface: #171717;
+  --zeta-surface-2: #101010;
+  --zeta-border: #2a2a2a;
+  --zeta-text: #f4f4f4;
+  --zeta-muted: #9f9f9f;
+  --zeta-emphasis: #ffffff;
+  --zeta-btn-bg: #1b1b1b;
+  --zeta-btn-text: #f0f0f0;
+  --zeta-mode-thumb: #f0f0f0;
+  --zeta-mode-active: #141414;
+  --zeta-card-shadow: rgba(0, 0, 0, 0.38);
+  --zeta-track: #2b2b2b;
+  --zeta-health-fill: linear-gradient(90deg, #ffffff 0%, #919191 100%);
   position: fixed;
   top: 14px;
   right: 14px;
-  width: min(410px, calc(100vw - 20px));
+  width: min(430px, calc(100vw - 20px));
   max-height: calc(100vh - 28px);
   overflow: hidden;
   border-radius: 16px;
-  border: 1px solid #d4cec2;
-  background: linear-gradient(170deg, #fffefc 0%, #f4f1ec 100%);
-  box-shadow: 0 24px 42px rgba(28, 25, 23, 0.27);
+  border: 1px solid var(--zeta-border);
+  background: var(--zeta-bg);
+  color: var(--zeta-text);
+  font-family: "DM Sans", sans-serif;
+  box-shadow: 0 24px 44px var(--zeta-card-shadow);
   z-index: 2147483618;
-  font-family: "DM Sans", "Segoe UI", sans-serif;
-  color: var(--zeta-ink);
   display: grid;
   grid-template-rows: auto auto 1fr;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.zeta-shell[data-theme="light"] {
+  --zeta-bg: #ffffff;
+  --zeta-surface: #f6f6f6;
+  --zeta-surface-2: #ffffff;
+  --zeta-border: #dadada;
+  --zeta-text: #141414;
+  --zeta-muted: #666666;
+  --zeta-emphasis: #000000;
+  --zeta-btn-bg: #ffffff;
+  --zeta-btn-text: #111111;
+  --zeta-mode-thumb: #111111;
+  --zeta-mode-active: #ffffff;
+  --zeta-card-shadow: rgba(0, 0, 0, 0.18);
+  --zeta-track: #e9e9e9;
+  --zeta-health-fill: linear-gradient(90deg, #111111 0%, #777777 100%);
 }
 
 .zeta-shell.is-collapsed {
@@ -140,9 +183,16 @@
 }
 
 .zeta-header {
-  padding: 12px 12px 8px;
-  border-bottom: 1px solid #e3ddd3;
-  background: linear-gradient(170deg, #ffffff 0%, #f9f7f3 100%);
+  padding: 12px;
+  border-bottom: 1px solid var(--zeta-border);
+  background: var(--zeta-surface-2);
+}
+
+.zeta-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .zeta-brand {
@@ -155,20 +205,65 @@
   width: 36px;
   height: 36px;
   border-radius: 999px;
-  border: 1px solid #ded7cd;
+  border: 1px solid var(--zeta-border);
   background: #fff;
 }
 
 .zeta-brand h2 {
   margin: 0;
   font-size: 18px;
-  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .zeta-brand p {
-  margin: 3px 0 0;
-  color: var(--zeta-cool);
+  margin: 2px 0 0;
   font-size: 11px;
+  color: var(--zeta-muted);
+}
+
+.zeta-top-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zeta-global-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--zeta-border);
+  padding: 5px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--zeta-muted);
+  background: var(--zeta-surface);
+  white-space: nowrap;
+}
+
+.zeta-global-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #8d8d8d;
+}
+
+.zeta-global-pill.is-analyzing .zeta-global-dot {
+  background: #f8f8f8;
+  animation: zeta-pulse 900ms ease-in-out infinite;
+}
+
+.zeta-global-pill.is-ready .zeta-global-dot {
+  background: #58d68d;
+}
+
+.zeta-global-pill.is-error .zeta-global-dot {
+  background: #ff4f4f;
+}
+
+.zeta-global-pill.is-offline .zeta-global-dot {
+  background: #999999;
 }
 
 .zeta-status-row {
@@ -184,27 +279,34 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--zeta-cool);
+  color: var(--zeta-muted);
 }
 
 .zeta-status-dot {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #8a8a8a;
+  background: #888;
 }
 
 .zeta-status-dot.is-analyzing {
-  background: #2f5e8f;
+  background: #ffffff;
   animation: zeta-pulse 900ms ease-in-out infinite;
 }
 
 .zeta-status-dot.is-success {
-  background: #2c7a3f;
+  background: #58d68d;
 }
 
 .zeta-status-dot.is-error {
-  background: #b91c1c;
+  background: #ff4f4f;
+}
+
+.zeta-inference {
+  font-size: 11px;
+  color: var(--zeta-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 @keyframes zeta-pulse {
@@ -213,8 +315,8 @@
     opacity: 0.95;
   }
   50% {
-    transform: scale(1.35);
-    opacity: 0.55;
+    transform: scale(1.25);
+    opacity: 0.6;
   }
   100% {
     transform: scale(1);
@@ -222,27 +324,13 @@
   }
 }
 
-.zeta-header-actions {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.zeta-icon-btn {
-  border: 1px solid #d8d2c9;
-  border-radius: 9px;
-  padding: 5px 7px;
-  background: #fff;
-  color: var(--zeta-ink);
-  font-size: 11px;
-  cursor: pointer;
-}
-
 .zeta-toolbar {
-  padding: 8px 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--zeta-border);
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr auto;
   gap: 8px;
-  border-bottom: 1px solid #e4ded4;
+  background: var(--zeta-surface);
 }
 
 .zeta-field {
@@ -252,44 +340,91 @@
 
 .zeta-field label {
   font-size: 10px;
+  color: var(--zeta-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--zeta-cool);
 }
 
 .zeta-field select,
 .zeta-field input,
 .zeta-field textarea {
-  border: 1px solid #d7d1c8;
+  border: 1px solid var(--zeta-border);
   border-radius: 9px;
-  padding: 6px 8px;
+  padding: 7px 9px;
+  background: var(--zeta-surface-2);
+  color: var(--zeta-text);
   font: inherit;
   font-size: 12px;
-  color: var(--zeta-ink);
-  background: #fff;
 }
 
 .zeta-mode-toggle {
+  --zeta-mode-index: 2;
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border: 1px solid #d8d1c7;
+  grid-template-columns: repeat(3, 1fr);
   border-radius: 999px;
-  background: #f5f2ed;
+  border: 1px solid var(--zeta-border);
+  background: var(--zeta-surface-2);
   overflow: hidden;
 }
 
+.zeta-mode-toggle::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / 3);
+  background: var(--zeta-mode-thumb);
+  border-radius: 999px;
+  transform: translateX(calc(var(--zeta-mode-index) * 100%));
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 .zeta-mode-btn {
+  position: relative;
+  z-index: 1;
   border: 0;
   background: transparent;
-  padding: 7px 0;
+  padding: 6px 0;
+  color: var(--zeta-muted);
   font-family: inherit;
   font-size: 11px;
   cursor: pointer;
+  text-transform: lowercase;
+  transition: color 200ms ease;
 }
 
 .zeta-mode-btn.is-active {
-  background: linear-gradient(160deg, #a11e1e 0%, var(--zeta-cardinal) 100%);
-  color: #fff;
+  color: var(--zeta-mode-active);
+}
+
+.zeta-toolbar-actions {
+  display: inline-flex;
+  align-items: end;
+  gap: 6px;
+}
+
+.zeta-icon-btn {
+  border: 1px solid var(--zeta-border);
+  border-radius: 9px;
+  background: var(--zeta-btn-bg);
+  color: var(--zeta-btn-text);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 8px;
+  transition: border-color 140ms ease, transform 120ms ease;
+}
+
+.zeta-icon-btn:hover,
+.zeta-btn:hover {
+  border-color: #7a7a7a;
+}
+
+.zeta-icon-btn:active,
+.zeta-btn:active {
+  transform: translateY(1px);
 }
 
 .zeta-content {
@@ -297,21 +432,37 @@
   padding: 10px 12px 12px;
   display: grid;
   gap: 10px;
+  background: var(--zeta-bg);
 }
 
 .zeta-card {
-  border: 1px solid #dad3c9;
+  border: 1px solid var(--zeta-border);
   border-radius: 12px;
-  background: #fff;
   padding: 10px;
+  background: var(--zeta-surface);
+}
+
+.zeta-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .zeta-card h3 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 12px;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--zeta-muted);
+}
+
+.zeta-card-meta {
+  font-size: 10px;
+  color: var(--zeta-muted);
+  text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--zeta-cool);
 }
 
 .zeta-health {
@@ -325,15 +476,15 @@
   width: 100%;
   height: 8px;
   border-radius: 999px;
-  background: #efeae0;
+  background: var(--zeta-track);
   overflow: hidden;
 }
 
 .zeta-health-meter span {
   display: block;
   height: 100%;
-  background: linear-gradient(110deg, #a11e1e 0%, #d2c295 100%);
   width: 0%;
+  background: var(--zeta-health-fill);
   transition: width 220ms ease;
 }
 
@@ -346,21 +497,24 @@
 }
 
 .zeta-item {
-  border: 1px solid #e5dfd6;
-  border-left: 4px solid var(--zeta-cardinal);
+  border: 1px solid #3b3b3b;
+  border-left: 3px solid #ff3d3d;
   border-radius: 10px;
   padding: 8px;
-  background: var(--zeta-soft-red);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.zeta-shell[data-theme="light"] .zeta-item {
+  border-color: #d6d6d6;
+  background: #ffffff;
 }
 
 .zeta-item[data-severity="warning"] {
-  border-left-color: #a07a0f;
-  background: var(--zeta-soft-gold);
+  border-left-color: #ffd84a;
 }
 
 .zeta-item[data-severity="info"] {
-  border-left-color: #2f5e8f;
-  background: var(--zeta-soft-blue);
+  border-left-color: #7f7f7f;
 }
 
 .zeta-item strong {
@@ -371,7 +525,7 @@
 .zeta-item p {
   margin: 4px 0 0;
   font-size: 11px;
-  color: #353535;
+  color: var(--zeta-muted);
 }
 
 .zeta-item-actions {
@@ -381,49 +535,48 @@
   gap: 5px;
 }
 
+.zeta-item-actions--inline {
+  margin-top: 0;
+}
+
+.zeta-item-actions--top {
+  margin-top: 8px;
+}
+
 .zeta-btn {
-  border: 1px solid #d8d1c7;
+  border: 1px solid var(--zeta-border);
   border-radius: 8px;
-  background: #fff;
-  color: var(--zeta-ink);
-  font: inherit;
+  background: var(--zeta-btn-bg);
+  color: var(--zeta-btn-text);
+  font-family: inherit;
   font-size: 11px;
   padding: 5px 8px;
   cursor: pointer;
 }
 
-.zeta-btn:hover {
-  border-color: var(--zeta-cardinal);
-}
-
 .zeta-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
-  border-color: #d8d1c7;
+  opacity: 0.5;
 }
 
 .zeta-btn--primary {
-  border-color: var(--zeta-cardinal);
-  background: linear-gradient(160deg, #a21f1f 0%, var(--zeta-cardinal) 100%);
-  color: #fff;
+  border-color: #6e6e6e;
 }
 
 .zeta-activity-item {
-  border: 1px solid #e7e1d7;
-  border-left: 4px solid #9f9385;
+  border: 1px solid var(--zeta-border);
+  border-left: 3px solid #888;
   border-radius: 10px;
-  background: #f8f5f0;
+  background: var(--zeta-surface-2);
   padding: 7px 8px;
 }
 
 .zeta-activity-item[data-level="success"] {
-  border-left-color: #2c7a3f;
-  background: #edf9f0;
+  border-left-color: #58d68d;
 }
 
 .zeta-activity-item[data-level="error"] {
-  border-left-color: #b91c1c;
-  background: #fdf0ef;
+  border-left-color: #ff4f4f;
 }
 
 .zeta-activity-item strong {
@@ -434,13 +587,13 @@
 .zeta-activity-item p {
   margin: 3px 0 0;
   font-size: 10px;
-  color: var(--zeta-cool);
+  color: var(--zeta-muted);
 }
 
 .zeta-empty {
-  font-size: 12px;
-  color: var(--zeta-cool);
   margin: 0;
+  font-size: 12px;
+  color: var(--zeta-muted);
 }
 
 .zeta-settings {
@@ -462,21 +615,29 @@
 }
 
 .zeta-shortcuts {
-  margin: 0;
+  margin: 8px 0 0;
   padding-left: 16px;
   font-size: 11px;
-  color: var(--zeta-cool);
+  color: var(--zeta-muted);
 }
 
 .zeta-shortcuts li {
   margin: 2px 0;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 780px) {
   .zeta-shell {
     inset: 10px;
     width: auto;
     max-height: none;
+  }
+
+  .zeta-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .zeta-toolbar-actions {
+    justify-content: flex-start;
   }
 
   .zeta-fab {

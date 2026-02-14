@@ -21,7 +21,8 @@ class _RetriableModalError(ModalClientError):
 
 
 _ANALYZE_ENDPOINT_SUFFIX = "/v1/analyze"
-_ANALYZE_SUCCESS_STATUSES = {"ok", "success"}
+_GENERATE_ENDPOINT_SUFFIX = "/v1/generate"
+_ANALYZE_ACCEPTED_STATUSES = {"ok", "success", "needs_revision", "unchecked"}
 _ANALYZE_METADATA_FIELDS = (
     "model",
     "status",
@@ -87,7 +88,10 @@ def _build_modal_payload(
     if isinstance(model, str) and model.strip():
         analyze_payload["model"] = model.strip()
 
-    if endpoint_url.rstrip("/").endswith(_ANALYZE_ENDPOINT_SUFFIX):
+    normalized_endpoint = endpoint_url.rstrip("/")
+    if normalized_endpoint.endswith(_ANALYZE_ENDPOINT_SUFFIX) or normalized_endpoint.endswith(
+        _GENERATE_ENDPOINT_SUFFIX
+    ):
         return analyze_payload
 
     return _compact_dict(
@@ -118,7 +122,7 @@ def _build_analyze_metadata(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _validate_analyze_status(candidate: dict[str, Any]) -> None:
     status = candidate.get("status")
-    if isinstance(status, str) and status.lower() not in _ANALYZE_SUCCESS_STATUSES:
+    if isinstance(status, str) and status.lower() not in _ANALYZE_ACCEPTED_STATUSES:
         feedback = candidate.get("feedback")
         details = f" feedback={feedback}" if feedback else ""
         raise ModalClientError(f"Modal returned non-ok status='{status}'.{details}")
