@@ -6,7 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.models import CompileResult, Diagnostic, GeneratedLean, Interpretation
+from app.models import CompileResult, Diagnostic, GeneratedLean, Interpretation, InterpretationItem
 
 
 def test_solve_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,6 +45,8 @@ def test_solve_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_solve_compile_failure_with_interpretation(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_nl_input: str | None = None
+
     async def fake_generate_lean(
         prompt: str,
         context: dict | None = None,
@@ -69,16 +71,28 @@ def test_solve_compile_failure_with_interpretation(monkeypatch: pytest.MonkeyPat
             ],
         )
 
-    async def fake_interpret_errors(code: str, compile_result: CompileResult, settings=None) -> Interpretation:
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        nonlocal captured_nl_input
+        captured_nl_input = nl_input
         return Interpretation(
             summary="Unknown identifier caused compilation to fail.",
-            items=[
-                {
-                    "error": "unknown constant 'Foo'",
-                    "probable_cause": "The theorem references an undefined symbol.",
-                    "suggested_fix": "Replace Foo with a valid proof term such as `trivial`.",
-                }
-            ],
+            items=[InterpretationItem(
+                error="unknown constant 'Foo'",
+                probable_cause="The theorem references an undefined symbol.",
+                suggested_fix="Replace Foo with a valid proof term such as `trivial`.",
+                source="latex",
+                latex_start=0,
+                latex_end=5,
+                latex_excerpt="Prove",
+                lean_line=2,
+                lean_column=9,
+                replacement="Try proving `True` with `trivial`.",
+            )],
             suggestions=["Try replacing `exact Foo` with `trivial`"],
         )
 
@@ -99,7 +113,11 @@ def test_solve_compile_failure_with_interpretation(monkeypatch: pytest.MonkeyPat
         assert payload["compile"]["success"] is False
         assert payload["compile"]["diagnostics"][0]["line"] == 2
         assert payload["interpretation"]["summary"].startswith("Unknown identifier")
+        assert payload["interpretation"]["items"][0]["latex_start"] == 0
+        assert payload["interpretation"]["items"][0]["source"] == "latex"
+        assert payload["interpretation"]["items"][0]["lean_line"] == 2
         assert payload["interpretation_error"] is None
+        assert captured_nl_input == "Prove True with broken code"
 
     asyncio.run(_run())
 
@@ -121,7 +139,12 @@ def test_solve_llm_failure_does_not_fail_request(monkeypatch: pytest.MonkeyPatch
             diagnostics=[Diagnostic(severity="error", message="unknown constant 'Foo'", line=2, column=9)],
         )
 
-    async def fake_interpret_errors(code: str, compile_result: CompileResult, settings=None) -> Interpretation:
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
         raise RuntimeError("upstream llm unavailable")
 
     monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)

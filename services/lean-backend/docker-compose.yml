@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        INSTALL_LEAN: ${INSTALL_LEAN:-false}
+        INSTALL_LEAN: ${INSTALL_LEAN:-true}
     env_file:
       - .env
     ports:

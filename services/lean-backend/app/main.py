@@ -79,7 +79,12 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
 
     if not compile_result.success and settings.enable_llm_interpretation:
         try:
-            interpretation = await interpret_errors(generated.code, compile_result, settings=settings)
+            interpretation = await interpret_errors(
+                generated.code,
+                compile_result,
+                payload.nl_input,
+                settings=settings,
+            )
         except Exception as exc:  # pragma: no cover - broad to keep endpoint resilient
             interpretation_error = str(exc)
             logger.warning("llm interpretation failed: %s", exc)
