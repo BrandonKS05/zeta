@@ -68,7 +68,9 @@ class ZetaApp {
     this.lastRun = null;
     this.focusedIssueIndex = -1;
     this.responseCache = new Map();
-    this.sentenceCache = new Map();
+    this.chunkCache = new Map();
+    this.chunkTree = null;
+    this.activeChunkId = null;
     this.lastInferenceMs = null;
     this.activityEntries = [];
     this.undoStack = [];
@@ -90,6 +92,7 @@ class ZetaApp {
     this.panel.setSentenceStats(0, 0);
     this.panel.setHealth(100);
     this.panel.setActivity(this.activityEntries, false);
+    this.panel.setChunkTree(null, null);
 
     this.refreshAdapters();
     this.activateInitialAdapter();
@@ -484,6 +487,8 @@ class ZetaApp {
       chars: scopeText.length,
     });
     if (!scopeText.trim()) {
+      this.chunkTree = null;
+      this.activeChunkId = null;
       this.lastRun = {
         snapshot,
         diagnostics: [],
@@ -496,16 +501,22 @@ class ZetaApp {
       this.panel.setGlobalState("ready", "global · waiting");
       this.panel.setInferenceTime(this.lastInferenceMs, 0);
       this.panel.setSentenceStats(0, 0);
+      this.panel.setChunkTree(null, null);
       this.overlay.clear();
       this.popover.close();
       return;
     }
 
     const localIssues = this.detectLocalMathTypos(scopeText);
-    const sentencePlan = this.buildSentencePlan(snapshot, force);
+    const chunkPlan = this.buildChunkPlan(snapshot, force, adapter);
+    this.chunkTree = chunkPlan.chunkTree;
+    this.activeChunkId = chunkPlan.activeChunkId;
+    this.panel.setChunkTree(chunkPlan.chunkTree, chunkPlan.activeChunkId);
     logTrace("analysis_plan", {
-      cachedSentences: sentencePlan.cachedCount,
-      pendingSentences: sentencePlan.pending.length,
+      cachedChunks: chunkPlan.cachedCount,
+      pendingChunks: chunkPlan.pending.length,
+      activeChunkId: chunkPlan.activeChunkId,
+      totalChunkSentences: chunkPlan.totalSentenceCount,
       localIssues: localIssues.length,
     });
     const signature = shortHash(
@@ -514,11 +525,11 @@ class ZetaApp {
         mode: this.settings.mode,
         notationStrictness: this.settings.notationStrictness,
         backendUrl: this.settings.backendUrl,
-        signatures: sentencePlan.activeSignatures,
+        signatures: chunkPlan.activeSignatures,
       })
     );
 
-    if (!force && signature === this.lastAnalyzedSignature && sentencePlan.pending.length === 0) {
+    if (!force && signature === this.lastAnalyzedSignature && chunkPlan.pending.length === 0) {
       return;
     }
 
@@ -527,8 +538,8 @@ class ZetaApp {
     this.activeRequestId = requestId;
 
     const rerenderFromCache = () => {
-      const cachedSentenceIssues = this.collectSentenceIssues(sentencePlan.activeKeys);
-      const mergedIssues = this.mergeIssues(localIssues, cachedSentenceIssues)
+      const cachedChunkIssues = this.collectChunkIssues(chunkPlan.activeKeys);
+      const mergedIssues = this.mergeIssues(localIssues, cachedChunkIssues)
         .filter((issue) => !this.ignoredKeys.has(issue.key));
 
       this.lastRun = {
@@ -548,12 +559,12 @@ class ZetaApp {
       this.renderState(this.lastRun);
     };
 
-    this.panel.setSentenceStats(sentencePlan.cachedCount, sentencePlan.pending.length);
-    this.panel.setInferenceTime(this.lastInferenceMs, sentencePlan.pending.length);
+    this.panel.setSentenceStats(chunkPlan.cachedCount, chunkPlan.pending.length);
+    this.panel.setInferenceTime(this.lastInferenceMs, chunkPlan.pending.length);
     rerenderFromCache();
 
-    if (sentencePlan.pending.length === 0) {
-      this.panel.setStatus("success", "All cached sentences are up to date.");
+    if (chunkPlan.pending.length === 0) {
+      this.panel.setStatus("success", "All cached chunks are up to date.");
       this.panel.setGlobalState("ready", "global · synced");
       this.syncPopoverWithCaret();
       return;
@@ -561,42 +572,45 @@ class ZetaApp {
 
     this.panel.setGlobalState(
       "analyzing",
-      `global · analyzing ${sentencePlan.pending.length} sentence${sentencePlan.pending.length === 1 ? "" : "s"}`
+      `global · analyzing ${chunkPlan.pending.length} chunk${chunkPlan.pending.length === 1 ? "" : "s"}`
     );
 
-    for (let i = 0; i < sentencePlan.pending.length; i += 1) {
+    for (let i = 0; i < chunkPlan.pending.length; i += 1) {
       if (requestId !== this.activeRequestId) {
         return;
       }
 
-      const sentenceEntry = sentencePlan.pending[i];
-      const remaining = sentencePlan.pending.length - i;
-      logTrace("sentence_check_start", {
+      const chunkEntry = chunkPlan.pending[i];
+      const remaining = chunkPlan.pending.length - i;
+      logTrace("chunk_check_start", {
         index: i + 1,
-        total: sentencePlan.pending.length,
-        sentenceKey: sentenceEntry.key,
-        chars: sentenceEntry.text.length,
+        total: chunkPlan.pending.length,
+        chunkKey: chunkEntry.key,
+        chunkId: chunkEntry.chunkId,
+        sentenceCount: ensureArray(chunkEntry.sentences).length,
+        chars: chunkEntry.text.length,
       });
       this.panel.setStatus(
         "analyzing",
-        `Analyzing sentence ${i + 1}/${sentencePlan.pending.length} (${modeToLabel(this.settings.mode)})...`
+        `Analyzing chunk ${i + 1}/${chunkPlan.pending.length} (${modeToLabel(this.settings.mode)})...`
       );
       this.panel.setInferenceTime(this.lastInferenceMs, remaining);
 
-      await this.analyzeSentenceEntry(sentenceEntry, snapshot, reason);
-      logTrace("sentence_check_done", {
-        sentenceKey: sentenceEntry.key,
-        status: sentenceEntry.status,
-        inferenceMs: sentenceEntry.inferenceMs,
-        issueCount: ensureArray(sentenceEntry.issues).length,
+      await this.analyzeChunkEntry(chunkEntry, snapshot, reason);
+      logTrace("chunk_check_done", {
+        chunkKey: chunkEntry.key,
+        chunkId: chunkEntry.chunkId,
+        status: chunkEntry.status,
+        inferenceMs: chunkEntry.inferenceMs,
+        issueCount: ensureArray(chunkEntry.issues).length,
       });
 
       if (requestId !== this.activeRequestId) {
         return;
       }
 
-      const pendingLeft = sentencePlan.pending.length - i - 1;
-      this.panel.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
+      const pendingLeft = chunkPlan.pending.length - i - 1;
+      this.panel.setSentenceStats(chunkPlan.cachedCount, pendingLeft);
       this.panel.setInferenceTime(this.lastInferenceMs, pendingLeft);
       rerenderFromCache();
     }
@@ -622,42 +636,44 @@ class ZetaApp {
     this.syncPopoverWithCaret();
   }
 
-  buildSentencePlan(snapshot, force) {
-    const segments = this.splitLatexAwareSentences(snapshot.text);
+  buildChunkPlan(snapshot, force, adapter) {
+    const scopeText = String(snapshot.text || "");
     const now = Date.now();
+    const caretOffset = this.resolveCaretOffsetInScope(snapshot, adapter);
+    const chunkWindow = this.resolveChunkWindow(snapshot, caretOffset);
+    const chunkTree = this.buildChunkTree(
+      chunkWindow.text,
+      chunkWindow.caretOffset,
+      chunkWindow.baseOffset
+    );
     const activeKeys = [];
     const activeSignatures = [];
     const pending = [];
-    const occurrenceByBase = new Map();
 
-    for (const segment of segments) {
-      const sentenceText = String(segment.text || "").trim();
-      if (!sentenceText) {
-        continue;
-      }
-
-      const base = shortHash(sentenceText);
-      const occurrence = occurrenceByBase.get(base) || 0;
-      occurrenceByBase.set(base, occurrence + 1);
-      const key = `${base}:${occurrence}`;
-
+    for (const chunk of chunkTree.leafChunks) {
+      const contextText = this.buildChunkContext(scopeText, chunk, chunkTree);
       const signature = shortHash(
         JSON.stringify({
-          text: sentenceText,
+          chunkId: chunk.chunkId,
+          text: chunk.text,
+          context: contextText,
           mode: this.settings.mode,
           notationStrictness: this.settings.notationStrictness,
           backendUrl: this.settings.backendUrl,
         })
       );
 
-      let entry = this.sentenceCache.get(key);
+      let entry = this.chunkCache.get(chunk.chunkId);
       if (!entry || entry.signature !== signature) {
         entry = {
-          key,
+          key: chunk.chunkId,
+          chunkId: chunk.chunkId,
           signature,
-          text: sentenceText,
-          start: segment.start,
-          end: segment.end,
+          text: chunk.text,
+          sentences: ensureArray(chunk.sentences),
+          contextText,
+          start: chunk.start,
+          end: chunk.end,
           status: "pending",
           issues: [],
           diagnostics: [],
@@ -666,11 +682,13 @@ class ZetaApp {
           updatedAt: 0,
           lastSeenAt: now,
         };
-        this.sentenceCache.set(key, entry);
+        this.chunkCache.set(chunk.chunkId, entry);
       } else {
-        entry.text = sentenceText;
-        entry.start = segment.start;
-        entry.end = segment.end;
+        entry.text = chunk.text;
+        entry.sentences = ensureArray(chunk.sentences);
+        entry.contextText = contextText;
+        entry.start = chunk.start;
+        entry.end = chunk.end;
         entry.lastSeenAt = now;
       }
 
@@ -681,26 +699,696 @@ class ZetaApp {
         pending.push(entry);
       }
 
-      activeKeys.push(key);
+      activeKeys.push(chunk.chunkId);
       activeSignatures.push(signature);
     }
 
+    if (chunkTree.activeChunkId) {
+      pending.sort((a, b) => {
+        if (a.chunkId === chunkTree.activeChunkId) {
+          return -1;
+        }
+        if (b.chunkId === chunkTree.activeChunkId) {
+          return 1;
+        }
+        return a.start - b.start;
+      });
+    }
+
     const activeSet = new Set(activeKeys);
-    for (const [key, entry] of this.sentenceCache.entries()) {
+    for (const [key, entry] of this.chunkCache.entries()) {
       if (activeSet.has(key)) {
         continue;
       }
       if (now - (entry.lastSeenAt || 0) > 5 * 60 * 1000) {
-        this.sentenceCache.delete(key);
+        this.chunkCache.delete(key);
       }
     }
 
     return {
+      chunkTree,
+      activeChunkId: chunkTree.activeChunkId,
       activeKeys,
       activeSignatures,
       pending,
       cachedCount: activeKeys.length,
+      totalSentenceCount: chunkTree.leafChunks.reduce(
+        (sum, chunk) => sum + ensureArray(chunk.sentences).length,
+        0
+      ),
     };
+  }
+
+  resolveCaretOffsetInScope(snapshot, adapter) {
+    let caret = null;
+
+    try {
+      const visible = adapter.getVisibleTextSnapshot();
+      caret = adapter.getCaretOffset(visible);
+    } catch (_error) {
+      caret = null;
+    }
+
+    if (!Number.isInteger(caret)) {
+      try {
+        caret = adapter.getCaretOffset();
+      } catch (_error) {
+        caret = null;
+      }
+    }
+
+    if (!Number.isInteger(caret)) {
+      return null;
+    }
+
+    if (caret < snapshot.scopeStart || caret > snapshot.scopeEnd) {
+      return null;
+    }
+
+    return clamp(caret - snapshot.scopeStart, 0, String(snapshot.text || "").length);
+  }
+
+  findDocumentBodyStart(text) {
+    const source = String(text || "");
+    const match = source.match(/\\begin\s*\{\s*document\s*}/);
+    return match ? match.index + match[0].length : -1;
+  }
+
+  resolveChunkWindow(snapshot, caretOffset) {
+    const scopeText = String(snapshot.text || "");
+    const sourceText = String(snapshot.sourceText || snapshot.context || scopeText);
+    const scopeStart = Number.isInteger(snapshot.scopeStart) ? snapshot.scopeStart : 0;
+    const scopeEnd = Number.isInteger(snapshot.scopeEnd) ? snapshot.scopeEnd : scopeStart + scopeText.length;
+    const docBodyStart = this.findDocumentBodyStart(sourceText);
+
+    if (docBodyStart === -1) {
+      return {
+        text: scopeText,
+        baseOffset: 0,
+        caretOffset,
+      };
+    }
+
+    if (docBodyStart >= scopeEnd) {
+      return {
+        text: "",
+        baseOffset: 0,
+        caretOffset: null,
+      };
+    }
+
+    const bodyStartInScope = Math.max(0, docBodyStart - scopeStart);
+    const text = scopeText.slice(bodyStartInScope);
+    let nextCaret = null;
+    if (Number.isInteger(caretOffset) && caretOffset >= bodyStartInScope) {
+      nextCaret = caretOffset - bodyStartInScope;
+    }
+
+    return {
+      text,
+      baseOffset: bodyStartInScope,
+      caretOffset: nextCaret,
+    };
+  }
+
+  buildChunkTree(scopeText, caretOffset, baseOffset = 0) {
+    const text = String(scopeText || "");
+    const rootId = "__root__";
+    const chunks = [];
+    const leafChunks = [];
+    const chunkById = new Map();
+    const proofs = [];
+
+    const addChunk = (chunk, leaf = false) => {
+      chunks.push(chunk);
+      chunkById.set(chunk.chunkId, chunk);
+      if (leaf) {
+        leafChunks.push(chunk);
+      }
+    };
+
+    if (!text.trim()) {
+      return {
+        chunks,
+        leafChunks,
+        proofs,
+        chunkById,
+        activeChunkId: null,
+      };
+    }
+
+    const sectionMetas = this.parseSectionBlocks(text, baseOffset);
+    const envMetas = this.parseEnvironmentBlocks(text, baseOffset);
+    const commandMetas = this.parseCommandBlocks(text, baseOffset);
+
+    const sectionChunks = sectionMetas.map((meta) => {
+      return this.createChunk({
+        chunkId: meta.chunkId,
+        type: "section",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        sectionName: meta.name,
+        sectionTitle: meta.title,
+        sectionLevel: meta.level,
+        commandEnd: meta.commandEnd,
+      });
+    });
+
+    const envChunks = envMetas.map((meta) => {
+      const chunk = this.createChunk({
+        chunkId: meta.chunkId,
+        type: "environment",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        envName: meta.envName,
+        bodyStart: meta.bodyStart,
+        bodyEnd: meta.bodyEnd,
+        closeEnd: meta.closeEnd,
+      });
+      return chunk;
+    });
+
+    const commandChunks = commandMetas.map((meta) => {
+      return this.createChunk({
+        chunkId: meta.chunkId,
+        type: "command",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        commandName: meta.commandName,
+      });
+    });
+
+    const envById = new Map(envChunks.map((chunk) => [chunk.chunkId, chunk]));
+
+    for (const sectionChunk of sectionChunks) {
+      let parentId = this.pickSectionParentId(sectionChunk, sectionChunks);
+      if (!parentId) {
+        parentId = this.pickContainingEnvironmentId(sectionChunk, envChunks);
+      }
+      if (parentId) {
+        sectionChunk.parentId = parentId;
+      }
+    }
+
+    for (let i = 0; i < envChunks.length; i += 1) {
+      const envChunk = envChunks[i];
+      const meta = envMetas[i];
+      const parentEnvId = meta.parentEnvId;
+      if (parentEnvId && envById.has(parentEnvId)) {
+        envChunk.parentId = parentEnvId;
+        continue;
+      }
+      const sectionParentId = this.pickContainingSectionId(envChunk, sectionChunks);
+      if (sectionParentId) {
+        envChunk.parentId = sectionParentId;
+      }
+    }
+
+    for (const commandChunk of commandChunks) {
+      const envParentId = this.pickContainingEnvironmentId(commandChunk, envChunks);
+      if (envParentId) {
+        commandChunk.parentId = envParentId;
+        continue;
+      }
+      const sectionParentId = this.pickContainingSectionId(commandChunk, sectionChunks);
+      if (sectionParentId) {
+        commandChunk.parentId = sectionParentId;
+      }
+    }
+
+    const structuralChunks = [...sectionChunks, ...envChunks, ...commandChunks];
+    for (const chunk of structuralChunks) {
+      addChunk(chunk, false);
+      if (chunk.type === "environment" && String(chunk.envName || "").toLowerCase() === "proof") {
+        proofs.push(chunk);
+      }
+    }
+
+    const childrenByParent = new Map();
+    const pushChild = (parentId, child) => {
+      const key = parentId || rootId;
+      const bucket = childrenByParent.get(key) || [];
+      bucket.push(child);
+      childrenByParent.set(key, bucket);
+    };
+
+    for (const chunk of structuralChunks) {
+      pushChild(chunk.parentId, chunk);
+    }
+
+    for (const bucket of childrenByParent.values()) {
+      bucket.sort((a, b) => (a.start || 0) - (b.start || 0));
+    }
+
+    const textIndexByParent = new Map();
+    const addTextLeaf = (parentId, rawStart, rawEnd) => {
+      const localStart = rawStart - baseOffset;
+      const localEnd = rawEnd - baseOffset;
+      const spans = this.splitWithoutEndTokens(text, localStart, localEnd);
+      for (const [spanStart, spanEnd] of spans) {
+        const [trimmedLocalStart, trimmedLocalEnd] = this.trimSpan(text, spanStart, spanEnd);
+        if (trimmedLocalEnd <= trimmedLocalStart) {
+          continue;
+        }
+
+        const start = baseOffset + trimmedLocalStart;
+        const end = baseOffset + trimmedLocalEnd;
+        const leafText = text.slice(trimmedLocalStart, trimmedLocalEnd);
+        const anchor = this.buildChunkAnchor(leafText);
+        const index = textIndexByParent.get(parentId) || 0;
+        textIndexByParent.set(parentId, index + 1);
+
+        const leafChunk = this.createChunk({
+          chunkId: this.buildTextChunkId(parentId, index, anchor, start),
+          type: "text",
+          start,
+          end,
+          text: leafText,
+          parentId: parentId === rootId ? undefined : parentId,
+        });
+        addChunk(leafChunk, true);
+      }
+    };
+
+    const walkContainer = (parentId, regionStart, regionEnd) => {
+      if (regionEnd <= regionStart) {
+        return;
+      }
+
+      const children = ensureArray(childrenByParent.get(parentId))
+        .filter((child) => child.start < regionEnd && child.end > regionStart)
+        .sort((a, b) => (a.start || 0) - (b.start || 0));
+      let cursor = regionStart;
+
+      for (const child of children) {
+        const childStart = clamp(child.start, regionStart, regionEnd);
+        if (childStart > cursor) {
+          addTextLeaf(parentId, cursor, childStart);
+        }
+
+        const childRegion = this.getChildRegionForChunk(child);
+        const nestedStart = Math.max(regionStart, childRegion.start);
+        const nestedEnd = Math.min(regionEnd, childRegion.end);
+        if (nestedEnd > nestedStart) {
+          walkContainer(child.chunkId, nestedStart, nestedEnd);
+        }
+
+        const postChildCursor = this.getPostChildCursor(child);
+        cursor = Math.max(cursor, Math.min(regionEnd, postChildCursor));
+      }
+
+      if (cursor < regionEnd) {
+        addTextLeaf(parentId, cursor, regionEnd);
+      }
+    };
+
+    const rootStart = baseOffset;
+    const rootEnd = baseOffset + text.length;
+    walkContainer(rootId, rootStart, rootEnd);
+
+    if (leafChunks.length === 0) {
+      addTextLeaf(rootId, rootStart, rootEnd);
+    }
+
+    chunks.sort((a, b) => (a.start || 0) - (b.start || 0));
+    leafChunks.sort((a, b) => (a.start || 0) - (b.start || 0));
+
+    const absoluteCaret = Number.isInteger(caretOffset) ? baseOffset + caretOffset : null;
+    const activeChunkId = this.selectActiveChunkId(leafChunks, absoluteCaret);
+    return {
+      chunks,
+      leafChunks,
+      proofs,
+      chunkById,
+      activeChunkId,
+    };
+  }
+
+  createChunk(input) {
+    const includeSentences = input.includeSentences !== false;
+    const chunk = {
+      chunkId: input.chunkId,
+      type: input.type,
+      start: input.start,
+      end: input.end,
+      text: input.text,
+      parentId: input.parentId || undefined,
+      sentences: includeSentences
+        ? this.buildChunkSentences(input.text, input.start, input.chunkId)
+        : [],
+      envName: input.envName || undefined,
+      sectionName: input.sectionName || undefined,
+      sectionTitle: input.sectionTitle || undefined,
+      commandName: input.commandName || undefined,
+      sectionLevel: Number.isInteger(input.sectionLevel) ? input.sectionLevel : undefined,
+      commandEnd: Number.isInteger(input.commandEnd) ? input.commandEnd : undefined,
+      bodyStart: Number.isInteger(input.bodyStart) ? input.bodyStart : undefined,
+      bodyEnd: Number.isInteger(input.bodyEnd) ? input.bodyEnd : undefined,
+      closeEnd: Number.isInteger(input.closeEnd) ? input.closeEnd : undefined,
+    };
+    return chunk;
+  }
+
+  parseSectionBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    const regex = /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[[^\]]*])?\s*\{[^}]*\}/g;
+    const levelByName = {
+      part: 0,
+      chapter: 0,
+      section: 1,
+      subsection: 2,
+      subsubsection: 3,
+      paragraph: 4,
+      subparagraph: 5,
+    };
+
+    let match;
+    while ((match = regex.exec(source)) !== null) {
+      const raw = String(match[0] || "");
+      const name = String(match[1] || "").toLowerCase();
+      const titleMatch = raw.match(/\{([^}]*)\}\s*$/);
+      const title = titleMatch ? String(titleMatch[1] || "").trim() : "";
+      const startLocal = match.index;
+      const commandEndLocal = match.index + match[0].length;
+      const level = levelByName[name] ?? 6;
+      blocks.push({
+        kind: "section",
+        name,
+        title,
+        level,
+        startLocal,
+        commandEndLocal,
+        start: baseOffset + startLocal,
+        commandEnd: baseOffset + commandEndLocal,
+      });
+    }
+
+    for (let i = 0; i < blocks.length; i += 1) {
+      const current = blocks[i];
+      let endLocal = source.length;
+      for (let j = i + 1; j < blocks.length; j += 1) {
+        if (blocks[j].level <= current.level) {
+          endLocal = blocks[j].startLocal;
+          break;
+        }
+      }
+
+      current.endLocal = endLocal;
+      current.end = baseOffset + endLocal;
+      const anchor = this.buildChunkAnchor(source.slice(current.startLocal, Math.min(endLocal, current.startLocal + 120)));
+      current.chunkId = this.buildSectionChunkId(i, current.name, anchor, current.start);
+    }
+
+    return blocks;
+  }
+
+  parseEnvironmentBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    const regex = /\\(begin|end)\s*\{\s*([^{}]+?)\s*\}/g;
+    const stack = [];
+    let envIndex = 0;
+
+    let match;
+    while ((match = regex.exec(source)) !== null) {
+      const kind = String(match[1] || "").toLowerCase();
+      const envName = String(match[2] || "").trim();
+      const tokenStartLocal = match.index;
+      const tokenEndLocal = match.index + match[0].length;
+      const normalizedEnvName = envName.toLowerCase();
+
+      if (!envName) {
+        continue;
+      }
+      if (normalizedEnvName === "document") {
+        continue;
+      }
+
+      if (kind === "begin") {
+        const parentEnvId = stack.length > 0 ? stack[stack.length - 1].chunkId : null;
+        const anchor = this.buildChunkAnchor(
+          source.slice(tokenEndLocal, Math.min(source.length, tokenEndLocal + 100))
+        );
+        const chunkId = this.buildEnvironmentChunkId(
+          envIndex,
+          envName,
+          anchor,
+          baseOffset + tokenStartLocal
+        );
+        stack.push({
+          envName,
+          chunkId,
+          startLocal: tokenStartLocal,
+          bodyStartLocal: tokenEndLocal,
+          parentEnvId,
+          envIndex,
+        });
+        envIndex += 1;
+        continue;
+      }
+
+      let openIdx = -1;
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        if (stack[i].envName === envName) {
+          openIdx = i;
+          break;
+        }
+      }
+      if (openIdx === -1) {
+        continue;
+      }
+
+      const removed = stack.splice(openIdx);
+      const open = removed[0];
+      const endLocal = tokenStartLocal;
+      const bodyEndLocal = tokenStartLocal;
+      if (endLocal < open.startLocal) {
+        continue;
+      }
+
+      blocks.push({
+        kind: "environment",
+        envName: open.envName,
+        chunkId: open.chunkId,
+        parentEnvId: open.parentEnvId,
+        startLocal: open.startLocal,
+        endLocal,
+        bodyStartLocal: open.bodyStartLocal,
+        bodyEndLocal,
+        start: baseOffset + open.startLocal,
+        end: baseOffset + endLocal,
+        bodyStart: baseOffset + open.bodyStartLocal,
+        bodyEnd: baseOffset + bodyEndLocal,
+        closeEnd: baseOffset + tokenEndLocal,
+      });
+    }
+
+    for (const open of stack) {
+      const endLocal = source.length;
+      const bodyEndLocal = source.length;
+      if (endLocal < open.startLocal) {
+        continue;
+      }
+      blocks.push({
+        kind: "environment",
+        envName: open.envName,
+        chunkId: open.chunkId,
+        parentEnvId: open.parentEnvId,
+        startLocal: open.startLocal,
+        endLocal,
+        bodyStartLocal: open.bodyStartLocal,
+        bodyEndLocal,
+        start: baseOffset + open.startLocal,
+        end: baseOffset + endLocal,
+        bodyStart: baseOffset + open.bodyStartLocal,
+        bodyEnd: baseOffset + bodyEndLocal,
+        closeEnd: baseOffset + endLocal,
+      });
+    }
+
+    blocks.sort((a, b) => a.startLocal - b.startLocal);
+    return blocks;
+  }
+
+  parseCommandBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    const commandSpecs = [
+      { regex: /\\maketitle\b/g, commandName: "title" },
+    ];
+    let commandIndex = 0;
+
+    for (const spec of commandSpecs) {
+      spec.regex.lastIndex = 0;
+      let match;
+      while ((match = spec.regex.exec(source)) !== null) {
+        const startLocal = match.index;
+        const endLocal = match.index + match[0].length;
+        const anchor = this.buildChunkAnchor(match[0]);
+        blocks.push({
+          kind: "command",
+          commandName: spec.commandName,
+          startLocal,
+          endLocal,
+          start: baseOffset + startLocal,
+          end: baseOffset + endLocal,
+          chunkId: this.buildCommandChunkId(commandIndex, spec.commandName, anchor, baseOffset + startLocal),
+        });
+        commandIndex += 1;
+      }
+    }
+
+    blocks.sort((a, b) => a.startLocal - b.startLocal);
+    return blocks;
+  }
+
+  pickSectionParentId(sectionChunk, sectionChunks) {
+    const currentLevel = Number.isInteger(sectionChunk.sectionLevel) ? sectionChunk.sectionLevel : 99;
+    let best = null;
+    for (const candidate of sectionChunks) {
+      if (candidate.chunkId === sectionChunk.chunkId) {
+        continue;
+      }
+      const candidateLevel = Number.isInteger(candidate.sectionLevel) ? candidate.sectionLevel : 99;
+      if (candidateLevel >= currentLevel) {
+        continue;
+      }
+      if (candidate.start > sectionChunk.start || candidate.end <= sectionChunk.start) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  pickContainingSectionId(targetChunk, sectionChunks) {
+    let best = null;
+    for (const candidate of sectionChunks) {
+      if (candidate.start > targetChunk.start || candidate.end < targetChunk.end) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  pickContainingEnvironmentId(targetChunk, envChunks) {
+    let best = null;
+    for (const candidate of envChunks) {
+      if (candidate.start > targetChunk.start || candidate.end < targetChunk.end) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  getChildRegionForChunk(chunk) {
+    if (chunk.type === "section") {
+      const start = Number.isInteger(chunk.commandEnd) ? chunk.commandEnd : chunk.start;
+      return { start, end: chunk.end };
+    }
+    if (chunk.type === "environment") {
+      const start = Number.isInteger(chunk.bodyStart) ? chunk.bodyStart : chunk.start;
+      const end = Number.isInteger(chunk.bodyEnd) ? chunk.bodyEnd : chunk.end;
+      return { start, end };
+    }
+    if (chunk.type === "command") {
+      return { start: chunk.end, end: chunk.end };
+    }
+    return { start: chunk.start, end: chunk.end };
+  }
+
+  getPostChildCursor(chunk) {
+    if (chunk.type === "environment" && Number.isInteger(chunk.closeEnd)) {
+      return chunk.closeEnd;
+    }
+    return chunk.end;
+  }
+
+  splitWithoutEndTokens(text, start, end) {
+    const source = String(text || "");
+    const left = clamp(start, 0, source.length);
+    const right = clamp(end, 0, source.length);
+    if (right <= left) {
+      return [];
+    }
+
+    const spans = [];
+    const regex = /\\end\s*\{\s*[^{}]+?\s*\}/g;
+    regex.lastIndex = left;
+    let cursor = left;
+    let match;
+
+    while ((match = regex.exec(source)) !== null) {
+      const tokenStart = match.index;
+      const tokenEnd = match.index + match[0].length;
+      if (tokenStart >= right) {
+        break;
+      }
+      if (tokenStart > cursor) {
+        spans.push([cursor, Math.min(tokenStart, right)]);
+      }
+      cursor = Math.max(cursor, Math.min(tokenEnd, right));
+      if (cursor >= right) {
+        break;
+      }
+    }
+
+    if (cursor < right) {
+      spans.push([cursor, right]);
+    }
+
+    return spans;
+  }
+
+  trimSpan(text, start, end) {
+    const source = String(text || "");
+    let left = clamp(start, 0, source.length);
+    let right = clamp(end, 0, source.length);
+
+    while (left < right && /\s/.test(source[left])) {
+      left += 1;
+    }
+    while (right > left && /\s/.test(source[right - 1])) {
+      right -= 1;
+    }
+
+    return [left, right];
+  }
+
+  buildChunkSentences(chunkText, chunkStart, chunkId) {
+    const sentences = [];
+    const spans = this.splitLatexAwareSentences(chunkText);
+    for (let i = 0; i < spans.length; i += 1) {
+      const span = spans[i];
+      const sentenceText = String(span.text || "").trim();
+      if (!sentenceText) {
+        continue;
+      }
+      const anchor = this.buildChunkAnchor(sentenceText);
+      sentences.push({
+        sentenceId: this.buildSentenceId(chunkId, i, anchor),
+        chunkId,
+        start: chunkStart + span.start,
+        end: chunkStart + span.end,
+        text: sentenceText,
+      });
+    }
+    return sentences;
   }
 
   splitLatexAwareSentences(text) {
@@ -819,82 +1507,168 @@ class ZetaApp {
 
     pushSegment(source.length);
     if (segments.length === 0 && source.trim()) {
-      const first = source.search(/\S/);
-      let last = source.length;
-      while (last > 0 && /\s/.test(source[last - 1])) {
-        last -= 1;
+      const [start, end] = this.trimSpan(source, 0, source.length);
+      if (end > start) {
+        segments.push({
+          start,
+          end,
+          text: source.slice(start, end),
+        });
       }
-      segments.push({
-        start: first === -1 ? 0 : first,
-        end: last,
-        text: source.slice(first === -1 ? 0 : first, last),
-      });
     }
+
     return segments;
   }
 
-  collectSentenceIssues(activeKeys) {
+  buildChunkAnchor(text) {
+    const normalized = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return normalized.slice(0, 40) || "chunk";
+  }
+
+  buildSectionChunkId(sectionIndex, sectionName, anchor, start) {
+    return `section-${sectionIndex}-${shortHash(`${sectionName}|${start}|${anchor}`)}`;
+  }
+
+  buildEnvironmentChunkId(envIndex, envName, anchor, start) {
+    return `env-${envIndex}-${shortHash(`${envName}|${start}|${anchor}`)}`;
+  }
+
+  buildCommandChunkId(commandIndex, commandName, anchor, start) {
+    return `cmd-${commandIndex}-${shortHash(`${commandName}|${start}|${anchor}`)}`;
+  }
+
+  buildTextChunkId(parentId, textIndex, anchor, start) {
+    return `text-${shortHash(`${parentId}|${textIndex}|${start}|${anchor}`)}`;
+  }
+
+  buildSentenceId(chunkId, sentenceIndex, anchor) {
+    return `sentence-${chunkId}-${sentenceIndex}-${shortHash(`${chunkId}|${sentenceIndex}|${anchor}`)}`;
+  }
+
+  selectActiveChunkId(leafChunks, caretOffset) {
+    if (!leafChunks.length) {
+      return null;
+    }
+
+    if (!Number.isInteger(caretOffset)) {
+      return leafChunks[0].chunkId;
+    }
+
+    for (const chunk of leafChunks) {
+      if (caretOffset >= chunk.start && caretOffset <= chunk.end) {
+        return chunk.chunkId;
+      }
+    }
+
+    let bestChunk = leafChunks[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const chunk of leafChunks) {
+      const distance = caretOffset < chunk.start
+        ? chunk.start - caretOffset
+        : caretOffset - chunk.end;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestChunk = chunk;
+      }
+    }
+
+    return bestChunk.chunkId;
+  }
+
+  buildChunkContext(scopeText, chunk, chunkTree) {
+    const source = String(scopeText || "");
+    let proofStart = chunk.start;
+
+    if (chunk.parentId) {
+      const proofChunk = chunkTree.chunkById.get(chunk.parentId);
+      if (proofChunk) {
+        proofStart = proofChunk.start;
+      }
+    }
+
+    const contextStart = Math.max(0, proofStart - 2000);
+    let context = source.slice(contextStart, proofStart);
+
+    if (chunk.parentId) {
+      const priorSteps = chunkTree.leafChunks
+        .filter((candidate) => candidate.parentId === chunk.parentId && candidate.end <= chunk.start)
+        .slice(-2)
+        .map((candidate) => candidate.text.trim())
+        .filter(Boolean);
+      if (priorSteps.length > 0) {
+        context = `${context}\n\nPrevious steps:\n${priorSteps.join("\n\n")}`;
+      }
+    }
+
+    return context.slice(-7000);
+  }
+
+  collectChunkIssues(activeKeys) {
     const issues = [];
     for (const key of activeKeys) {
-      const sentenceEntry = this.sentenceCache.get(key);
-      if (!sentenceEntry) {
+      const chunkEntry = this.chunkCache.get(key);
+      if (!chunkEntry) {
         continue;
       }
 
-      const sentenceIssues = ensureArray(sentenceEntry.issues);
-      for (let i = 0; i < sentenceIssues.length; i += 1) {
-        const issue = sentenceIssues[i];
+      const chunkIssues = ensureArray(chunkEntry.issues);
+      for (let i = 0; i < chunkIssues.length; i += 1) {
+        const issue = chunkIssues[i];
         const startOffset = Number.isInteger(issue.start)
-          ? sentenceEntry.start + issue.start
+          ? chunkEntry.start + issue.start
           : null;
         const endOffset = Number.isInteger(issue.end)
-          ? sentenceEntry.start + issue.end
+          ? chunkEntry.start + issue.end
           : null;
 
         issues.push({
           ...issue,
           start: startOffset,
           end: endOffset,
-          key: `${sentenceEntry.key}:${issue.key || i}:${startOffset ?? "na"}`,
-          sentenceKey: sentenceEntry.key,
-          sentenceInferenceMs: sentenceEntry.inferenceMs,
+          key: `${chunkEntry.key}:${issue.key || i}:${startOffset ?? "na"}`,
+          chunkKey: chunkEntry.key,
+          chunkId: chunkEntry.chunkId,
+          chunkInferenceMs: chunkEntry.inferenceMs,
         });
       }
     }
     return issues;
   }
 
-  async analyzeSentenceEntry(sentenceEntry, snapshot, reason) {
-    const sentenceSnapshot = {
+  async analyzeChunkEntry(chunkEntry, snapshot, reason) {
+    const chunkSnapshot = {
       ...snapshot,
-      text: sentenceEntry.text,
-      context: snapshot.context,
+      text: chunkEntry.text,
+      context: chunkEntry.contextText || snapshot.context,
     };
 
     const startedAt = performance.now();
     try {
       const responsePayload = await this.fetchWithCache(
-        sentenceEntry.signature,
-        sentenceSnapshot,
-        `${reason}:sentence`
+        chunkEntry.signature,
+        chunkSnapshot,
+        `${reason}:chunk`
       );
-      const normalized = this.normalizeBackendResponse(responsePayload, sentenceEntry.text);
-      sentenceEntry.issues = ensureArray(normalized.issues);
-      sentenceEntry.diagnostics = ensureArray(normalized.diagnostics);
-      sentenceEntry.hasError = !!normalized.hasError;
-      sentenceEntry.status = "ready";
+      const normalized = this.normalizeBackendResponse(responsePayload, chunkEntry.text);
+      chunkEntry.issues = ensureArray(normalized.issues);
+      chunkEntry.diagnostics = ensureArray(normalized.diagnostics);
+      chunkEntry.hasError = !!normalized.hasError;
+      chunkEntry.status = "ready";
     } catch (error) {
       const message = String(error?.message || error || "Request failed.");
-      sentenceEntry.hasError = true;
-      sentenceEntry.status = "error";
-      const priorIssues = ensureArray(sentenceEntry.issues).filter(
-        (item) => item?.id !== `sentence-error-${sentenceEntry.key}`
+      chunkEntry.hasError = true;
+      chunkEntry.status = "error";
+      const priorIssues = ensureArray(chunkEntry.issues).filter(
+        (item) => item?.id !== `chunk-error-${chunkEntry.key}`
       );
-      sentenceEntry.issues = [
+      chunkEntry.issues = [
         ...priorIssues,
         {
-          id: `sentence-error-${sentenceEntry.key}`,
-          key: `sentence-error-${sentenceEntry.key}`,
+          id: `chunk-error-${chunkEntry.key}`,
+          key: `chunk-error-${chunkEntry.key}`,
           category: "backend",
           severity: "error",
           message: `Backend request failed: ${message}`,
@@ -906,10 +1680,10 @@ class ZetaApp {
         },
       ];
     } finally {
-      sentenceEntry.updatedAt = Date.now();
-      sentenceEntry.lastSeenAt = sentenceEntry.updatedAt;
-      sentenceEntry.inferenceMs = performance.now() - startedAt;
-      this.lastInferenceMs = sentenceEntry.inferenceMs;
+      chunkEntry.updatedAt = Date.now();
+      chunkEntry.lastSeenAt = chunkEntry.updatedAt;
+      chunkEntry.inferenceMs = performance.now() - startedAt;
+      this.lastInferenceMs = chunkEntry.inferenceMs;
     }
   }
 
