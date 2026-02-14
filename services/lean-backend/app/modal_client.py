@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -179,12 +180,20 @@ async def generate_lean(
         max_iters=max_iters,
         endpoint_url=settings.modal_endpoint_url,
     )
+    logger.info(
+        "modal_request_prepared endpoint=%s prompt_chars=%s max_iters=%s theorem_name=%s",
+        settings.modal_endpoint_url,
+        len(prompt),
+        max_iters,
+        payload.get("theorem_name"),
+    )
 
     timeout = httpx.Timeout(settings.modal_timeout_seconds)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
 
         async def _call_modal() -> GeneratedLean:
+            request_started = time.perf_counter()
             try:
                 response = await client.post(settings.modal_endpoint_url, json=payload, headers=headers)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
@@ -207,7 +216,19 @@ async def generate_lean(
             if not isinstance(data, dict):
                 raise ModalClientError("Modal response JSON is not an object")
 
-            return _normalize_generated_payload(data)
+            logger.info(
+                "modal_response_received status=%s body_chars=%s duration_ms=%.2f",
+                response.status_code,
+                len(response.text or ""),
+                (time.perf_counter() - request_started) * 1000,
+            )
+            generated = _normalize_generated_payload(data)
+            logger.info(
+                "modal_response_normalized metadata_keys=%s code_chars=%s",
+                sorted(generated.metadata.keys()),
+                len(generated.code),
+            )
+            return generated
 
         attempts = max(1, settings.modal_max_retries + 1)
         return await retry_async(

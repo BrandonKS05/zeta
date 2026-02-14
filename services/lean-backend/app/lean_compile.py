@@ -74,7 +74,12 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
             command = [settings.lean_command, str(main_file)]
             cwd = tmp_dir_str
 
-        logger.info("running lean compile", extra={"command": command, "cwd": cwd})
+        logger.info(
+            "lean_compile_started command=%s cwd=%s code_chars=%s",
+            " ".join(command),
+            cwd,
+            len(code),
+        )
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -113,12 +118,10 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
         logger.info(
-            "lean compile finished",
-            extra={
-                "return_code": process.returncode,
-                "stdout_len": len(stdout),
-                "stderr_len": len(stderr),
-            },
+            "lean_compile_finished return_code=%s stdout_len=%s stderr_len=%s",
+            process.returncode,
+            len(stdout),
+            len(stderr),
         )
         logger.debug("lean stdout full output: %s", stdout)
         logger.debug("lean stderr full output: %s", stderr)

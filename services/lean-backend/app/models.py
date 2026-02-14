@@ -32,6 +32,32 @@ class CompileResult(BaseModel):
     diagnostics: list[Diagnostic] = Field(default_factory=list)
 
 
+class SemanticValidation(BaseModel):
+    success: bool
+    collapsed_to_false: bool = False
+    declaration_name: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class PipelineStage(BaseModel):
+    stage: Literal[
+        "modal_generation",
+        "lean_compile",
+        "semantic_validation",
+        "llm_interpretation",
+    ]
+    attempted: bool = True
+    success: bool | None = None
+    duration_ms: float | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelineTrace(BaseModel):
+    total_duration_ms: float | None = None
+    stages: list[PipelineStage] = Field(default_factory=list)
+    semantic: SemanticValidation | None = None
+
+
 class InterpretationItem(BaseModel):
     error: str
     probable_cause: str | None = None
@@ -57,3 +83,4 @@ class SolveResponse(BaseModel):
     compile: CompileResult
     interpretation: Interpretation | None = None
     interpretation_error: str | None = None
+    pipeline: PipelineTrace | None = None

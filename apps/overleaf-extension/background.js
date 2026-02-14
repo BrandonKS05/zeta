@@ -19,6 +19,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   const controller = new AbortController();
+  const startedAt = Date.now();
+  console.info("[zeta:bg] http_request_start", {
+    method,
+    url,
+    timeoutMs,
+  });
   const timerId = setTimeout(() => {
     controller.abort();
   }, Math.max(1000, Number(timeoutMs) || 15000));
@@ -40,6 +46,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         json = null;
       }
 
+      console.info("[zeta:bg] http_response", {
+        method,
+        url,
+        status: response.status,
+        ok: response.ok,
+        durationMs: Date.now() - startedAt,
+      });
+
       sendResponse({
         ok: response.ok,
         status: response.status,
@@ -50,6 +64,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     .catch((error) => {
       const isAbort = error?.name === "AbortError";
+      console.warn("[zeta:bg] http_error", {
+        method,
+        url,
+        durationMs: Date.now() - startedAt,
+        error: isAbort ? "Request timed out." : String(error?.message || error),
+      });
       sendResponse({
         ok: false,
         error: isAbort ? "Request timed out." : String(error?.message || error),
