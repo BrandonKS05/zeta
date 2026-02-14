@@ -23,7 +23,7 @@ The injected frontend is split into multiple files for maintainability:
 - `content_app.js` - main app/controller logic
 - `content_bootstrap.js` - guard + app startup/shutdown wiring
 
-`content.js` is now a tiny deprecated shim and is no longer loaded by `manifest.json`.
+`content.js` is deprecated and no longer loaded by `manifest.json`.
 
 ## Backend compatibility
 

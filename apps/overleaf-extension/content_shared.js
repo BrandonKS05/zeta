@@ -13,18 +13,19 @@
   const DEFAULT_SETTINGS = {
     backendUrl: "http://13.57.35.202:8000/v1/lean/solve",
     mode: "auto",
-    scope: "paragraph",
+    scope: "document",
     theme: "dark",
     checkOnType: true,
     requestTimeoutMs: 18000,
     retries: 1,
     notationStrictness: "balanced",
     panelOpen: true,
-  };
-
+  }; 
+  
   const MODE_SET = new Set(["fast", "accurate", "auto"]);
   const SCOPE_SET = new Set(["selection", "paragraph", "document"]);
   const THEME_SET = new Set(["dark", "light"]);
+  const LOG_PREFIX = "[zeta]";
   const SEVERITY_WEIGHT = {
     error: 18,
     warning: 8,
@@ -138,6 +139,18 @@
     return "unknown";
   }
 
+  function logTrace(event, payload) {
+    try {
+      if (typeof payload === "undefined") {
+        console.info(`${LOG_PREFIX} ${event}`);
+      } else {
+        console.info(`${LOG_PREFIX} ${event}`, payload);
+      }
+    } catch (_error) {
+      // ignore console failures
+    }
+  }
+
   Object.assign(zeta, {
     SETTINGS_KEY,
     MODE_KEY,
@@ -146,6 +159,7 @@
     CACHE_TTL_MS,
     MAX_HIGHLIGHT_RECTS,
     DEFAULT_SETTINGS,
+    LOG_PREFIX,
     SEVERITY_WEIGHT,
     clamp,
     shortHash,
@@ -161,5 +175,6 @@
     storageLocalSet,
     extractText,
     normalizeSeverity,
+    logTrace,
   });
 })();
