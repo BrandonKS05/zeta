@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-ARG INSTALL_LEAN=false
+ARG INSTALL_LEAN=true
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -20,6 +20,8 @@ RUN if [ "$INSTALL_LEAN" = "true" ]; then \
       /root/.elan/bin/elan default stable; \
       ln -sf /root/.elan/bin/lean /usr/local/bin/lean; \
       ln -sf /root/.elan/bin/lake /usr/local/bin/lake; \
+      lean --version; \
+      lake --version; \
     fi
 
 COPY app ./app

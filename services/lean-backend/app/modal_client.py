@@ -20,28 +20,137 @@ class _RetriableModalError(ModalClientError):
     pass
 
 
+_ANALYZE_ENDPOINT_SUFFIX = "/v1/analyze"
+_ANALYZE_SUCCESS_STATUSES = {"ok", "success"}
+_ANALYZE_METADATA_FIELDS = (
+    "model",
+    "status",
+    "input_text",
+    "normalized_text",
+    "assumptions",
+    "notes",
+    "statement_type",
+    "declaration_name",
+    "lean_declaration",
+    "diagnostics",
+    "feedback",
+    "is_valid_lean",
+    "latency_ms",
+)
+
+
+def _compact_dict(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if value is not None}
+
+
+def _normalize_imports(raw_imports: Any) -> list[str]:
+    if isinstance(raw_imports, list):
+        return [str(item).strip() for item in raw_imports if str(item).strip()]
+    if isinstance(raw_imports, str) and raw_imports.strip():
+        return [raw_imports.strip()]
+    return []
+
+
+def _normalize_temperature(raw_temperature: Any) -> float:
+    if isinstance(raw_temperature, bool):
+        return 0.0
+    if isinstance(raw_temperature, (int, float)):
+        return float(raw_temperature)
+    if isinstance(raw_temperature, str):
+        try:
+            return float(raw_temperature)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _build_modal_payload(
+    prompt: str,
+    context_payload: dict[str, Any],
+    max_iters: int,
+    endpoint_url: str,
+) -> dict[str, Any]:
+    theorem_name = context_payload.get("theorem_name", context_payload.get("declaration_name"))
+    if not isinstance(theorem_name, str) or not theorem_name.strip():
+        theorem_name = "generated_theorem"
+
+    imports = _normalize_imports(context_payload.get("imports")) or ["Std"]
+    temperature = _normalize_temperature(context_payload.get("temperature", 0.0))
+    model = context_payload.get("model")
+
+    analyze_payload: dict[str, Any] = {
+        "text": prompt,
+        "theorem_name": theorem_name,
+        "imports": imports,
+        "temperature": temperature,
+    }
+    if isinstance(model, str) and model.strip():
+        analyze_payload["model"] = model.strip()
+
+    if endpoint_url.rstrip("/").endswith(_ANALYZE_ENDPOINT_SUFFIX):
+        return analyze_payload
+
+    return _compact_dict(
+        {
+            **analyze_payload,
+            "prompt": prompt,
+            "nl_input": prompt,
+            "context": context_payload,
+            "max_iters": max_iters,
+        }
+    )
+
+
+def _extract_lean_code(candidate: dict[str, Any]) -> tuple[str | None, str | None]:
+    for key in ("lean_source", "lean_code", "code"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value:
+            return key, value
+    return None, None
+
+
+def _build_analyze_metadata(candidate: dict[str, Any]) -> dict[str, Any]:
+    metadata = _compact_dict({field: candidate.get(field) for field in _ANALYZE_METADATA_FIELDS})
+    if metadata:
+        return metadata
+    return _compact_dict({key: value for key, value in candidate.items() if key != "lean_source"})
+
+
+def _validate_analyze_status(candidate: dict[str, Any]) -> None:
+    status = candidate.get("status")
+    if isinstance(status, str) and status.lower() not in _ANALYZE_SUCCESS_STATUSES:
+        feedback = candidate.get("feedback")
+        details = f" feedback={feedback}" if feedback else ""
+        raise ModalClientError(f"Modal returned non-ok status='{status}'.{details}")
+
+
 def _normalize_generated_payload(data: dict[str, Any]) -> GeneratedLean:
-    lean_code: str | None = None
-    metadata: dict[str, Any] = {}
+    candidates: list[dict[str, Any]] = [data]
+    nested_result = data.get("result")
+    if isinstance(nested_result, dict):
+        candidates.append(nested_result)
 
-    if isinstance(data.get("lean_code"), str):
-        lean_code = data["lean_code"]
-        raw_metadata = data.get("metadata", {})
-        metadata = raw_metadata if isinstance(raw_metadata, dict) else {"raw_metadata": raw_metadata}
-    elif isinstance(data.get("code"), str):
-        lean_code = data["code"]
-        metadata = {}
-    elif isinstance(data.get("result"), dict):
-        result = data["result"]
-        if isinstance(result.get("lean_code"), str):
-            lean_code = result["lean_code"]
-            raw_metadata = result.get("metadata", {})
+    for candidate in candidates:
+        code_key, lean_code = _extract_lean_code(candidate)
+        if lean_code is None or code_key is None:
+            continue
+
+        if code_key == "lean_source":
+            _validate_analyze_status(candidate)
+            metadata = _build_analyze_metadata(candidate)
+            return GeneratedLean(code=lean_code, metadata=metadata)
+
+        if code_key == "lean_code":
+            raw_metadata = candidate.get("metadata", {})
             metadata = raw_metadata if isinstance(raw_metadata, dict) else {"raw_metadata": raw_metadata}
+            return GeneratedLean(code=lean_code, metadata=metadata)
 
-    if not lean_code:
-        raise ModalClientError("Modal response missing Lean code in 'lean_code' field")
+        return GeneratedLean(code=lean_code, metadata={})
 
-    return GeneratedLean(code=lean_code, metadata=metadata)
+    raise ModalClientError(
+        "Modal response missing Lean code. Expected one of: "
+        "'lean_code', 'lean_source', 'code', or 'result.lean_code'."
+    )
 
 
 async def generate_lean(
@@ -59,12 +168,13 @@ async def generate_lean(
     if settings.modal_api_key:
         headers["Authorization"] = f"Bearer {settings.modal_api_key}"
 
-    payload = {
-        "prompt": prompt,
-        "nl_input": prompt,
-        "context": context or {},
-        "max_iters": max_iters,
-    }
+    context_payload = context or {}
+    payload = _build_modal_payload(
+        prompt=prompt,
+        context_payload=context_payload,
+        max_iters=max_iters,
+        endpoint_url=settings.modal_endpoint_url,
+    )
 
     timeout = httpx.Timeout(settings.modal_timeout_seconds)
 

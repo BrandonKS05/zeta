@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: lean-backend
+    runtime: docker
+    dockerfilePath: services/lean-backend/Dockerfile
+    dockerContext: services/lean-backend
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: INSTALL_LEAN
+        value: "true"
+      - key: MODAL_ENDPOINT_URL
+        sync: false
+      - key: MODAL_API_KEY
+        sync: false
+      - key: ENABLE_LLM_INTERPRETATION
+        value: "true"
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gpt-4o-mini

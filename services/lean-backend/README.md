@@ -6,9 +6,15 @@ Minimal, production-leaning FastAPI backend for NL theorem/proof -> Lean generat
 
 - `POST /v1/lean/solve`
   - Calls Modal endpoint to generate Lean code.
+  - For Modal endpoints ending with `/v1/analyze`, request payload is sent as:
+    - `text` <- `nl_input`
+    - `theorem_name` <- `context.theorem_name` (or fallback `generated_theorem`)
+    - `imports` <- `context.imports` (default `["Std"]`)
+    - `temperature` <- `context.temperature` (default `0.0`)
   - Compiles Lean code locally (`lean` or `lake env lean`).
   - Parses compiler diagnostics into structured objects.
   - Optionally calls an LLM to interpret Lean compiler errors into frontend-friendly guidance.
+  - Interpretation items include location-aware edit hints (`latex_start`/`latex_end` and `lean_line`/`lean_column` when available).
 - `GET /healthz`
 - Async I/O (`httpx`, async subprocess), retries, and timeouts.
 - Request-scoped logging with `request_id`.
@@ -92,9 +98,42 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 cd /Users/williamfeng/Documents/treehacks-2026/services/lean-backend
 cp .env.example .env
 # edit .env
-# Optional: set INSTALL_LEAN=true to install elan+lean in image
-INSTALL_LEAN=true docker compose up --build
+docker compose up --build
 ```
+
+`INSTALL_LEAN` defaults to `true` in Docker, so Lean/Lake are installed unless you explicitly set `INSTALL_LEAN=false`.
+
+## Deploy on Render
+
+Use Docker runtime (recommended), not native Python runtime.
+
+### Option A: Blueprint (recommended)
+
+1. Connect this repo to Render and create a Blueprint service.
+2. Render will use `/Users/williamfeng/Documents/treehacks-2026/render.yaml`.
+3. Set secret env values in Render dashboard:
+   - `MODAL_ENDPOINT_URL` (required)
+   - `MODAL_API_KEY` (optional)
+   - `LLM_API_KEY` (optional)
+
+Blueprint already sets:
+- `dockerContext=services/lean-backend`
+- `dockerfilePath=services/lean-backend/Dockerfile`
+- Docker runtime
+- `/healthz` health check
+- `INSTALL_LEAN=true` (build arg via env var)
+
+### Option B: Manual Web Service setup
+
+- Runtime: Docker
+- Root Directory: leave empty
+- Dockerfile Path: `services/lean-backend/Dockerfile`
+- Docker Context: `services/lean-backend`
+- Health Check Path: `/healthz`
+- Environment Variables:
+  - `INSTALL_LEAN=true`
+  - `MODAL_ENDPOINT_URL=...` (required)
+  - plus optional Modal/LLM variables from `.env.example`
 
 ## Example Request
 

@@ -32,9 +32,23 @@ class CompileResult(BaseModel):
     diagnostics: list[Diagnostic] = Field(default_factory=list)
 
 
+class InterpretationItem(BaseModel):
+    error: str
+    probable_cause: str | None = None
+    suggested_fix: str | None = None
+    source: Literal["latex", "lean", "both", "unknown"] = "unknown"
+    latex_start: int | None = None
+    latex_end: int | None = None
+    latex_excerpt: str | None = None
+    lean_line: int | None = None
+    lean_column: int | None = None
+    replacement: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class Interpretation(BaseModel):
     summary: str
-    items: list[dict[str, Any]] = Field(default_factory=list)
+    items: list[InterpretationItem] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
 
 
