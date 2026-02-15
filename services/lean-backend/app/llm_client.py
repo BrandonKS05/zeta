@@ -850,6 +850,8 @@ async def interpret_semantic_sanity(
         "Return JSON only with keys: summary (string), items (array), suggestions (array of short strings). "
         "Each item: error, probable_cause, suggested_fix, source (latex|lean|both|unknown), "
         "latex_excerpt, replacement (optional corrected text for the excerpt), confidence (0-1).\n\n"
+        "For latex_excerpt use ONLY the exact wrong formula that should be highlighted (e.g. 'n + 2 ≥ n + 3' or 'a - b = b - a'), "
+        "not the whole sentence and not symbols like \\mathbb{N}. The excerpt is used to highlight the specific false claim.\n\n"
         "If the statement is clearly true or you are unsure, return items: [] and suggestions: [].\n\n"
         f"Natural language statement:\n{truncate_text(nl_input, _SEMANTIC_SANITY_MAX_NL_CHARS)}\n\n"
         f"Lean code (typechecked):\n{truncate_text(lean_code, _SEMANTIC_SANITY_MAX_LEAN_CHARS)}\n\n"
