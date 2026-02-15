@@ -42,6 +42,9 @@ class Settings(BaseModel):
     enable_llm_highlights: bool = True
     llm_highlight_timeout_seconds: float = 12.0
     llm_highlight_max_retries: int = 0
+    autocomplete_llm_fallback_enabled: bool = True
+    autocomplete_llm_fallback_model: str = "gpt-5.2"
+    autocomplete_llm_fallback_timeout_seconds: float = 10.0
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -91,4 +94,10 @@ def get_settings() -> Settings:
         enable_llm_highlights=_env("ENABLE_LLM_HIGHLIGHTS", "true"),
         llm_highlight_timeout_seconds=_env("LLM_HIGHLIGHT_TIMEOUT_SECONDS", "12"),
         llm_highlight_max_retries=_env("LLM_HIGHLIGHT_MAX_RETRIES", "0"),
+        autocomplete_llm_fallback_enabled=_env("AUTOCOMPLETE_LLM_FALLBACK_ENABLED", "true"),
+        autocomplete_llm_fallback_model=_env("AUTOCOMPLETE_LLM_FALLBACK_MODEL", "gpt-5.2"),
+        autocomplete_llm_fallback_timeout_seconds=_env(
+            "AUTOCOMPLETE_LLM_FALLBACK_TIMEOUT_SECONDS",
+            "10",
+        ),
     )

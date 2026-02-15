@@ -617,12 +617,15 @@ async def _llm_autocomplete_candidates(
     *,
     settings: Settings,
 ) -> list[str]:
-    if not settings.enable_llm_interpretation:
-        return []
-    if not settings.llm_model:
+    if not settings.autocomplete_llm_fallback_enabled:
         return []
     if not settings.llm_api_key:
         return []
+    model_name = (
+        str(settings.autocomplete_llm_fallback_model or "").strip()
+        or str(settings.llm_model or "").strip()
+        or "gpt-5.2"
+    )
 
     text = str(request_payload.get("text") or "")
     if not text:
@@ -637,31 +640,50 @@ async def _llm_autocomplete_candidates(
     suffix = text[cursor:]
     context = request_payload.get("context")
     context_str = context if isinstance(context, str) else ""
+    imports = request_payload.get("imports")
+    imports_text = ", ".join([str(item).strip() for item in (imports or ["Std"]) if str(item).strip()]) or "Std"
     max_candidates = max(1, min(int(request_payload.get("max_candidates") or 3), 5))
 
     endpoint = settings.llm_endpoint_url or f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+    use_responses_api = endpoint.rstrip("/").endswith("/responses")
+    if not settings.llm_endpoint_url:
+        base = settings.llm_base_url.rstrip("/")
+        use_responses_api = "api.openai.com" in base and model_name.lower().startswith("gpt-5")
+        endpoint = f"{base}/responses" if use_responses_api else f"{base}/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.llm_api_key}"}
     system = (
-        "You are an editor autocomplete assistant for LaTeX/math notes. "
-        "Return JSON only: {\"candidates\": [\"...\"]}. "
+        "You are an autocomplete assistant for math + Lean note writing. "
+        "Return JSON only: {\"candidates\": [\"...\"]}. Never include markdown fences. "
         "Each candidate must be a short suffix to append at cursor (do not repeat prefix). "
+        "Keep suggestions Lean-friendly and mathematically coherent. "
         f"Return up to {max_candidates} candidates."
     )
     user = (
+        f"Lean imports in scope: {imports_text}\n\n"
         f"Prefix:\n{prefix[-1200:]}\n\n"
         f"Suffix:\n{suffix[:400]}\n\n"
         f"Context:\n{context_str[-1600:]}\n"
     )
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": min(float(request_payload.get("temperature") or 0.35), 0.6),
-        "max_completion_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
-    }
-    timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 20))
+    if use_responses_api:
+        payload = {
+            "model": model_name,
+            "input": [
+                {"role": "system", "content": [{"type": "text", "text": system}]},
+                {"role": "user", "content": [{"type": "text", "text": user}]},
+            ],
+            "max_output_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
+        }
+    else:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": min(float(request_payload.get("temperature") or 0.35), 0.6),
+            "max_completion_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
+        }
+    timeout = httpx.Timeout(max(settings.autocomplete_llm_fallback_timeout_seconds, 20))
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(endpoint, json=payload, headers=headers)
         if response.status_code >= 400:
@@ -672,16 +694,29 @@ async def _llm_autocomplete_candidates(
             return []
     if not isinstance(data, dict):
         return []
-    choices = data.get("choices")
     content = ""
-    if isinstance(choices, list) and choices:
-        first = choices[0]
-        if isinstance(first, dict):
-            message = first.get("message")
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                content = message.get("content") or ""
-            elif isinstance(first.get("text"), str):
-                content = first.get("text") or ""
+    if use_responses_api:
+        if isinstance(data.get("output_text"), str):
+            content = data.get("output_text") or ""
+        if not content and isinstance(data.get("output"), list):
+            fragments: list[str] = []
+            for item in data.get("output") or []:
+                if not isinstance(item, dict):
+                    continue
+                for c in item.get("content") or []:
+                    if isinstance(c, dict) and isinstance(c.get("text"), str):
+                        fragments.append(c.get("text") or "")
+            content = "\n".join([frag for frag in fragments if frag]).strip()
+    else:
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    content = message.get("content") or ""
+                elif isinstance(first.get("text"), str):
+                    content = first.get("text") or ""
     parsed = _extract_json_object_from_text(content)
     candidates: list[str] = []
     if isinstance(parsed, dict) and isinstance(parsed.get("candidates"), list):
@@ -832,7 +867,12 @@ async def complete_autocomplete(
                     normalized["no_suggestion_reasons"] = []
                     debug = normalized.get("no_suggestion_debug")
                     if isinstance(debug, dict):
-                        debug["fallback"] = "llm_chat_completions"
+                        debug["fallback"] = "llm_autocomplete_fallback"
+                        debug["fallback_model"] = (
+                            str(settings.autocomplete_llm_fallback_model or "").strip()
+                            or str(settings.llm_model or "").strip()
+                            or "gpt-5.2"
+                        )
                         normalized["no_suggestion_debug"] = debug
             if (
                 isinstance(normalized, dict)

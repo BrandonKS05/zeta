@@ -1511,9 +1511,9 @@ class ZetaApp {
       };
     }
 
-    const baseTimeoutMs = Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
+    const baseTimeoutMs = Math.min(10000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
     const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
-      ? Math.min(18000, options.timeoutMs)
+      ? Math.min(10000, options.timeoutMs)
       : baseTimeoutMs;
     const prefixLen = String(context.prefixText || "").length;
     const prefixTail = String(context.prefixText || "").slice(-80);
@@ -1767,10 +1767,10 @@ class ZetaApp {
       } catch (firstErr) {
         const isTimeout = /timeout|abort|timed out/i.test(String(firstErr?.message || ""));
         if (isTimeout) {
-          const baseMs = Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
+          const baseMs = Math.min(10000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
           try {
             result = await this.requestAutocomplete(endpointUrl, context, reasonLabel, {
-              timeoutMs: Math.min(18000, baseMs * 2),
+              timeoutMs: Math.min(10000, baseMs * 2),
             });
           } catch (retryErr) {
             requestError = retryErr;
