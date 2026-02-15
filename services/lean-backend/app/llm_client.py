@@ -37,6 +37,14 @@ def _endpoint_url(settings: Settings) -> str:
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
 
+def _token_limit_key(endpoint: str) -> str:
+    """OpenAI uses 'max_tokens'; some other providers use 'max_completion_tokens'."""
+    parsed = urlsplit(endpoint)
+    if parsed.netloc.lower() == "api.openai.com":
+        return "max_tokens"
+    return "max_completion_tokens"
+
+
 def _should_enforce_json_mode(endpoint: str) -> bool:
     """Use strict JSON mode only for OpenAI Chat Completions."""
     parsed = urlsplit(endpoint)
@@ -384,10 +392,9 @@ async def repair_lean_compile_errors(
             {"role": "user", "content": user_prompt},
         ],
     }
-    if settings.llm_max_completion_tokens > 0:
-        payload["max_completion_tokens"] = min(settings.llm_max_completion_tokens, 2048)
-    else:
-        payload["max_completion_tokens"] = 2048
+    token_key = _token_limit_key(endpoint)
+    limit = min(settings.llm_max_completion_tokens, 2048) if settings.llm_max_completion_tokens > 0 else 2048
+    payload[token_key] = limit
 
     timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 60))
     try:
@@ -460,10 +467,9 @@ async def repair_lean_def_check(
             {"role": "user", "content": user_prompt},
         ],
     }
-    if settings.llm_max_completion_tokens > 0:
-        payload["max_completion_tokens"] = min(settings.llm_max_completion_tokens, 1024)
-    else:
-        payload["max_completion_tokens"] = 1024
+    token_key = _token_limit_key(endpoint)
+    limit = min(settings.llm_max_completion_tokens, 1024) if settings.llm_max_completion_tokens > 0 else 1024
+    payload[token_key] = limit
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
     try:
