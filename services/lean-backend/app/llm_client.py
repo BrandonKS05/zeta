@@ -340,11 +340,15 @@ async def repair_lean_compile_errors(
     compile_result: CompileResult,
     *,
     settings: Settings | None = None,
-) -> str | None:
-    """Ask the LLM to fix any Lean 4 compilation errors. Returns fixed code or None."""
+) -> tuple[str | None, str | None]:
+    """Ask the LLM to fix Lean 4 compilation errors. Returns (fixed_code, error_reason). error_reason is set when fixed_code is None."""
     settings = settings or get_settings()
-    if not settings.enable_llm_interpretation or not settings.llm_model:
-        return None
+    if not settings.enable_llm_interpretation:
+        return (None, "llm_disabled")
+    if not settings.llm_model:
+        return (None, "llm_model_not_set")
+    if not settings.llm_api_key:
+        return (None, "llm_api_key_not_set")
 
     error_lines: list[str] = []
     for d in compile_result.diagnostics[:12]:
@@ -400,34 +404,41 @@ async def repair_lean_compile_errors(
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
-    except (httpx.TransportError, httpx.TimeoutException):
-        return None
+    except httpx.TimeoutException:
+        logger.warning("repair_lean_compile_errors timeout endpoint=%s", endpoint)
+        return (None, "timeout")
+    except httpx.TransportError as e:
+        logger.warning("repair_lean_compile_errors transport_error endpoint=%s error=%s", endpoint, e)
+        return (None, "transport_error")
 
     if response.status_code >= 400:
+        body_preview = (response.text or "")[: 400].replace("\n", " ")
         logger.warning(
-            "repair_lean_compile_errors_http status=%s body_prefix=%s",
+            "repair_lean_compile_errors_http status=%s body=%s",
             response.status_code,
-            (response.text or "")[:200],
+            body_preview,
         )
-        return None
+        return (None, f"api_{response.status_code}: {body_preview}")
 
     try:
         data = response.json()
     except ValueError:
-        return None
+        return (None, "response_not_json")
 
     content = _extract_message_content(data)
     if not content or not isinstance(content, str):
-        return None
+        return (None, "empty_content")
 
     fixed = content.strip()
     if fixed.startswith("```"):
         fixed = fixed.split("\n", 1)[-1] if "\n" in fixed else fixed[3:]
         if fixed.endswith("```"):
             fixed = fixed.rsplit("```", 1)[0].rstrip()
-    if not fixed or len(fixed) > _REPAIR_CODE_MAX_CHARS * 2:
-        return None
-    return fixed
+    if not fixed:
+        return (None, "empty_after_strip")
+    if len(fixed) > _REPAIR_CODE_MAX_CHARS * 2:
+        return (None, "response_too_long")
+    return (fixed, None)
 
 
 async def repair_lean_def_check(

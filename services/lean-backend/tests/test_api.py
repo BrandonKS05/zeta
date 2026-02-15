@@ -431,8 +431,8 @@ def test_solve_llm_repair_def_check_after_def_check_failure(
 
     async def fake_repair_lean_compile_errors(
         code: str, compile_result, settings=None
-    ) -> str | None:
-        return None
+    ) -> tuple[str | None, str | None]:
+        return (None, "fake_skip")
 
     async def fake_repair_lean_def_check(code: str, diag_msg: str, settings=None) -> str | None:
         return good_code

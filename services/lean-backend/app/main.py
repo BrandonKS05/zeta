@@ -602,7 +602,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
     ):
         repair_start = time.perf_counter()
         try:
-            repaired = await repair_lean_compile_errors(
+            repaired, repair_error = await repair_lean_compile_errors(
                 generated.code,
                 compile_result,
                 settings=settings,
@@ -633,16 +633,19 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                         )
                     )
             else:
+                details = {"reason": "llm_returned_nothing"}
+                if repair_error:
+                    details["detail"] = repair_error
                 stages.append(
                     PipelineStage(
                         stage="patch_lean",
                         attempted=True,
                         success=False,
                         duration_ms=repair_elapsed_ms,
-                        details={"reason": "llm_returned_nothing"},
+                        details=details,
                     )
                 )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             repair_elapsed_ms = (time.perf_counter() - repair_start) * 1000
             stages.append(
                 PipelineStage(
@@ -650,7 +653,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                     attempted=True,
                     success=False,
                     duration_ms=repair_elapsed_ms,
-                    details={"reason": "exception"},
+                    details={"reason": "exception", "detail": str(exc)[:200]},
                 )
             )
 
