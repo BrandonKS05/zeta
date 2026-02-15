@@ -60,6 +60,11 @@ def _should_enforce_json_mode(endpoint: str) -> bool:
     return parsed.netloc.lower() == "api.openai.com"
 
 
+def _response_format_json_object() -> dict[str, Any]:
+    """Ask the API to return valid JSON (single object). Use for all endpoints to avoid empty content from strict schema."""
+    return {"type": "json_object"}
+
+
 def _interpret_json_schema() -> dict[str, Any]:
     return {
         "name": "lean_interpretation",
@@ -681,11 +686,12 @@ async def interpret_errors(
                 {"role": "user", "content": user_prompt},
             ],
         }
-    if _should_enforce_json_mode(endpoint):
-        if use_responses_api:
+    if use_responses_api:
+        if _should_enforce_json_mode(endpoint):
             payload["text"] = {"format": _interpret_json_text_format()}
-        else:
-            payload["response_format"] = _interpret_json_response_format()
+    else:
+        # Always request JSON for Chat Completions so the model returns parseable JSON
+        payload["response_format"] = _response_format_json_object()
     if settings.llm_max_completion_tokens > 0:
         payload[_token_limit_key(use_responses_api=use_responses_api)] = (
             settings.llm_max_completion_tokens
@@ -818,11 +824,11 @@ async def interpret_semantic_sanity(
             ],
             _token_limit_key(use_responses_api=False): min(settings.llm_max_completion_tokens or 1024, 1024),
         }
-    if _should_enforce_json_mode(endpoint):
-        if use_responses_api:
+    if use_responses_api:
+        if _should_enforce_json_mode(endpoint):
             payload["text"] = {"format": _interpret_json_text_format()}
-        else:
-            payload["response_format"] = _interpret_json_response_format()
+    else:
+        payload["response_format"] = _response_format_json_object()
 
     timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 30))
     try:
