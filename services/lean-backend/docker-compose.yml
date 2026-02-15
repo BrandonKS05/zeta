@@ -9,6 +9,10 @@ services:
         INSTALL_LEAN: ${INSTALL_LEAN:-true}
     env_file:
       - .env
+    environment:
+      LEAN_TEMP_DIR: ${LEAN_TEMP_DIR:-/lean-state/tmp}
     ports:
       - "8000:8000"
+    volumes:
+      - ${LEAN_STATE_DIR:-./.lean-state}:/lean-state
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000

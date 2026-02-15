@@ -25,6 +25,8 @@ RUN if [ "$INSTALL_LEAN" = "true" ]; then \
     fi
 
 COPY app ./app
+COPY scripts ./scripts
+RUN chmod +x ./scripts/*.sh
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

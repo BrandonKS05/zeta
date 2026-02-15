@@ -245,3 +245,82 @@ def test_solve_semantic_false_collapse_is_reported(monkeypatch: pytest.MonkeyPat
         assert llm_stage["details"]["reason"] == "semantic_false"
 
     asyncio.run(_run())
+
+
+def test_solve_includes_highlights_and_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        return GeneratedLean(code="theorem broken : True := by\n  exact Foo", metadata={})
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        return CompileResult(
+            success=False,
+            stdout="",
+            stderr="Main.lean:2:9: error: unknown constant 'Foo'",
+            diagnostics=[
+                Diagnostic(
+                    severity="error",
+                    message="unknown constant 'Foo'",
+                    line=2,
+                    column=9,
+                )
+            ],
+        )
+
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        return Interpretation(
+            summary="Unknown identifier in generated Lean code.",
+            items=[
+                InterpretationItem(
+                    error="unknown constant 'Foo'",
+                    source="latex",
+                    latex_start=6,
+                    latex_end=9,
+                    latex_excerpt="Foo",
+                    suggested_fix="Use an in-scope proof term.",
+                    replacement="trivial",
+                )
+            ],
+            suggestions=["Replace Foo with a valid term such as trivial."],
+        )
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.interpret_errors", fake_interpret_errors)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={
+                    "nl_input": "Proof Foo fails",
+                    "context": {"chunk_id": "chunk-test", "chunk_start": 0},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is False
+        assert payload["highlights"] is not None
+        assert payload["highlights"]["highlights"][0]["chunk_id"] == "chunk-test"
+        assert payload["highlights"]["highlights"][0]["text"] == "Foo"
+        assert payload["dashboard"]["status"] == "error"
+        assert payload["dashboard"]["headline"].startswith("Unknown identifier")
+        assert payload["dashboard"]["next_actions"]
+        highlight_stage = next(
+            stage for stage in payload["pipeline"]["stages"] if stage["stage"] == "highlight_resolution"
+        )
+        assert highlight_stage["attempted"] is True
+        assert highlight_stage["success"] is True
+
+    asyncio.run(_run())

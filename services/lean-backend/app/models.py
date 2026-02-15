@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SolveRequest(BaseModel):
@@ -45,6 +45,7 @@ class PipelineStage(BaseModel):
         "lean_compile",
         "semantic_validation",
         "llm_interpretation",
+        "highlight_resolution",
     ]
     attempted: bool = True
     success: bool | None = None
@@ -78,9 +79,114 @@ class Interpretation(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
 
 
+class HighlightSentence(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    sentence_id: str | None = None
+    start: int | None = Field(default=None, ge=0)
+    end: int | None = Field(default=None, ge=0)
+    text: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "sentence_id" not in payload and "sentenceId" in payload:
+            payload["sentence_id"] = payload.get("sentenceId")
+        return payload
+
+
+class HighlightChunk(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    chunk_id: str
+    text: str = ""
+    start: int = Field(default=0, ge=0)
+    end: int | None = Field(default=None, ge=0)
+    parent_id: str | None = None
+    sentences: list[HighlightSentence] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "chunk_id" not in payload and "chunkId" in payload:
+            payload["chunk_id"] = payload.get("chunkId")
+        if "parent_id" not in payload and "parentId" in payload:
+            payload["parent_id"] = payload.get("parentId")
+        return payload
+
+
+class HighlightResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    chunks: list[HighlightChunk] = Field(default_factory=list, min_length=1)
+    interpretation: Interpretation
+    active_chunk_id: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "active_chunk_id" not in payload and "activeChunkId" in payload:
+            payload["active_chunk_id"] = payload.get("activeChunkId")
+        return payload
+
+
+class HighlightRange(BaseModel):
+    chunk_id: str
+    item_index: int = Field(ge=0)
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    start_in_chunk: int = Field(ge=0)
+    end_in_chunk: int = Field(ge=0)
+    text: str
+    source: Literal[
+        "latex_span",
+        "latex_excerpt",
+        "quoted_text",
+        "replacement_text",
+        "keyword",
+        "llm",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    sentence_id: str | None = None
+
+
+class HighlightItemResult(BaseModel):
+    item_index: int = Field(ge=0)
+    error: str
+    resolved: bool
+    ranges: list[HighlightRange] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class HighlightResolveResponse(BaseModel):
+    highlights: list[HighlightRange] = Field(default_factory=list)
+    items: list[HighlightItemResult] = Field(default_factory=list)
+    unresolved_items: list[int] = Field(default_factory=list)
+    resolver: Literal["llm", "deterministic"] = "deterministic"
+    resolver_error: str | None = None
+
+
+class DashboardAdvice(BaseModel):
+    status: Literal["ok", "warning", "error"] = "ok"
+    headline: str
+    messages: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+
+
 class SolveResponse(BaseModel):
     lean_code: str
     compile: CompileResult
     interpretation: Interpretation | None = None
     interpretation_error: str | None = None
+    highlights: HighlightResolveResponse | None = None
+    dashboard: DashboardAdvice | None = None
     pipeline: PipelineTrace | None = None

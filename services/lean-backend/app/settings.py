@@ -18,6 +18,9 @@ class Settings(BaseModel):
     lean_command: str = "lean"
     lake_command: str = "lake"
     lake_project_dir: str | None = None
+    lean_temp_dir: str | None = None
+    elan_home: str | None = None
+    require_lake_for_mathlib: bool = True
     lean_timeout_seconds: float = 15.0
     compiler_output_max_chars: int = 20_000
 
@@ -28,6 +31,9 @@ class Settings(BaseModel):
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 1
+    enable_llm_highlights: bool = True
+    llm_highlight_timeout_seconds: float = 12.0
+    llm_highlight_max_retries: int = 0
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -49,6 +55,9 @@ def get_settings() -> Settings:
         lean_command=_env("LEAN_COMMAND", "lean"),
         lake_command=_env("LAKE_COMMAND", "lake"),
         lake_project_dir=_env("LAKE_PROJECT_DIR"),
+        lean_temp_dir=_env("LEAN_TEMP_DIR"),
+        elan_home=_env("ELAN_HOME"),
+        require_lake_for_mathlib=_env("REQUIRE_LAKE_FOR_MATHLIB", "true"),
         lean_timeout_seconds=_env("LEAN_TIMEOUT_SECONDS", "15"),
         compiler_output_max_chars=_env("COMPILER_OUTPUT_MAX_CHARS", "20000"),
         enable_llm_interpretation=_env("ENABLE_LLM_INTERPRETATION", "true"),
@@ -58,4 +67,7 @@ def get_settings() -> Settings:
         llm_model=_env("LLM_MODEL", "gpt-4o-mini"),
         llm_timeout_seconds=_env("LLM_TIMEOUT_SECONDS", "30"),
         llm_max_retries=_env("LLM_MAX_RETRIES", "1"),
+        enable_llm_highlights=_env("ENABLE_LLM_HIGHLIGHTS", "true"),
+        llm_highlight_timeout_seconds=_env("LLM_HIGHLIGHT_TIMEOUT_SECONDS", "12"),
+        llm_highlight_max_retries=_env("LLM_HIGHLIGHT_MAX_RETRIES", "0"),
     )

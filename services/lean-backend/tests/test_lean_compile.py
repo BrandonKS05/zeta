@@ -65,3 +65,44 @@ def test_compile_lean_failure_with_fake_compiler(tmp_path: Path) -> None:
     assert len(result.diagnostics) == 1
     assert result.diagnostics[0].line == 2
     assert result.diagnostics[0].column == 9
+
+
+def test_compile_lean_mathlib_requires_lake_project() -> None:
+    settings = SimpleNamespace(
+        lean_command="lean",
+        lake_command="lake",
+        lake_project_dir=None,
+        require_lake_for_mathlib=True,
+        lean_timeout_seconds=5.0,
+        compiler_output_max_chars=20_000,
+        lean_temp_dir=None,
+        elan_home=None,
+    )
+
+    result = asyncio.run(compile_lean("import Mathlib.Data.Real.Basic\n#check (0 : Real)", settings=settings))
+
+    assert result.success is False
+    assert "LAKE_PROJECT_DIR" in result.stderr
+    assert result.diagnostics
+    assert "Mathlib" in result.diagnostics[0].message
+
+
+def test_compile_lean_missing_lake_project_dir_is_clear(tmp_path: Path) -> None:
+    missing_dir = tmp_path / "does-not-exist"
+    settings = SimpleNamespace(
+        lean_command="lean",
+        lake_command="lake",
+        lake_project_dir=str(missing_dir),
+        require_lake_for_mathlib=True,
+        lean_timeout_seconds=5.0,
+        compiler_output_max_chars=20_000,
+        lean_temp_dir=None,
+        elan_home=None,
+    )
+
+    result = asyncio.run(compile_lean("def ok : Nat := 1", settings=settings))
+
+    assert result.success is False
+    assert "does not exist" in result.stderr
+    assert result.diagnostics
+    assert "LAKE_PROJECT_DIR" in result.diagnostics[0].message

@@ -4,14 +4,24 @@ import logging
 import re
 import time
 import uuid
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 
+from .highlight_llm import resolve_highlights_with_llm
+from .highlight_locator import resolve_highlights
 from .lean_compile import compile_lean
 from .llm_client import interpret_errors
 from .modal_client import ModalClientError, generate_lean
 from .models import (
+    DashboardAdvice,
     Diagnostic,
+    HighlightChunk,
+    HighlightResolveRequest,
+    HighlightResolveResponse,
+    HighlightSentence,
+    Interpretation,
+    InterpretationItem,
     PipelineStage,
     PipelineTrace,
     SemanticValidation,
@@ -60,6 +70,234 @@ async def add_request_context(request: Request, call_next):
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_sentences(raw_sentences: Any) -> list[HighlightSentence]:
+    if not isinstance(raw_sentences, list):
+        return []
+    parsed: list[HighlightSentence] = []
+    for raw in raw_sentences:
+        if not isinstance(raw, dict):
+            continue
+        sentence_id = raw.get("sentence_id") or raw.get("sentenceId")
+        parsed.append(
+            HighlightSentence(
+                sentence_id=str(sentence_id) if sentence_id else None,
+                start=_as_int(raw.get("start")),
+                end=_as_int(raw.get("end")),
+                text=str(raw.get("text")) if raw.get("text") is not None else None,
+            )
+        )
+    return parsed
+
+
+def _parse_chunks_from_context(context: dict[str, Any], nl_input: str) -> list[HighlightChunk]:
+    raw_chunks = context.get("chunks")
+    chunks: list[HighlightChunk] = []
+
+    if isinstance(raw_chunks, list):
+        for idx, raw in enumerate(raw_chunks):
+            if not isinstance(raw, dict):
+                continue
+            chunk_id_raw = raw.get("chunk_id") or raw.get("chunkId") or f"chunk-{idx + 1}"
+            chunk_id = str(chunk_id_raw).strip() or f"chunk-{idx + 1}"
+            text = str(raw.get("text")) if raw.get("text") is not None else ""
+            start = _as_int(raw.get("start"))
+            if start is None:
+                start = 0
+            end = _as_int(raw.get("end"))
+            if end is None:
+                end = start + len(text)
+            parent_id_raw = raw.get("parent_id") or raw.get("parentId")
+            parent_id = str(parent_id_raw) if parent_id_raw is not None else None
+            chunks.append(
+                HighlightChunk(
+                    chunk_id=chunk_id,
+                    text=text,
+                    start=start,
+                    end=end,
+                    parent_id=parent_id,
+                    sentences=_parse_sentences(raw.get("sentences")),
+                )
+            )
+
+    if chunks:
+        return chunks
+
+    chunk_id = str(context.get("chunk_id") or context.get("chunkId") or "input").strip() or "input"
+    chunk_start = _as_int(context.get("chunk_start") or context.get("chunkStart")) or 0
+    return [
+        HighlightChunk(
+            chunk_id=chunk_id,
+            text=nl_input,
+            start=chunk_start,
+            end=chunk_start + len(nl_input),
+            sentences=[],
+        )
+    ]
+
+
+def _build_highlight_interpretation(
+    interpretation: Interpretation | None,
+    compile_result,
+    semantic_validation: SemanticValidation,
+) -> Interpretation:
+    if interpretation is not None:
+        return interpretation
+
+    items: list[InterpretationItem] = []
+    for diag in compile_result.diagnostics:
+        if diag.severity not in {"error", "unknown"}:
+            continue
+        items.append(
+            InterpretationItem(
+                error=diag.message,
+                source="lean",
+                lean_line=diag.line,
+                lean_column=diag.column,
+            )
+        )
+
+    if not items and semantic_validation.reasons:
+        for reason in semantic_validation.reasons:
+            items.append(InterpretationItem(error=reason, source="unknown"))
+
+    if not items and compile_result.stderr.strip():
+        first_line = compile_result.stderr.strip().splitlines()[0]
+        items.append(InterpretationItem(error=first_line, source="lean"))
+
+    summary = items[0].error if items else "Lean compilation failed."
+    return Interpretation(summary=summary, items=items, suggestions=[])
+
+
+async def _resolve_highlights_for_request(
+    request: HighlightResolveRequest,
+) -> HighlightResolveResponse:
+    if not request.interpretation.items:
+        return HighlightResolveResponse(resolver="deterministic")
+
+    llm_configured = bool(settings.llm_model) and (
+        bool(settings.llm_api_key)
+        or bool(settings.llm_endpoint_url)
+        or settings.llm_base_url.rstrip("/") != "https://api.openai.com/v1"
+    )
+
+    if settings.enable_llm_highlights and llm_configured:
+        try:
+            return await resolve_highlights_with_llm(request, settings=settings)
+        except Exception as exc:  # pragma: no cover - keep pipeline resilient
+            logger.warning("highlight llm failed, falling back to deterministic: %s", exc)
+            fallback = resolve_highlights(request)
+            fallback.resolver = "deterministic"
+            fallback.resolver_error = str(exc)
+            return fallback
+
+    return resolve_highlights(request)
+
+
+def _format_diagnostic_message(diag: Diagnostic) -> str:
+    location = ""
+    if diag.line is not None and diag.column is not None:
+        location = f" (L{diag.line}:C{diag.column})"
+    return f"{diag.message}{location}"
+
+
+def build_dashboard_advice(
+    *,
+    compile_result,
+    interpretation: Interpretation | None,
+    interpretation_error: str | None,
+    semantic_validation: SemanticValidation,
+    highlights: HighlightResolveResponse | None,
+) -> DashboardAdvice:
+    if compile_result.success and semantic_validation.success:
+        return DashboardAdvice(
+            status="ok",
+            headline="Lean compiled successfully.",
+            messages=[],
+            next_actions=[],
+        )
+
+    if semantic_validation.collapsed_to_false:
+        headline = "Generated Lean statement collapsed to False."
+    elif interpretation and interpretation.summary:
+        headline = interpretation.summary
+    elif compile_result.diagnostics:
+        headline = compile_result.diagnostics[0].message
+    else:
+        headline = "Lean compilation failed."
+
+    messages: list[str] = []
+    for reason in semantic_validation.reasons[:3]:
+        if reason and reason not in messages:
+            messages.append(reason)
+    for diag in compile_result.diagnostics[:3]:
+        text = _format_diagnostic_message(diag)
+        if text not in messages:
+            messages.append(text)
+    if interpretation_error:
+        messages.append(f"Interpretation fallback: {interpretation_error}")
+    if highlights and highlights.unresolved_items:
+        messages.append(
+            f"{len(highlights.unresolved_items)} issue(s) were not mapped to exact text spans."
+        )
+
+    next_actions: list[str] = []
+    if interpretation:
+        for suggestion in interpretation.suggestions:
+            suggestion_text = suggestion.strip()
+            if suggestion_text and suggestion_text not in next_actions:
+                next_actions.append(suggestion_text)
+            if len(next_actions) >= 5:
+                break
+    if not next_actions and not compile_result.success:
+        next_actions = [
+            "Review highlighted text spans first.",
+            "Apply one suggested Lean edit and re-run.",
+            "If unresolved, simplify the natural-language statement.",
+        ]
+
+    return DashboardAdvice(
+        status="error" if not compile_result.success else "warning",
+        headline=headline,
+        messages=messages,
+        next_actions=next_actions,
+    )
+
+
+@app.post("/v1/lean/highlights", response_model=HighlightResolveResponse)
+async def resolve_highlights_endpoint(payload: HighlightResolveRequest) -> HighlightResolveResponse:
+    logger.info(
+        "received highlight resolve request chunk_count=%s interpretation_items=%s",
+        len(payload.chunks),
+        len(payload.interpretation.items),
+    )
+    started_at = time.perf_counter()
+    response = await _resolve_highlights_for_request(payload)
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "highlight resolve complete duration_ms=%.2f resolver=%s resolved_items=%s unresolved_items=%s",
+        duration_ms,
+        response.resolver,
+        len(response.highlights),
+        len(response.unresolved_items),
+    )
+    return response
 
 
 def run_semantic_validation(
@@ -288,6 +526,75 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             )
         )
 
+    highlights: HighlightResolveResponse | None = None
+    if not compile_result.success:
+        highlight_start = time.perf_counter()
+        highlight_chunks = _parse_chunks_from_context(payload.context, payload.nl_input)
+        active_chunk_id = str(
+            payload.context.get("active_chunk_id")
+            or payload.context.get("activeChunkId")
+            or highlight_chunks[0].chunk_id
+        )
+        highlight_interpretation = _build_highlight_interpretation(
+            interpretation,
+            compile_result,
+            semantic_validation,
+        )
+        highlight_request = HighlightResolveRequest(
+            chunks=highlight_chunks,
+            interpretation=highlight_interpretation,
+            active_chunk_id=active_chunk_id,
+        )
+        highlights = await _resolve_highlights_for_request(highlight_request)
+        highlight_elapsed_ms = (time.perf_counter() - highlight_start) * 1000
+        logger.info(
+            "stage_complete stage=highlight_resolution duration_ms=%.2f resolver=%s resolved=%s unresolved=%s",
+            highlight_elapsed_ms,
+            highlights.resolver,
+            len(highlights.highlights),
+            len(highlights.unresolved_items),
+        )
+        stages.append(
+            PipelineStage(
+                stage="highlight_resolution",
+                attempted=True,
+                success=True,
+                duration_ms=highlight_elapsed_ms,
+                details={
+                    "resolver": highlights.resolver,
+                    "resolved_count": len(highlights.highlights),
+                    "unresolved_count": len(highlights.unresolved_items),
+                    "resolver_error": highlights.resolver_error,
+                },
+            )
+        )
+    else:
+        logger.info("stage_skipped stage=highlight_resolution reason=compile_success")
+        stages.append(
+            PipelineStage(
+                stage="highlight_resolution",
+                attempted=False,
+                success=None,
+                duration_ms=None,
+                details={"reason": "compile_success"},
+            )
+        )
+        highlights = HighlightResolveResponse(
+            highlights=[],
+            items=[],
+            unresolved_items=[],
+            resolver="deterministic",
+            resolver_error=None,
+        )
+
+    dashboard = build_dashboard_advice(
+        compile_result=compile_result,
+        interpretation=interpretation,
+        interpretation_error=interpretation_error,
+        semantic_validation=semantic_validation,
+        highlights=highlights,
+    )
+
     pipeline_elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
     logger.info(
         "pipeline_complete duration_ms=%.2f compile_success=%s llm_attempted=%s",
@@ -301,6 +608,8 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         compile=compile_result,
         interpretation=interpretation,
         interpretation_error=interpretation_error,
+        highlights=highlights,
+        dashboard=dashboard,
         pipeline=PipelineTrace(
             total_duration_ms=pipeline_elapsed_ms,
             stages=stages,

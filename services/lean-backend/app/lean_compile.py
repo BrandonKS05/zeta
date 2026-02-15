@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -18,6 +19,7 @@ _DIAG_RE = re.compile(
 _DIAG_NO_COL_RE = re.compile(
     r"^(?P<file>.*?):(?P<line>\d+): (?P<severity>error|warning|info): (?P<message>.*)$"
 )
+_MATHLIB_IMPORT_RE = re.compile(r"(?m)^\s*import\s+Mathlib(?:\.|$)")
 
 
 def parse_lean_diagnostics(output: str) -> list[Diagnostic]:
@@ -61,17 +63,64 @@ def parse_lean_diagnostics(output: str) -> list[Diagnostic]:
 
 async def compile_lean(code: str, *, settings: Settings | None = None) -> CompileResult:
     settings = settings or get_settings()
+    lake_project_dir = getattr(settings, "lake_project_dir", None)
+    require_lake_for_mathlib = bool(getattr(settings, "require_lake_for_mathlib", True))
+    lean_temp_dir = getattr(settings, "lean_temp_dir", None)
+    elan_home = getattr(settings, "elan_home", None)
+    lean_timeout_seconds = float(getattr(settings, "lean_timeout_seconds", 15.0))
+    compiler_output_max_chars = int(getattr(settings, "compiler_output_max_chars", 20_000))
+    lean_command = str(getattr(settings, "lean_command", "lean"))
+    lake_command = str(getattr(settings, "lake_command", "lake"))
 
-    with tempfile.TemporaryDirectory(prefix="lean_compile_") as tmp_dir_str:
+    uses_mathlib = bool(_MATHLIB_IMPORT_RE.search(code))
+    if uses_mathlib and not lake_project_dir and require_lake_for_mathlib:
+        message = (
+            "Generated Lean code imports Mathlib, but LAKE_PROJECT_DIR is not configured. "
+            "Set LAKE_PROJECT_DIR to a Lake project with Mathlib installed."
+        )
+        diagnostic = Diagnostic(severity="error", message=message)
+        return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])
+
+    project_dir_path: Path | None = None
+    if lake_project_dir:
+        project_dir_path = Path(lake_project_dir)
+        if not project_dir_path.exists():
+            message = (
+                f"LAKE_PROJECT_DIR does not exist: '{lake_project_dir}'. "
+                "Create/bootstrap the Lake project before compiling."
+            )
+            diagnostic = Diagnostic(severity="error", message=message)
+            return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])
+        has_lake_file = (
+            (project_dir_path / "lakefile.lean").exists()
+            or (project_dir_path / "lakefile.toml").exists()
+        )
+        if not has_lake_file:
+            message = (
+                f"LAKE_PROJECT_DIR '{lake_project_dir}' is missing lakefile.lean/lakefile.toml. "
+                "Initialize a Lake project there (for example using bootstrap_mathlib_project.sh)."
+            )
+            diagnostic = Diagnostic(severity="error", message=message)
+            return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])
+
+    temp_parent: Path | None = None
+    if lean_temp_dir:
+        temp_parent = Path(lean_temp_dir)
+        temp_parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(
+        prefix="lean_compile_",
+        dir=temp_parent.as_posix() if temp_parent else None,
+    ) as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         main_file = tmp_dir / "Main.lean"
         main_file.write_text(code, encoding="utf-8")
 
-        if settings.lake_project_dir:
-            command = [settings.lake_command, "env", settings.lean_command, str(main_file)]
-            cwd = settings.lake_project_dir
+        if project_dir_path:
+            command = [lake_command, "env", lean_command, str(main_file)]
+            cwd = project_dir_path.as_posix()
         else:
-            command = [settings.lean_command, str(main_file)]
+            command = [lean_command, str(main_file)]
             cwd = tmp_dir_str
 
         logger.info(
@@ -82,11 +131,16 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
         )
 
         try:
+            env = os.environ.copy()
+            if elan_home:
+                env["ELAN_HOME"] = str(elan_home)
+
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
         except FileNotFoundError:
             message = (
@@ -98,13 +152,13 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(), timeout=settings.lean_timeout_seconds
+                process.communicate(), timeout=lean_timeout_seconds
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
             timeout_message = (
-                f"Lean compile timed out after {settings.lean_timeout_seconds:.1f}s"
+                f"Lean compile timed out after {lean_timeout_seconds:.1f}s"
             )
             diagnostic = Diagnostic(severity="error", message=timeout_message)
             return CompileResult(
@@ -141,7 +195,7 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
 
         return CompileResult(
             success=success,
-            stdout=truncate_text(stdout, settings.compiler_output_max_chars),
-            stderr=truncate_text(stderr, settings.compiler_output_max_chars),
+            stdout=truncate_text(stdout, compiler_output_max_chars),
+            stderr=truncate_text(stderr, compiler_output_max_chars),
             diagnostics=diagnostics,
         )
