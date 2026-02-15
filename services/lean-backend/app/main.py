@@ -861,7 +861,9 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                     )
                     llm_stage_appended = True
                 else:
-                    # Model was called but returned no issues (or API/parse failed)
+                    # Model was called; may have returned no issues (items=[]) or API/parse failed
+                    if sanity_interp is not None:
+                        interpretation = sanity_interp
                     item_count = len(sanity_interp.items) if sanity_interp else 0
                     stages.append(
                         PipelineStage(

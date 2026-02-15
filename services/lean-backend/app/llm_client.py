@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Literal
@@ -846,30 +847,39 @@ async def interpret_semantic_sanity(
         payload["response_format"] = _response_format_json_object()
 
     timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 30))
+    content: str | None = None
+    data: dict[str, Any] | None = None
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(endpoint, json=payload, headers=headers)
+            for attempt in range(2):
+                response = await client.post(endpoint, json=payload, headers=headers)
+                if response.status_code >= 400:
+                    logger.warning(
+                        "interpret_semantic_sanity http status=%s body=%s",
+                        response.status_code,
+                        (response.text or "")[:200],
+                    )
+                    return None
+                try:
+                    data = response.json()
+                except ValueError:
+                    return None
+                content = _extract_message_content(data)
+                logger.info(
+                    "llm_response (semantic_sanity) attempt=%s content_len=%s preview=%s",
+                    attempt + 1,
+                    len(content) if content else 0,
+                    truncate_text(content or "", 1200),
+                )
+                if content:
+                    break
+                _log_llm_response_when_content_missing(data, logger)
+                logger.warning("llm_semantic_sanity content=empty attempt=%s retrying", attempt + 1)
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
     except (httpx.TransportError, httpx.TimeoutException):
         return None
-    if response.status_code >= 400:
-        logger.warning(
-            "interpret_semantic_sanity http status=%s body=%s",
-            response.status_code,
-            (response.text or "")[:200],
-        )
-        return None
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-    content = _extract_message_content(data)
-    logger.info(
-        "llm_response (semantic_sanity) content_len=%s preview=%s",
-        len(content) if content else 0,
-        truncate_text(content or "", 1200),
-    )
-    if not content:
-        logger.warning("llm_semantic_sanity content=empty")
+    if not content or not data:
         return None
     parsed = extract_json_object(content)
     if not isinstance(parsed, dict) or "items" not in parsed:
@@ -879,7 +889,7 @@ async def interpret_semantic_sanity(
         )
         return None
     items_raw = parsed.get("items")
-    if not isinstance(items_raw, list) or len(items_raw) == 0:
+    if not isinstance(items_raw, list):
         return None
     summary = str(parsed.get("summary") or "Statement may be mathematically false.").strip()
     suggestions = _normalize_suggestion_list(parsed.get("suggestions"))
@@ -898,8 +908,6 @@ async def interpret_semantic_sanity(
                 confidence=float(raw["confidence"]) if isinstance(raw.get("confidence"), (int, float)) else None,
             )
         )
-    if not items:
-        return None
     return Interpretation(summary=summary, items=items, suggestions=suggestions)
 
 
