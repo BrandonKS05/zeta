@@ -1,0 +1,379 @@
+Benchmark: 20 cases (7 correct, 13 incorrect)
+  GPT model   : gpt-4.1  ($2.0/1M in, $8.0/1M out)
+  Pipeline URL: https://tree26--herald-math-grammarly-api.modal.run  (~$0.76/GPU-hr)
+
+[ 1/20] T hard-true-p2-div-24                               GPT:T(ok) 2253ms $0.0023  Pipe:F(X) 17206ms $0.0036
+[ 2/20] T hard-true-n17-div-510                             GPT:F(X) 4065ms $0.0043  Pipe:F(X) 12287ms $0.0026
+[ 3/20] T hard-true-flat-function-exists                    GPT:T(ok) 3788ms $0.0022  Pipe:F(X) 30695ms $0.0065
+[ 4/20] T hard-true-2n-gt-n2-from5                          GPT:T(ok) 1627ms $0.0020  Pipe:F(X) 10476ms $0.0022
+[ 5/20] T hard-true-algebraic-countable                     GPT:T(ok) 1501ms $0.0017  Pipe:F(X) 31647ms $0.0067
+[ 6/20] T hard-true-ln-inequality                           GPT:T(ok) 2376ms $0.0026  Pipe:F(X) 30128ms $0.0064
+[ 7/20] T hard-true-continuous-bijection-inv                GPT:T(ok) 1737ms $0.0020  Pipe:F(X) 32125ms $0.0068
+[ 8/20] F hard-false-euler-prime-polynomial                 GPT:F(ok) 2605ms $0.0029  Pipe:F(ok) 10937ms $0.0023
+[ 9/20] F hard-false-fermat-primes                          GPT:F(ok) 2322ms $0.0026  Pipe:F(ok) 11494ms $0.0024
+[10/20] F hard-false-goldbach                               GPT:F(ok) 1710ms $0.0022  Pipe:F(ok) 12302ms $0.0026
+[11/20] F hard-false-collatz                                GPT:F(ok) 2637ms $0.0028  Pipe:F(ok) 12930ms $0.0027
+[12/20] F hard-false-divisibility-or                        GPT:F(ok) 2131ms $0.0028  Pipe:F(ok) 11958ms $0.0025
+[13/20] F hard-false-odd-sum-off-by-one                     GPT:F(ok) 2524ms $0.0027  Pipe:F(ok) 12388ms $0.0026
+[14/20] F hard-false-grandi-series                          GPT:F(ok) 3095ms $0.0032  Pipe:F(ok) 28315ms $0.0060
+[15/20] F hard-false-monotone-converges                     GPT:F(ok) 2894ms $0.0022  Pipe:F(ok) 30910ms $0.0065
+[16/20] F hard-false-2n-gt-n2-all                           GPT:F(ok) 3829ms $0.0033  Pipe:F(ok) 10050ms $0.0021
+[17/20] F hard-false-x2-eq-4                                GPT:F(ok) 2530ms $0.0022  Pipe:F(ok) 28397ms $0.0060
+[18/20] F hard-false-countable-intersection-open            GPT:F(ok) 2433ms $0.0028  Pipe:ERR
+[19/20] F hard-false-det-additive                           GPT:F(ok) 2545ms $0.0028  Pipe:F(ok) 28693ms $0.0061
+[20/20] F hard-false-uniformly-cont-product                 GPT:F(ok) 3103ms $0.0029  Pipe:F(ok) 32122ms $0.0068
+
+==========================================================================================
+COMPARISON TABLE
+==========================================================================================
+Case                                         Exp    GPT      GPT$  GPTms   Pipe     Pipe$ Pipems
+------------------------------------------------------------------------------------------------
+hard-true-p2-div-24                            T   T ok   $0.0023   2253    F X   $0.0036  17206
+hard-true-n17-div-510                          T    F X   $0.0043   4065    F X   $0.0026  12287
+hard-true-flat-function-exists                 T   T ok   $0.0022   3788    F X   $0.0065  30695
+hard-true-2n-gt-n2-from5                       T   T ok   $0.0020   1627    F X   $0.0022  10476
+hard-true-algebraic-countable                  T   T ok   $0.0017   1501    F X   $0.0067  31647
+hard-true-ln-inequality                        T   T ok   $0.0026   2376    F X   $0.0064  30128
+hard-true-continuous-bijection-inv             T   T ok   $0.0020   1737    F X   $0.0068  32125
+hard-false-euler-prime-polynomial              F   F ok   $0.0029   2605   F ok   $0.0023  10937
+hard-false-fermat-primes                       F   F ok   $0.0026   2322   F ok   $0.0024  11494
+hard-false-goldbach                            F   F ok   $0.0022   1710   F ok   $0.0026  12302
+hard-false-collatz                             F   F ok   $0.0028   2637   F ok   $0.0027  12930
+hard-false-divisibility-or                     F   F ok   $0.0028   2131   F ok   $0.0025  11958
+hard-false-odd-sum-off-by-one                  F   F ok   $0.0027   2524   F ok   $0.0026  12388
+hard-false-grandi-series                       F   F ok   $0.0032   3095   F ok   $0.0060  28315
+hard-false-monotone-converges                  F   F ok   $0.0022   2894   F ok   $0.0065  30910
+hard-false-2n-gt-n2-all                        F   F ok   $0.0033   3829   F ok   $0.0021  10050
+hard-false-x2-eq-4                             F   F ok   $0.0022   2530   F ok   $0.0060  28397
+hard-false-countable-intersection-open         F   F ok   $0.0028   2433    ERR                 
+hard-false-det-additive                        F   F ok   $0.0028   2545   F ok   $0.0061  28693
+hard-false-uniformly-cont-product              F   F ok   $0.0029   3103   F ok   $0.0068  32122
+
+==========================================================================================
+AGGREGATE
+==========================================================================================
+
+  GPT gpt-4.1:
+    Accuracy    : 19/20 (95.0%)
+    Avg latency : 2585 ms
+    Med latency : 2530 ms
+    Total cost  : $0.052404
+    Avg cost/q  : $0.002620
+
+  Herald pipeline:
+    Accuracy    : 12/19 (63.2%)
+    Avg latency : 30026 ms
+    Med latency : 28315 ms
+    Total cost  : $0.083401  (est. GPU upper bound)
+    Avg cost/q  : $0.004390
+
+  Total wall time: 652.3s
+
+==========================================================================================
+DETAILED RESULTS
+==========================================================================================
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-p2-div-24  (expected: CORRECT)
+  For all primes $p > 3$, $p^2 - 1$ is divisible by $24$.
+  GPT: is_correct=True  confidence=high  (2253ms, $0.0023)
+       reasoning: For any prime p > 3, p is odd and not divisible by 3. Thus, p^2 ≡ 1 mod 8 (since any odd number squared is 1 mod 8), so p^2 - 1 is divisible by 8. Also, p ≠ 0 m
+       This is a well-known and correct result in elementary number theory.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (17206ms, $0.0036)
+       type: ∀ p : Nat, Nat.Prime p ∧ p > 3 → 24 ∣ p^2 - 1
+       decl: axiom prime_sq_sub_one_div_24 : ∀ p : Nat, Nat.Prime p ∧ p > 3 → 24 ∣ p^2 - 1
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: Nat.Prime p; p > 3
+       feedback: Model notes: Assumes p is a prime number greater than 3.
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-n17-div-510  (expected: CORRECT)
+  For all natural numbers $n$, $n^{17} - n$ is divisible by $510$.
+  GPT: is_correct=False  confidence=high  (4065ms, $0.0043)
+       reasoning: The statement claims that for all natural numbers n, n^{17} - n is divisible by 510. Fermat's little theorem implies n^{p} ≡ n mod p for prime p, so n^{17} - n 
+       The statement is false; n^{17} - n is not always divisible by 510 for all natural numbers n.
+       counterexample: n = 2: 2^{17} - 2 = 131070, which is not divisible by 510.
+       [error] The statement is false for n = 2, as 2^{17} - 2 is not divisible by 510.
+       [warning] The statement misapplies Fermat's little theorem, which only guarantees divisibility by each prime factor, not their pro
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (12287ms, $0.0026)
+       type: ∀ n : Nat, 510 ∣ n ^ 17 - n
+       decl: axiom n17_sub_n_div_510 : ∀ n : Nat, 510 ∣ n ^ 17 - n
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number
+       feedback: Model notes: Fermat's Little Theorem: For any natural number n, n raised to the power of 17 minus n is divisible by 510.
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-flat-function-exists  (expected: CORRECT)
+  There exists a smooth function $f: \mathbb{R} \to \mathbb{R}$ such that $f$ and all its derivatives are zero at $0$, but
+  GPT: is_correct=True  confidence=high  (3788ms, $0.0022)
+       reasoning: This is a classic result in real analysis: the existence of a nonzero smooth function whose Taylor series at a point (here, 0) is identically zero. The standard
+       This is a well-known and important example in analysis, demonstrating that the vanishing of all derivatives at a point does not imply a function is identically 
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30695ms, $0.0065)
+       type: { "lean_statement_type": "ExistsSmoothFunctionWithAllDerivativesZeroAtOrigin", "assumptions": [ "import Mathlib", "open 
+       decl: axiom flat_function_exists : { "lean_statement_type": "ExistsSmoothFunctionWithAllDerivativesZeroAtOrigin", "assumptions
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the diagnostics and revise the wording/notation to improve the statement.
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-2n-gt-n2-from5  (expected: CORRECT)
+  For all integers $n \ge 5$, $2^n > n^2$.
+  GPT: is_correct=True  confidence=high  (1627ms, $0.0020)
+       reasoning: For n = 5, 2^5 = 32 and 5^2 = 25, so 32 > 25. For n = 6, 2^6 = 64 and 6^2 = 36, so 64 > 36. For all n ≥ 5, 2^n grows much faster than n^2, and this can be prove
+       The statement is correct and is a well-known result that can be proven by induction.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (10476ms, $0.0022)
+       type: ∀ n : Nat, 5 ≤ n → 2^n > n^2
+       decl: axiom exp_gt_sq_from5 : ∀ n : Nat, 5 ≤ n → 2^n > n^2
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; n >= 5
+       feedback: Model notes: The proposition states that for all integers n greater than or equal to 5, 2 raised to the power of n is gr
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-algebraic-countable  (expected: CORRECT)
+  The set of all algebraic numbers is countable.
+  GPT: is_correct=True  confidence=high  (1501ms, $0.0017)
+       reasoning: The set of algebraic numbers consists of all complex numbers that are roots of nonzero polynomials with integer coefficients. There are countably many such poly
+       This is a well-known and proven theorem in mathematics.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31647ms, $0.0067)
+       type: { "lean_statement_type": "∀ (a : Set Complex), (∀ x : Complex, x ∈ a ↔ ∃ p : Polynomial Int, p.eval x = 0) → a.Countable
+       decl: axiom algebraic_countable : { "lean_statement_type": "∀ (a : Set Complex), (∀ x : Complex, x ∈ a ↔ ∃ p : Polynomial Int,
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Revise the statement to avoid timeouts
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-ln-inequality  (expected: CORRECT)
+  For all real $x > 0$, $\ln(1 + x) \le x$.
+  GPT: is_correct=True  confidence=high  (2376ms, $0.0026)
+       reasoning: The function $f(x) = rac{	ext{d}}{	ext{d}x}(	ext{ln}(1+x) - x) = rac{1}{1+x} - 1 = -rac{x}{1+x} < 0$ for $x > 0$, so $f(x)$ is strictly decreasing. At $x=0$,
+       This is a standard and well-known inequality in real analysis, and it is correct for all $x > 0$.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30128ms, $0.0064)
+       type: ∀ x : Real, 0 < x → Real.log (1 + x) ≤ x
+       decl: axiom ln_one_plus_le : ∀ x : Real, 0 < x → Real.log (1 + x) ≤ x
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: x is a real number; x > 0
+       feedback: Model notes: The statement formalizes the inequality $\log(1 + x) \leq x$ for all $x > 0$.
+
+────────────────────────────────────────────────────────────────────────
+  hard-true-continuous-bijection-inv  (expected: CORRECT)
+  If $f: \mathbb{R} \to \mathbb{R}$ is a continuous bijection, then $f^{-1}$ is continuous.
+  GPT: is_correct=True  confidence=high  (1737ms, $0.0020)
+       reasoning: The real line \( \mathbb{R} \) is a Hausdorff, locally compact, and connected topological space. Any continuous bijection from \( \mathbb{R} \) onto itself is a
+       The statement is a well-known theorem in real analysis and topology, and is correct as stated.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (32125ms, $0.0068)
+       type: { "lean_statement_type": "theorem inv_continuous_of_bijective {f : Real → Real} (hf : Continuous f) (hb : Function.Bijec
+       decl: axiom cont_bij_inv_cont : { "lean_statement_type": "theorem inv_continuous_of_bijective {f : Real → Real} (hf : Continuo
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Revise the statement to include the domain and codomain of the function, as well as the conditions f
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-euler-prime-polynomial  (expected: INCORRECT)
+  For all non-negative integers $n$, the number $n^2 + n + 41$ is prime.
+  Ground truth: Fails at n=40: 40^2+40+41 = 1681 = 41^2.
+  GPT: is_correct=False  confidence=high  (2605ms, $0.0029)
+       reasoning: The polynomial n^2 + n + 41 produces primes for n = 0 to 39, but for n = 40, it yields 40^2 + 40 + 41 = 1681, which equals 41 × 41 and is therefore composite. T
+       The statement is false; it fails for n = 40 and infinitely many larger n. It is a famous example in number theory.
+       counterexample: n = 40: 40^2 + 40 + 41 = 1681 = 41 × 41 (not prime)
+       [error] The statement is false for n = 40 and all n ≡ 0 mod 41 after that.
+       [info] The statement is a well-known classical example of a polynomial that produces many primes but not for all non-negative i
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (10937ms, $0.0023)
+       type: ∀ n : Nat, Nat.Prime (n^2 + n + 41)
+       decl: axiom euler_prime_poly : ∀ n : Nat, Nat.Prime (n^2 + n + 41)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: Nat.Prime is the property that a natural number is prime
+       feedback: Model notes: The statement holds for all non-negative integers n, as evidenced by the fact that the expression n^2 + n +
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-fermat-primes  (expected: INCORRECT)
+  For all non-negative integers $n$, the Fermat number $F_n = 2^{2^n} + 1$ is prime.
+  Ground truth: F_5 = 4294967297 = 641 × 6700417. Only F_0..F_4 are known primes.
+  GPT: is_correct=False  confidence=high  (2322ms, $0.0026)
+       reasoning: It is known that the first few Fermat numbers (for n = 0, 1, 2, 3, 4) are prime, but for n ≥ 5, all known Fermat numbers are composite. In fact, F_5 = 429496729
+       The statement is false; not all Fermat numbers are prime, and counterexamples are well known.
+       counterexample: n = 5: F_5 = 4294967297 = 641 × 6700417
+       [error] The statement is false for n = 5 and higher, as F_5 and larger Fermat numbers are not prime.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11494ms, $0.0024)
+       type: ∀ n : Nat, Nat.Prime (2^(2^n) + 1)
+       decl: axiom fermat_primes_all : ∀ n : Nat, Nat.Prime (2^(2^n) + 1)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: Nat.Prime is the property that a number is prime
+       feedback: Model notes: This statement is true for all non-negative integers n. The Fermat numbers are defined as F_n = 2^(2^n) + 1
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-goldbach  (expected: INCORRECT)
+  Every even integer greater than $2$ can be expressed as the sum of two prime numbers.
+  Ground truth: Goldbach's conjecture: widely believed but UNPROVEN. Not a theorem.
+  GPT: is_correct=False  confidence=high  (1710ms, $0.0022)
+       reasoning: This is the famous Goldbach conjecture, which asserts that every even integer greater than 2 is the sum of two primes. Despite extensive computational evidence 
+       This is a well-known open problem in number theory and is not a proven theorem.
+       [error] Statement is an unproven conjecture, not a theorem.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (12302ms, $0.0026)
+       type: ∀ n : Nat, 2 < n ∧ Even n → ∃ p q : Nat, p.Prime ∧ q.Prime ∧ n = p + q
+       decl: axiom goldbach_conjecture : ∀ n : Nat, 2 < n ∧ Even n → ∃ p q : Nat, p.Prime ∧ q.Prime ∧ n = p + q
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: import Mathlib
+open Bool Subtype
+open Nat
+; ∀ n : ℕ, n > 2 ∧ Even n
+       feedback: Model notes: Assumes the Goldbach Conjecture is true.
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-collatz  (expected: INCORRECT)
+  For all positive integers $n$, the sequence defined by $a_1 = n$, $a_{k+1} = a_k/2$ if $a_k$ is even and $a_{k+1} = 3a_k
+  Ground truth: Collatz conjecture: unproven. Verified computationally but no proof exists.
+  GPT: is_correct=False  confidence=high  (2637ms, $0.0028)
+       reasoning: This is the Collatz conjecture, which asserts that the described sequence (the Collatz sequence) always reaches 1 for any positive integer starting value. Despi
+       The statement is a well-known open problem and is not a proven theorem. It should be labeled as an unproven conjecture.
+       [error] The statement is the Collatz conjecture, which is unproven.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (12930ms, $0.0027)
+       type: { "lean_statement_type": "∀ n : Nat, 0 < n → ∃ k : Nat, a k = 1", "assumptions": ["import Mathlib", "open Finset", "open
+       decl: axiom collatz_conjecture : { "lean_statement_type": "∀ n : Nat, 0 < n → ∃ k : Nat, a k = 1", "assumptions": ["import Mat
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean parsing failed. Check punctuation and Lean syntax around quantifiers.
+       feedback: LLM final feedback: Revise the statement to ensure it follows Lean syntax rules, particularly regarding punctuation and 
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-divisibility-or  (expected: INCORRECT)
+  For all integers $a, b, c$: if $a$ divides $bc$, then $a$ divides $b$ or $a$ divides $c$.
+  Ground truth: Counterexample: a=6, b=4, c=3. 6|12 but 6∤4 and 6∤3. Only true when a is prime.
+  GPT: is_correct=False  confidence=high  (2131ms, $0.0028)
+       reasoning: The statement is false in general. For example, let a = 6, b = 2, c = 3. Then 6 divides 2*3 = 6, but 6 does not divide 2 and 6 does not divide 3. Thus, the impl
+       This is a common misconception; the property only holds for prime divisors, not all integers.
+       counterexample: a = 6, b = 2, c = 3: 6 divides 6, but 6 does not divide 2 and 6 does not divide 3.
+       [error] The statement is false for composite values of a.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (11958ms, $0.0025)
+       type: ∀ (a b c : Int), a ∣ b * c → a ∣ b ∨ a ∣ c
+       decl: axiom div_bc_implies_div_b_or_c : ∀ (a b c : Int), a ∣ b * c → a ∣ b ∨ a ∣ c
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: a, b, c are integers
+       feedback: Model notes: This is the statement of the lemma 'dvd_mul_eq_dvd_or_dvd' from the 'Mathlib' library, which uses the 'dvd'
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-odd-sum-off-by-one  (expected: INCORRECT)
+  For all positive integers $n$, the sum of the first $n$ odd natural numbers equals $n^2 + 1$.
+  Ground truth: Sum of first n odd numbers = n^2, NOT n^2+1. Off by one.
+  GPT: is_correct=False  confidence=high  (2524ms, $0.0027)
+       reasoning: The sum of the first n odd natural numbers is a classic result and equals n^2, not n^2 + 1. The formula given in the statement is incorrect. For example, for n=
+       The statement is false because the correct formula is n^2, not n^2 + 1.
+       counterexample: For n=1: sum is 1, but 1^2 + 1 = 2.
+       [error] The formula for the sum of the first n odd natural numbers is incorrect; it should be n^2, not n^2 + 1.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (12388ms, $0.0026)
+       type: ∀ n : Nat, ∑ i in Finset.range n, (2 * i + 1) = n^2 + 1
+       decl: axiom odd_sum_wrong : ∀ n : Nat, ∑ i in Finset.range n, (2 * i + 1) = n^2 + 1
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number
+       feedback: Model notes: The statement holds for all positive integers n, as the sum of the first n odd natural numbers is equal to 
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-grandi-series  (expected: INCORRECT)
+  The infinite series $1 - 1 + 1 - 1 + 1 - 1 + \cdots$ converges to $\frac{1}{2}$.
+  Ground truth: Grandi's series diverges (partial sums alternate 1,0,1,0,...). 1/2 is the Cesàro sum, not the limit.
+  GPT: is_correct=False  confidence=high  (3095ms, $0.0032)
+       reasoning: The series $1 - 1 + 1 - 1 + 	ext{etc}$ is known as Grandi's series. Its sequence of partial sums alternates between 1 and 0, so it does not converge in the usua
+       The statement is false: the series does not converge to $1/2$ in the usual sense. It only has a Cesàro sum of $1/2$.
+       counterexample: The sequence of partial sums: 1, 0, 1, 0, ... does not approach $1/2$ or any single value.
+       [error] The series does not converge in the standard sense; its partial sums do not approach a single value.
+       [info] The value $1/2$ is the Cesàro sum, not the usual sum.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (28315ms, $0.0060)
+       type: Theorem
+       decl: axiom grandi_converges : Theorem
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: The value of the series 1 - 1 + 1 - 1 + 1 - 1 + ... is 1/2.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-monotone-converges  (expected: INCORRECT)
+  Every monotone sequence of real numbers converges.
+  Ground truth: Needs boundedness. The sequence a_n = n is monotone increasing but diverges to infinity.
+  GPT: is_correct=False  confidence=high  (2894ms, $0.0022)
+       reasoning: A monotone sequence of real numbers is guaranteed to converge only if it is also bounded. Without the boundedness condition, a monotone sequence can diverge to 
+       The statement is false as written; monotonicity alone does not guarantee convergence for real sequences.
+       counterexample: The sequence a_n = n (for n in N) is monotone increasing but diverges to infinity.
+       [error] The statement omits the necessary boundedness condition for convergence.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30910ms, $0.0065)
+       type: ∀ (a : Nat → Real), Monotone a → ∃ l, ∀ ε > 0, ∃ N, ∀ n ≥ N, |a n - l| < ε
+       decl: axiom monotone_converges_wrong : ∀ (a : Nat → Real), Monotone a → ∃ l, ∀ ε > 0, ∃ N, ∀ n ≥ N, |a n - l| < ε
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: a : ℕ → ℝ; h : Monotone a
+       feedback: Model notes: Assumes the standard definition of convergence for real sequences.
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-2n-gt-n2-all  (expected: INCORRECT)
+  For all positive integers $n$, $2^n > n^2$.
+  Ground truth: Fails for n=2 (4=4, not >), n=3 (8<9), n=4 (16=16, not >).
+  GPT: is_correct=False  confidence=high  (3829ms, $0.0033)
+       reasoning: The statement claims that for all positive integers n, 2^n > n^2. However, for small values of n, such as n = 1, 2, 3, and 4, this inequality does not hold. For
+       The statement is false as written because it fails for small positive integers. It only becomes true for n ≥ 5.
+       counterexample: n = 3: 2^3 = 8, 3^2 = 9, so 2^3 < 3^2.
+       [error] The statement is false for small values of n (n = 1, 2, 3, 4).
+       [error] The strict inequality fails for n = 2 (equality), and is reversed for n = 3, 4.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (10050ms, $0.0021)
+       type: ∀ n : Nat, 0 < n → n^2 < 2^n
+       decl: axiom exp_gt_sq_all : ∀ n : Nat, 0 < n → n^2 < 2^n
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number
+       feedback: Model notes: Assumes n is positive. The proposition states that for any positive integer n, 2 raised to the power of n i
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-x2-eq-4  (expected: INCORRECT)
+  For all real numbers $x$, if $x^2 = 4$, then $x = 2$.
+  Ground truth: x could be -2. The equation x^2=4 has two solutions: x=2 and x=-2.
+  GPT: is_correct=False  confidence=high  (2530ms, $0.0022)
+       reasoning: The equation x^2 = 4 has two real solutions: x = 2 and x = -2. The statement claims that x = 2 is the only solution, which is false. A single counterexample (x 
+       The statement is false because it omits the negative solution to the quadratic equation.
+       counterexample: -2
+       [error] The statement ignores the negative solution x = -2.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (28397ms, $0.0060)
+       type: ∀ x : Real, x^2 = 4 → x = 2
+       decl: axiom sq_eq_4_wrong : ∀ x : Real, x^2 = 4 → x = 2
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: x is a real number
+       feedback: Model notes: This statement formalizes the logical structure of the given informal theorem while adhering to the provide
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-countable-intersection-open  (expected: INCORRECT)
+  The countable intersection of open subsets of $\mathbb{R}$ is open.
+  Ground truth: Counterexample: ∩_{n=1}^∞ (-1/n, 1/n) = {0}, which is not open.
+  GPT: is_correct=False  confidence=high  (2433ms, $0.0028)
+       reasoning: In the standard topology on \(\mathbb{R}\), arbitrary unions of open sets are open, but only finite intersections of open sets are guaranteed to be open. Counta
+       The statement is false; countable intersections of open sets in \(\mathbb{R}\) are not necessarily open.
+       counterexample: Let U_n = (-1/n, 1/n) for n in N. Then \(\bigcap_{n=1}^\infty U_n = \{0\}\), which is not open.
+       [error] The statement incorrectly generalizes the property of finite intersections of open sets to countable intersections.
+  Pipeline: ERROR – HTTPSConnectionPool(host='tree26--herald-math-grammarly-api.modal.run', port=443): Read timed out. (read timeout=180)
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-det-additive  (expected: INCORRECT)
+  For all $n \times n$ real matrices $A$ and $B$, $\det(A + B) = \det(A) + \det(B)$.
+  Ground truth: det is multiplicative (det(AB)=det(A)det(B)), NOT additive. E.g. A=B=I: det(2I)=2^n ≠ 2.
+  GPT: is_correct=False  confidence=high  (2545ms, $0.0028)
+       reasoning: The determinant is not a linear function: in general, det(A + B) ≠ det(A) + det(B) for n × n matrices. This can be shown with a simple counterexample using 2 × 
+       The statement is false; the determinant is not additive over matrix addition.
+       counterexample: Let A = I (the 2x2 identity), B = I. Then det(A) = 1, det(B) = 1, det(A+B) = det(2I) = 4 ≠ 2.
+       [error] The statement incorrectly asserts linearity of the determinant function.
+       [info] No restriction is placed on A and B, so a single counterexample suffices.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (28693ms, $0.0061)
+       type: theorem matrix_det_add_ext
+       decl: axiom det_additive_wrong : theorem matrix_det_add_ext
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Determinant of the sum of two matrices does not generally equal the sum of their determinants.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+
+────────────────────────────────────────────────────────────────────────
+  hard-false-uniformly-cont-product  (expected: INCORRECT)
+  If $f, g: \mathbb{R} \to \mathbb{R}$ are uniformly continuous, then $fg$ is uniformly continuous.
+  Ground truth: Counterexample: f(x)=g(x)=x are uniformly continuous, but f(x)g(x)=x^2 is not uniformly continuous on R.
+  GPT: is_correct=False  confidence=high  (3103ms, $0.0029)
+       reasoning: The product of two uniformly continuous functions on all of \( \mathbb{R} \) need not be uniformly continuous. A standard counterexample is \( f(x) = g(x) = x \
+       The statement is incorrect; a classic counterexample shows the product can fail to be uniformly continuous.
+       counterexample: f(x) = x, g(x) = x; then fg(x) = x^2, which is not uniformly continuous on \( \mathbb{R} \).
+       [error] The statement is false: the product of two uniformly continuous functions on \( \mathbb{R} \) need not be uniformly cont
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (32122ms, $0.0068)
+       type: { "lean_statement_type": "theorem uniformContinuous_mul_ext", "assumptions": [ "f : Real → Real", "g : Real → Real", "hf
+       decl: axiom unif_cont_prod_wrong : { "lean_statement_type": "theorem uniformContinuous_mul_ext", "assumptions": [ "f : Real → 
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Revise the statement to ensure it is well-formed and grounded in established mathematical principles
+
+JSON report : /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-20260215T104532Z.json
+Console log : pipe output to /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-latest.txt via tee

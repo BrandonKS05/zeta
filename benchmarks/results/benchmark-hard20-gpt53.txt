@@ -1,0 +1,361 @@
+Benchmark: 20 cases (9 correct, 11 incorrect)
+  GPT model   : gpt-5.3  ($3.0/1M in, $12.0/1M out)
+  Pipeline URL: https://tree26--herald-math-grammarly-api.modal.run  (~$0.76/GPU-hr)
+
+[ 1/20] T novel-true-n5-div-120                             GPT:ERR  Pipe:F(X) 10825ms $0.0023
+[ 2/20] F novel-false-xyz-inequality                        GPT:ERR  Pipe:F(ok) 30781ms $0.0065
+[ 3/20] T novel-true-coprime-sum-sq                         GPT:ERR  Pipe:F(X) 729ms $0.154m
+[ 4/20] F novel-false-a3-eq-a                               GPT:ERR  Pipe:F(ok) 801ms $0.169m
+[ 5/20] F novel-false-ff-eq-n2                              GPT:ERR  Pipe:F(ok) 1033ms $0.218m
+[ 6/20] T novel-true-sum-reciprocals-div                    GPT:ERR  Pipe:F(X) 13969ms $0.0029
+[ 7/20] F novel-false-product-convergent-series             GPT:ERR  Pipe:F(ok) 31645ms $0.0067
+[ 8/20] T novel-true-squares-mod8                           GPT:ERR  Pipe:F(X) 11207ms $0.0024
+[ 9/20] F novel-false-sum-consecutive-prime                 GPT:ERR  Pipe:F(ok) 11957ms $0.0025
+[10/20] T novel-true-prod-consec-even                       GPT:ERR  Pipe:F(X) 9809ms $0.0021
+[11/20] F novel-false-eigenvalue-sum-trace                  GPT:ERR  Pipe:ERR
+[12/20] T novel-true-gcd-fibonacci-like                     GPT:ERR  Pipe:F(X) 12076ms $0.0025
+[13/20] F novel-false-injective-composition                 GPT:ERR  Pipe:F(ok) 33480ms $0.0071
+[14/20] T novel-true-polynomial-int-values                  GPT:ERR  Pipe:F(X) 11000ms $0.0023
+[15/20] F novel-false-derivative-zero-set                   GPT:ERR  Pipe:F(ok) 30657ms $0.0065
+[16/20] F novel-false-group-order-element                   GPT:ERR  Pipe:F(ok) 30990ms $0.0065
+[17/20] T novel-true-matrix-trace-power                     GPT:ERR  Pipe:F(X) 30673ms $0.0065
+[18/20] F novel-false-convergent-rearrangement              GPT:ERR  Pipe:F(ok) 31259ms $0.0066
+[19/20] T novel-true-floor-sum-identity                     GPT:ERR  Pipe:F(X) 29473ms $0.0062
+[20/20] F novel-false-symmetric-positive-definite           GPT:ERR  Pipe:F(ok) 31195ms $0.0066
+
+==========================================================================================
+COMPARISON TABLE
+==========================================================================================
+Case                                         Exp    GPT      GPT$  GPTms   Pipe     Pipe$ Pipems
+------------------------------------------------------------------------------------------------
+novel-true-n5-div-120                          T    ERR                     F X   $0.0023  10825
+novel-false-xyz-inequality                     F    ERR                    F ok   $0.0065  30781
+novel-true-coprime-sum-sq                      T    ERR                     F X   $0.154m    729
+novel-false-a3-eq-a                            F    ERR                    F ok   $0.169m    801
+novel-false-ff-eq-n2                           F    ERR                    F ok   $0.218m   1033
+novel-true-sum-reciprocals-div                 T    ERR                     F X   $0.0029  13969
+novel-false-product-convergent-series          F    ERR                    F ok   $0.0067  31645
+novel-true-squares-mod8                        T    ERR                     F X   $0.0024  11207
+novel-false-sum-consecutive-prime              F    ERR                    F ok   $0.0025  11957
+novel-true-prod-consec-even                    T    ERR                     F X   $0.0021   9809
+novel-false-eigenvalue-sum-trace               F    ERR                     ERR                 
+novel-true-gcd-fibonacci-like                  T    ERR                     F X   $0.0025  12076
+novel-false-injective-composition              F    ERR                    F ok   $0.0071  33480
+novel-true-polynomial-int-values               T    ERR                     F X   $0.0023  11000
+novel-false-derivative-zero-set                F    ERR                    F ok   $0.0065  30657
+novel-false-group-order-element                F    ERR                    F ok   $0.0065  30990
+novel-true-matrix-trace-power                  T    ERR                     F X   $0.0065  30673
+novel-false-convergent-rearrangement           F    ERR                    F ok   $0.0066  31259
+novel-true-floor-sum-identity                  T    ERR                     F X   $0.0062  29473
+novel-false-symmetric-positive-definite        F    ERR                    F ok   $0.0066  31195
+
+==========================================================================================
+AGGREGATE
+==========================================================================================
+
+  GPT gpt-5.3:
+    Accuracy : N/A
+    Avg latency : 249 ms
+    Med latency : 156 ms
+
+  Herald pipeline:
+    Accuracy    : 10/19 (52.6%)
+    Avg latency : 32385 ms
+    Med latency : 29473 ms
+    Total cost  : $0.076751  (est. GPU upper bound)
+    Avg cost/q  : $0.004040
+
+  Total wall time: 652.8s
+
+==========================================================================================
+DETAILED RESULTS
+==========================================================================================
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-n5-div-120  (expected: CORRECT)
+  For all integers $n$, the expression $n^5 - 5n^3 + 4n$ is divisible by $120$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (10825ms, $0.0023)
+       type: ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       decl: axiom n5_minus_5n3_plus_4n_div_120 : ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Direct consequence of a well-known identity in number theory, the totient function applied to 5.
+       feedback: LLM final feedback: This statement is indeed true and can be proven using well-known identities in number theory, specif
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-xyz-inequality  (expected: INCORRECT)
+  For all positive reals $x, y, z$ satisfying $xyz = 1$, we have $x^2 + y^2 + z^2 \ge x + y + z + 3$.
+  Ground truth: Fails at x=y=z=1: LHS=3, RHS=3+3=6. 3 < 6.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30781ms, $0.0065)
+       type: { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2 ≥ x + y + z + 3", "ass
+       decl: axiom xyz_ineq_wrong : { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the provided diagnostics and revise the inequality to fix the timeout error.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-coprime-sum-sq  (expected: CORRECT)
+  For all positive integers $a$ and $b$, if $\gcd(a, b) = 1$, then $\gcd(a^2 + b^2, ab) = 1$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (729ms, $0.154m)
+       type: ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       decl: axiom coprime_sum_sq_prod : ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: a and b are positive integers; gcd(a, b) = 1
+       feedback: Model notes: The coprimality of a and b implies that there are no common prime factors between a and b. The statement th
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-a3-eq-a  (expected: INCORRECT)
+  For all $n \times n$ real matrices $A$, if $A^3 = A$, then $A^2 = I$ or $A = 0$.
+  Ground truth: Counterexample: A = diag(1,0). A^3 = A but A^2 = A != I and A != 0.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (801ms, $0.169m)
+       type: ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       decl: axiom a3_eq_a_wrong : ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; A is an n x n real matrix
+       feedback: Model notes: Assumes the matrix A is over the real numbers and is square with dimension n.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-ff-eq-n2  (expected: INCORRECT)
+  For all functions $f: \mathbb{N} \to \mathbb{N}$ satisfying $f(f(n)) = n + 2$ for all $n$, we have $f(0) = 1$.
+  Ground truth: f(0)=1 is not forced. Alternative: f(0)=2, f(2)=4, f(4)=6,... and f(1)=3, f(3)=5,... also satisfies f(f(n))=n+2.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (1033ms, $0.218m)
+       type: ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       decl: axiom ff_n_plus_2_f0 : ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: f is a function from natural numbers to natural numbers
+       feedback: Model notes: The function f satisfies the property that for all natural numbers n, f applied twice to n equals n plus 2.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-sum-reciprocals-div  (expected: CORRECT)
+  For all positive integers $n$, the number $n \cdot \text{lcm}(1, 2, \ldots, n) \cdot \sum_{k=1}^{n} \frac{1}{k}$ is an i
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (13969ms, $0.0029)
+       type: ∀ n : Nat, 0 < n → ∃ k : Int, (n : Rat) * (Finset.range n).lcm id * (∑ k in Finset.range n, (1 : Rat) / k) = k
+       decl: axiom harmonic_lcm_integer : ∀ n : Nat, 0 < n → ∃ k : Int, (n : Rat) * (Finset.range n).lcm id * (∑ k in Finset.range n,
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Assumes the existence of an integer representation for the given expression.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-product-convergent-series  (expected: INCORRECT)
+  For all real-valued sequences $\{a_n\}$ and $\{b_n\}$, if $\sum_{n=1}^{\infty} a_n$ and $\sum_{n=1}^{\infty} b_n$ both c
+  Ground truth: Counterexample: a_n = b_n = (-1)^n / sqrt(n). Both converge by alternating series test, but a_n*b_n = 1/n and sum 1/n diverges.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31645ms, $0.0067)
+       type: { "lean_statement_type": "theorem", "assumptions": [ "∀ (a b : Nat → Real), Summable a ∧ Summable b" ], "notes": "For an
+       decl: axiom prod_convergent_series_wrong : { "lean_statement_type": "theorem", "assumptions": [ "∀ (a b : Nat → Real), Summabl
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the generated theorem statement and revise the wording/notation to ensure it accurately repr
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-squares-mod8  (expected: CORRECT)
+  For all odd integers $n$, the expression $n^2 - 1$ is divisible by $8$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11207ms, $0.0024)
+       type: ∀ n : Nat, Odd n → 8 ∣ (n ^ 2 - 1)
+       decl: axiom odd_sq_minus_1_div_8 : ∀ n : Nat, Odd n → 8 ∣ (n ^ 2 - 1)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; n is odd
+       feedback: Model notes: This statement is a formalization of the property that for all odd integers, the expression n^2 - 1 is divi
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-sum-consecutive-prime  (expected: INCORRECT)
+  For all positive integers $n \ge 2$, the sum $1 + 2 + 3 + \cdots + n$ is never a perfect square.
+  Ground truth: n=8: sum = 36 = 6^2. Also n=49: sum = 1225 = 35^2.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11957ms, $0.0025)
+       type: ∀ n : Nat, 2 ≤ n → ¬ (∃ k : Nat, ∑ i in Finset.range n, i = k^2)
+       decl: axiom triangular_not_square_wrong : ∀ n : Nat, 2 ≤ n → ¬ (∃ k : Nat, ∑ i in Finset.range n, i = k^2)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: Nat.lt_two_eq_zero_false; Nat.succ_pos; Nat.add_lt_add_left
+       feedback: Model notes: Direct proof by calculating the sum and using properties of natural numbers.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-prod-consec-even  (expected: CORRECT)
+  For all positive integers $n$, the product of any $n$ consecutive integers is divisible by $n!$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (9809ms, $0.0021)
+       type: ∀ n : Nat, ∏ i in Finset.range n, (i + 1) % n! = 0
+       decl: axiom prod_consec_div_factorial : ∀ n : Nat, ∏ i in Finset.range n, (i + 1) % n! = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a positive integer
+       feedback: Model notes: The product of any n consecutive integers is divisible by n! for all positive integers n.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-eigenvalue-sum-trace  (expected: INCORRECT)
+  For all $3 \times 3$ real matrices $A$, if all eigenvalues of $A$ are real and positive, then all entries of $A$ are non
+  Ground truth: Counterexample: A = [[2,-1,0],[-1,2,-1],[0,-1,2]] (tridiagonal). Eigenvalues are 2, 2-sqrt(2), 2+sqrt(2), all positive, but A has negative entries.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: ERROR – HTTPSConnectionPool(host='tree26--herald-math-grammarly-api.modal.run', port=443): Read timed out. (read timeout=180)
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-gcd-fibonacci-like  (expected: CORRECT)
+  For all positive integers $m$ and $n$, if $a_k = 2^k - 1$ for all $k \ge 1$, then $\gcd(a_m, a_n) = a_{\gcd(m,n)}$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (12076ms, $0.0025)
+       type: { "lean_statement_type": "import Mathlib open Subtype /-- For all positive integers m and n, if a_k = 2^k - 1 for all k 
+       decl: axiom gcd_mersenne : { "lean_statement_type": "import Mathlib open Subtype /-- For all positive integers m and n, if a_k
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean parsing failed. Check punctuation and Lean syntax around quantifiers.
+       feedback: Lean parsing failed. Check punctuation and Lean syntax around quantifiers.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-injective-composition  (expected: INCORRECT)
+  For all functions $f: \mathbb{R} \to \mathbb{R}$ and $g: \mathbb{R} \to \mathbb{R}$, if $g \circ f$ is injective, then $
+  Ground truth: g circ f injective implies f is injective, NOT g. Counterexample: f(x)=e^x (range is (0,inf)), g(x)=x^2. g circ f = e^{2x} is injective, but g is not injective.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (33480ms, $0.0071)
+       type: ∀ (f g : Real → Real), Function.Injective (g ∘ f) → Function.Injective g
+       decl: axiom comp_inj_implies_g_inj_wrong : ∀ (f g : Real → Real), Function.Injective (g ∘ f) → Function.Injective g
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: f and g are functions from reals to reals
+       feedback: Model notes: This is a standard result in set theory, proved by showing that if g is not injective, then g \circ f is no
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-polynomial-int-values  (expected: CORRECT)
+  For all polynomials $p(x)$ with integer coefficients, if $p(0)$ and $p(1)$ are both odd, then $p$ has no integer roots.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11000ms, $0.0023)
+       type: ∀ (p : Polynomial Int), p.coeff 0 % 2 = 1 ∧ p.coeff 1 % 2 = 1 → ¬ (∃ x : Int, p.eval x = 0)
+       decl: axiom poly_odd_no_int_roots : ∀ (p : Polynomial Int), p.coeff 0 % 2 = 1 ∧ p.coeff 1 % 2 = 1 → ¬ (∃ x : Int, p.eval x = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: p is a polynomial with integer coefficients
+       feedback: Model notes: The condition on the constant and linear coefficients ensures odd values, and the conclusion states that th
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-derivative-zero-set  (expected: INCORRECT)
+  For all differentiable functions $f: [0,1] \to \mathbb{R}$, if $f(0) = f(1) = 0$ and $f$ is not identically zero, then t
+  Ground truth: Counterexample: f(x) = x(1-x)sin(1/x(1-x)) for x in (0,1), f(0)=f(1)=0. Differentiable, not identically zero, but f' = 0 at infinitely many points.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30657ms, $0.0065)
+       type: { "lean_statement_type": "∀ (f : Real → Real), DifferentiableOn Real f (Set.Icc 0 1) → f 0 = 0 → f 1 = 0 → (∀ x ∈ Set.Io
+       decl: axiom derivative_zero_set_finite_wrong : { "lean_statement_type": "∀ (f : Real → Real), DifferentiableOn Real f (Set.Icc
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the diagnostics and revise the notation for generating a valid Lean statement.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-group-order-element  (expected: INCORRECT)
+  For all finite groups $G$ and all integers $d$ dividing $|G|$, there exists an element $g \in G$ with order exactly $d$.
+  Ground truth: Counterexample: Z/2Z x Z/2Z has order 4 and 4 divides |G|=4, but no element has order 4 (all non-identity elements have order 2).
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30990ms, $0.0065)
+       type: { "lean_statement_type": "∀ (G : Type*) [Group G] [Fintype G] (d : Nat), d ∣ Fintype.card G → ∃ g : G, orderOf g = d", "
+       decl: axiom divisor_order_exists_wrong : { "lean_statement_type": "∀ (G : Type*) [Group G] [Fintype G] (d : Nat), d ∣ Fintype.
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the diagnostics and revise the wording/notation to fix the timeout error.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-matrix-trace-power  (expected: CORRECT)
+  For all $2 \times 2$ real matrices $A$, we have $\text{tr}(A^2) = \text{tr}(A)^2 - 2\det(A)$.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30673ms, $0.0065)
+       type: theorem matrix_trace_squared_eq_trace_squared_sub_two_det
+       decl: axiom trace_sq_formula : theorem matrix_trace_squared_eq_trace_squared_sub_two_det
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: A : Matrix (Fin 2) (Fin 2) ℝ
+       feedback: Model notes: For any 2x2 real matrix A, the trace of A squared equals the trace of A squared minus twice the determinant
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-convergent-rearrangement  (expected: INCORRECT)
+  For all convergent series $\sum a_n$ of real numbers and all bijections $\sigma: \mathbb{N} \to \mathbb{N}$, the rearran
+  Ground truth: Only true for absolutely convergent series. Riemann rearrangement theorem: any conditionally convergent series can be rearranged to converge to any value.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31259ms, $0.0066)
+       type: theorem
+       decl: axiom rearrangement_same_sum_wrong : theorem
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: ∀ (a : ℕ → ℝ) (σ : ℕ ≃ ℕ); ⊢ (∑' n, a n).Summable
+       feedback: Model notes: The theorem states that for any convergent series of real numbers and any bijection between the natural num
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-floor-sum-identity  (expected: CORRECT)
+  For all positive integers $n$ and all reals $x$, $\lfloor nx \rfloor = \lfloor x \rfloor + \lfloor x + \frac{1}{n} \rflo
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (29473ms, $0.0062)
+       type: { "lean_statement_type": "theorem floor_sum_eq", "assumptions": "n : Nat, x : Real", "notes": "For any positive integer 
+       decl: axiom hermite_floor_identity : { "lean_statement_type": "theorem floor_sum_eq", "assumptions": "n : Nat, x : Real", "not
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the theorem statement for potential revisions based on the diagnostics and revise the notati
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-symmetric-positive-definite  (expected: INCORRECT)
+  For all $n \times n$ real symmetric matrices $A$ and $B$, if $A$ and $B$ are positive definite, then $AB$ is positive de
+  Ground truth: AB need not be symmetric, so 'positive definite' doesn't even apply in the standard sense. Even if we check eigenvalues: A=[[2,1],[1,2]], B=[[2,-1],[-1,2]], both PD but AB=[[3,0],[0,3]]... actually that works. Try A=[[1,0],[0,2]], B=[[2,1],[1,1]]. AB=[[2,1],[2,2]], not symmetric. The product of PD symmetric matrices is not in general symmetric, hence not PD.
+  GPT: ERROR – HTTP 404: {
+    "error": {
+        "message": "The model `gpt-5.3` does not exist or you do not have access to it.",
+   
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31195ms, $0.0066)
+       type: { "lean_statement_type": "theorem mul_extracted {A B : Matrix n n Real} : A.IsSymm → B.IsSymm → A.PosDef → B.PosDef → (A
+       decl: axiom prod_pos_def_wrong : { "lean_statement_type": "theorem mul_extracted {A B : Matrix n n Real} : A.IsSymm → B.IsSymm
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the generated Lean statement type and revise wording/notation.
+
+JSON report : /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-20260215T112714Z.json
+Console log : pipe output to /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-latest.txt via tee
