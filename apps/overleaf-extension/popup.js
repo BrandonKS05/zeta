@@ -32,8 +32,7 @@
 
   const DEFAULT_SHORTCUTS = [
     { trigger: "Ctrl+Shift+Enter", text: "Ctrl+Shift+Enter", keys: ["⌃", "⇧", "↩"], label: "Run checker now", section: "Checking" },
-    { trigger: "Cmd+Shift+M", text: "Cmd+Shift+M", keys: ["⌘", "⇧", "M"], label: "Request autocomplete (manual)", section: "Checking" },
-    { trigger: "Ctrl+Shift+M", text: "Ctrl+Shift+M", keys: ["⌃", "⇧", "M"], label: "Request autocomplete (manual)", section: "Checking" },
+    { trigger: "Cmd+Shift+M", altTrigger: "Ctrl+Shift+M", text: "⌘⇧M / Ctrl+Shift+M", keys: ["⌘/⌃", "⇧", "M"], label: "Request autocomplete (manual)", section: "Checking" },
     { trigger: "Alt+Shift+R", text: "Option+Shift+R", keys: ["⌥", "⇧", "R"], label: "Refresh checker", section: "Checking" },
     { trigger: "Alt+Shift+N", text: "Option+Shift+N", keys: ["⌥", "⇧", "N"], label: "Focus next issue", section: "Issues" },
     { trigger: "Alt+Shift+P", text: "Option+Shift+P", keys: ["⌥", "⇧", "P"], label: "Focus previous issue", section: "Issues" },
@@ -83,6 +82,7 @@
   const assistantForm = document.getElementById("zeta-assistant-form");
   const assistantInput = document.getElementById("zeta-assistant-input");
   const assistantSend = document.getElementById("zeta-assistant-send");
+  const autoAnalyzeDocumentToggle = document.getElementById("zeta-auto-analyze-document-toggle");
   const autocompleteEnabledToggle = document.getElementById("zeta-autocomplete-enabled-toggle");
   const backendTopKToggle = document.getElementById("zeta-autocomplete-topk-toggle");
   const backendManualToggle = document.getElementById("zeta-autocomplete-manual-toggle");
@@ -289,9 +289,11 @@
     });
   }
 
-  function sendActionToActiveTab(action) {
-    sendMessageToActiveTab({ type: "zeta-popup-action", action }, "popup_action", () => ({
+  function sendActionToActiveTab(action, payload = null) {
+    const extras = payload && typeof payload === "object" ? payload : {};
+    sendMessageToActiveTab({ type: "zeta-popup-action", action, ...extras }, "popup_action", () => ({
       action,
+      chunkId: extras.chunkId || null,
     }));
   }
 
@@ -395,7 +397,8 @@
     if (!key) {
       return;
     }
-    const row = macrosList.querySelector(`.zeta-shortcut-row[data-shortcut="${key}"]`);
+    const row = macrosList.querySelector(`.zeta-shortcut-row[data-shortcut="${key}"]`)
+      || macrosList.querySelector(`.zeta-shortcut-row[data-shortcut-alt="${key}"]`);
     if (!row) {
       return;
     }
@@ -1052,6 +1055,9 @@
         const li = document.createElement("li");
         li.className = "zeta-shortcut-row";
         li.dataset.shortcut = normalizeShortcutKey(macro.trigger);
+        if (macro.altTrigger) {
+          li.dataset.shortcutAlt = normalizeShortcutKey(macro.altTrigger);
+        }
         const left = document.createElement("div");
         left.className = "zeta-shortcut-left";
         const text = document.createElement("strong");
@@ -1568,21 +1574,60 @@
   function graphLabel(chunk) {
     const type = String(chunk?.type || "text");
     if (type === "document") {
-      return "Document | Full Scope";
+      return "Document (Full Scope)";
     }
     if (type === "section") {
       const name = String(chunk?.sectionName || "section");
       const title = String(chunk?.sectionTitle || "").trim();
       const sectionKind = name ? `${name[0].toUpperCase()}${name.slice(1)}` : "Section";
-      return title ? `${sectionKind} | ${title}` : `${sectionKind} | Untitled`;
+      return title ? `${sectionKind}: ${title}` : `${sectionKind}: Untitled`;
     }
     if (type === "environment") {
-      return String(chunk?.envName || "environment");
+      const envKind = toTitleCase(String(chunk?.envName || "environment")) || "Environment";
+      const envTitle = extractEnvironmentTitle(chunk);
+      return envTitle ? `${envKind}: ${envTitle}` : envKind;
     }
     if (type === "command") {
       return String(chunk?.commandName || "command");
     }
     return "Text";
+  }
+
+  function toTitleCase(value) {
+    const normalized = String(value || "")
+      .replace(/[_-]+/g, " ")
+      .trim();
+    if (!normalized) {
+      return "";
+    }
+    return normalized
+      .split(/\s+/)
+      .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "")
+      .join(" ");
+  }
+
+  function extractEnvironmentTitle(chunk) {
+    const text = String(chunk?.text || "");
+    if (!text) {
+      return "";
+    }
+
+    // Supports:
+    // \begin{theorem}[Title]
+    // \begin{theorem}{Title}
+    // \begin{theorem}{Title}{...}
+    const beginLine = text.split(/\r?\n/, 1)[0] || "";
+    const bracketMatch = beginLine.match(/\\begin\s*\{\s*[^{}]+\s*\}\s*\[([^\]]+)\]/);
+    if (bracketMatch && bracketMatch[1]) {
+      return String(bracketMatch[1]).trim();
+    }
+
+    const braceMatch = beginLine.match(/\\begin\s*\{\s*[^{}]+\s*\}\s*\{([^}]*)\}/);
+    if (braceMatch && braceMatch[1]) {
+      return String(braceMatch[1]).trim();
+    }
+
+    return "";
   }
 
   function renderHealthTooltip(score, breakdown, cached, pending) {
@@ -1886,6 +1931,34 @@
       bucket.sort((a, b) => (Number(a?.start) || 0) - (Number(b?.start) || 0));
     }
 
+    const chunkDepth = new Map();
+    const depthToIds = new Map();
+    function assignDepth(parentId, depth) {
+      const children = byParent.get(parentId || rootId) || [];
+      for (const chunk of children) {
+        const cid = String(chunk?.chunkId || "");
+        chunkDepth.set(cid, depth);
+        if (!depthToIds.has(depth)) {
+          depthToIds.set(depth, []);
+        }
+        depthToIds.get(depth).push(chunk);
+        assignDepth(cid, depth + 1);
+      }
+    }
+    assignDepth(rootId, 0);
+
+    const nonInnermostTextIds = new Set();
+    for (const [, nodesAtDepth] of depthToIds) {
+      const hasNonTextAtDepth = nodesAtDepth.some((chunk) => String(chunk?.type || "") !== "text");
+      if (hasNonTextAtDepth) {
+        for (const chunk of nodesAtDepth) {
+          if (String(chunk?.type || "") === "text") {
+            nonInnermostTextIds.add(String(chunk?.chunkId || ""));
+          }
+        }
+      }
+    }
+
     const activePath = new Set();
     let cursorId = activeChunkId ? String(activeChunkId) : null;
     while (cursorId && !byId.has(cursorId)) {
@@ -1901,8 +1974,23 @@
       cursorId = parentId && byId.has(parentId) ? parentId : null;
     }
 
+    function getVisibleChildren(parentId) {
+      const direct = byParent.get(parentId || rootId) || [];
+      const out = [];
+      for (const chunk of direct) {
+        const cid = String(chunk?.chunkId || "");
+        if (nonInnermostTextIds.has(cid)) {
+          out.push(...getVisibleChildren(cid));
+        } else {
+          out.push(chunk);
+        }
+      }
+      out.sort((a, b) => (Number(a?.start) || 0) - (Number(b?.start) || 0));
+      return out;
+    }
+
     const buildNodes = (parentId, depth) => {
-      const children = byParent.get(parentId || rootId) || [];
+      const children = getVisibleChildren(parentId);
       const list = depth === 0 ? document.createDocumentFragment() : document.createElement("ul");
       if (depth > 0) {
         list.className = "zeta-graph-children";
@@ -1934,7 +2022,29 @@
         const type = String(chunk?.type || "text");
         meta.textContent = `${type} · ${start}-${end}`;
 
-        head.append(title, meta);
+        if (isInnermost) {
+          const sparkle = document.createElement("button");
+          sparkle.type = "button";
+          sparkle.className = "zeta-graph-sparkle";
+          sparkle.setAttribute("aria-label", "Analyze in Graph View");
+          sparkle.title = "Analyze in Graph View";
+          sparkle.textContent = "✦";
+          sparkle.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setActivePanel("history");
+            sendActionToActiveTab("analyze-graph-chunk", {
+              chunkId,
+              start,
+              end,
+              chunkType: type,
+              label: graphLabel(chunk),
+            });
+          });
+          head.append(title, meta, sparkle);
+        } else {
+          head.append(title, meta);
+        }
         li.appendChild(head);
 
         const body = document.createElement("div");
@@ -1980,8 +2090,9 @@
 
     const tree = buildNodes(rootId, 0);
     graphList.appendChild(tree);
-    graphCount.textContent = `${chunks.length} nodes`;
-    graphEmpty.style.display = graphList.children.length > 0 ? "none" : "block";
+    const visibleNodeCount = graphList.querySelectorAll(".zeta-graph-node").length;
+    graphCount.textContent = `${visibleNodeCount} nodes`;
+    graphEmpty.style.display = visibleNodeCount > 0 ? "none" : "block";
   }
 
   function setActiveMode(mode) {
@@ -2025,6 +2136,9 @@
   function applySettingsToBackendControls(settings) {
     const nextSettings = settings && typeof settings === "object" ? settings : {};
     currentSettings = { ...nextSettings };
+    if (autoAnalyzeDocumentToggle) {
+      autoAnalyzeDocumentToggle.checked = nextSettings.autoAnalyzeDocument !== false;
+    }
     if (autocompleteEnabledToggle) {
       autocompleteEnabledToggle.checked = nextSettings.autocompleteEnabled !== false;
     }
@@ -2034,6 +2148,37 @@
     if (backendManualToggle) {
       backendManualToggle.checked = nextSettings.autocompleteManualTrigger === true;
     }
+  }
+
+  function persistAutoAnalyzeDocumentSetting() {
+    if (!autoAnalyzeDocumentToggle || typeof chrome === "undefined" || !chrome.storage?.sync) {
+      return;
+    }
+    const enabled = autoAnalyzeDocumentToggle.checked !== false;
+    chrome.storage.sync.get({ [SETTINGS_KEY]: {} }, (result) => {
+      const settings = result[SETTINGS_KEY] && typeof result[SETTINGS_KEY] === "object"
+        ? result[SETTINGS_KEY]
+        : {};
+      if ((settings.autoAnalyzeDocument !== false) === enabled) {
+        return;
+      }
+      const nextSettings = {
+        ...settings,
+        autoAnalyzeDocument: enabled,
+      };
+      chrome.storage.sync.set({ [SETTINGS_KEY]: nextSettings }, () => {
+        const runtimeError = chrome.runtime?.lastError?.message;
+        if (runtimeError) {
+          renderBackendStatus(`Save failed: ${runtimeError}`, "error");
+          return;
+        }
+        currentSettings = { ...nextSettings };
+        renderBackendStatus(
+          enabled ? "Auto-analyze document enabled." : "Auto-analyze document disabled. Use Run checker to analyze.",
+          "ok"
+        );
+      });
+    });
   }
 
   function persistAutocompleteEnabledSetting() {
@@ -2171,6 +2316,12 @@
       assistantLayout.classList.toggle("is-threads-collapsed", assistantThreadsCollapsed);
       assistantCollapseBtn.textContent = assistantThreadsCollapsed ? ">>" : "\u00AB Collapse";
       assistantCollapseBtn.setAttribute("aria-label", assistantThreadsCollapsed ? "Expand thread list" : "Collapse thread list");
+    });
+  }
+
+  if (autoAnalyzeDocumentToggle) {
+    autoAnalyzeDocumentToggle.addEventListener("change", () => {
+      persistAutoAnalyzeDocumentSetting();
     });
   }
 

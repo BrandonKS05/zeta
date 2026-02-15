@@ -224,6 +224,9 @@ class ZetaApp {
     this.sentenceCache = new Map();
     this.chunkTree = null;
     this.activeChunkId = null;
+    this.graphChunkTree = null;
+    this.graphActiveChunkId = null;
+    this.graphAnalysisTarget = null;
     this.lastInferenceMs = null;
     this.lastTelemetry = null;
     this.lastPanelSnapshotSignature = "";
@@ -347,6 +350,7 @@ class ZetaApp {
     merged.requestTimeoutMs = clamp(Number(merged.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs, 2000, 120000);
     merged.retries = clamp(Number(merged.retries) || 0, 0, 4);
     merged.autocompleteEnabled = merged.autocompleteEnabled !== false;
+    merged.autoAnalyzeDocument = merged.autoAnalyzeDocument !== false;
     merged.autocompleteShowTopK = merged.autocompleteShowTopK === true;
     merged.autocompleteManualTrigger = merged.autocompleteManualTrigger === true;
     merged.backendUrl = HARDCODED_ANALYZE_URL;
@@ -591,6 +595,33 @@ class ZetaApp {
         }
         return;
       }
+      if (action === "analyze-graph-chunk") {
+        const startRaw = Number(message.start);
+        const endRaw = Number(message.end);
+        if (!Number.isInteger(startRaw) || !Number.isInteger(endRaw)) {
+          this.addActivity("Graph analyze failed: invalid chunk bounds.", "error");
+          return;
+        }
+        const start = Math.max(0, Math.min(startRaw, endRaw));
+        const end = Math.max(0, Math.max(startRaw, endRaw));
+        const chunkId = String(message.chunkId || "").trim();
+        const label = String(message.label || "").trim();
+        this.graphAnalysisTarget = {
+          chunkId,
+          start,
+          end,
+          label,
+        };
+        if (chunkId) {
+          this.graphActiveChunkId = chunkId;
+          if (this.graphChunkTree && typeof this.graphChunkTree === "object") {
+            this.graphChunkTree.activeChunkId = chunkId;
+          }
+        }
+        this.persistPanelSnapshot();
+        this.requestAnalysis("graph-node", true);
+        return;
+      }
       this.addActivity(`Macro not recognized: ${action}`, "error");
     };
 
@@ -638,6 +669,7 @@ class ZetaApp {
       nextSettings.scope = normalizeScope(nextSettings.scope);
       nextSettings.theme = "light";
       nextSettings.autocompleteEnabled = nextSettings.autocompleteEnabled !== false;
+      nextSettings.autoAnalyzeDocument = nextSettings.autoAnalyzeDocument !== false;
       nextSettings.autocompleteShowTopK = nextSettings.autocompleteShowTopK === true;
       nextSettings.autocompleteManualTrigger = nextSettings.autocompleteManualTrigger === true;
       nextSettings.backendUrl = HARDCODED_ANALYZE_URL;
@@ -747,7 +779,7 @@ class ZetaApp {
       if (!content) {
         return null;
       }
-      return new DomLineAdapter(root, content, ".cm-line", scroller);
+      return new DomLineAdapter(root, content, ".cm-line", scroller, "cm");
     }
 
     if (root.matches(".ace_editor")) {
@@ -756,7 +788,7 @@ class ZetaApp {
       if (!content) {
         return null;
       }
-      return new DomLineAdapter(root, content, ".ace_line", scroller);
+      return new DomLineAdapter(root, content, ".ace_line", scroller, "ace");
     }
 
     if (root instanceof HTMLTextAreaElement || root instanceof HTMLInputElement) {
@@ -1797,6 +1829,18 @@ class ZetaApp {
         if (Array.isArray(reasons) && reasons.length > 0) {
           lines.push(`why no suggestion: ${reasons.join(", ")}`);
         }
+        const debug = result?.payload?.no_suggestion_debug;
+        if (debug && typeof debug === "object") {
+          const upstreamKeys = Array.isArray(debug.upstream_keys)
+            ? debug.upstream_keys.join(", ")
+            : "";
+          if (upstreamKeys) {
+            lines.push(`upstream keys: ${upstreamKeys}`);
+          }
+          if (typeof debug.raw_preview === "string" && debug.raw_preview.trim()) {
+            lines.push(`upstream preview: ${debug.raw_preview.slice(0, 500)}`);
+          }
+        }
         const whyMessage = Array.isArray(reasons) && reasons.length > 0
           ? `Autocomplete: no suggestion — ${reasons[0]}`
           : `Autocomplete: no suggestion — ${reasonLabel} (backend gave no reason)`;
@@ -2211,6 +2255,7 @@ class ZetaApp {
     next.scope = normalizeScope(next.scope);
     next.theme = "light";
     next.autocompleteEnabled = next.autocompleteEnabled !== false;
+    next.autoAnalyzeDocument = next.autoAnalyzeDocument !== false;
     next.autocompleteManualTrigger = next.autocompleteManualTrigger === true;
     next.backendUrl = HARDCODED_ANALYZE_URL;
 
@@ -2239,6 +2284,7 @@ class ZetaApp {
       requestTimeoutMs: clamp(Number(nextValues.requestTimeoutMs) || this.settings.requestTimeoutMs, 2000, 120000),
       retries: clamp(Number(nextValues.retries) || 0, 0, 4),
       autocompleteEnabled: nextValues.autocompleteEnabled !== false,
+      autoAnalyzeDocument: nextValues.autoAnalyzeDocument !== false,
       checkOnType: !!nextValues.checkOnType,
       autocompleteShowTopK: !!nextValues.autocompleteShowTopK,
       autocompleteManualTrigger: !!nextValues.autocompleteManualTrigger,
@@ -2310,7 +2356,10 @@ class ZetaApp {
 
   persistPanelSnapshot(partial = {}) {
     this.sortActivityEntriesLatestToEarliest();
-    const serializedChunkTree = this.serializeChunkTree(this.chunkTree);
+    const serializedGraphChunkTree = this.serializeChunkTree(this.graphChunkTree);
+    const serializedAnalysisChunkTree = this.serializeChunkTree(this.chunkTree);
+    const serializedChunkTree = serializedGraphChunkTree || serializedAnalysisChunkTree;
+    const persistedActiveChunkId = this.graphActiveChunkId || this.activeChunkId || null;
     const next = {
       healthScore: Math.round(this.currentHealthScore),
       healthBreakdown: this.currentHealthBreakdown,
@@ -2325,7 +2374,7 @@ class ZetaApp {
       lastShortcut: this.lastShortcut,
       shortcutPulseId: this.shortcutPulseId,
       chunkTree: serializedChunkTree,
-      activeChunkId: this.activeChunkId,
+      activeChunkId: persistedActiveChunkId,
       updatedAt: Date.now(),
       ...partial,
     };
@@ -3071,6 +3120,9 @@ class ZetaApp {
     if (!this.activeAdapter) {
       return;
     }
+    if (this.settings.autoAnalyzeDocument === false) {
+      return;
+    }
 
     if (this.scheduledTimer) {
       clearTimeout(this.scheduledTimer);
@@ -3099,6 +3151,67 @@ class ZetaApp {
     }, delay);
   }
 
+  resolveGraphDocumentSnapshot(adapter, fallbackSnapshot = null) {
+    if (adapter && typeof adapter.getDocumentSnapshot === "function") {
+      const direct = adapter.getDocumentSnapshot();
+      if (direct && typeof direct.text === "string") {
+        const sourceText = String(direct.sourceText ?? direct.context ?? direct.text ?? "");
+        const scopeStart = Number.isInteger(direct.scopeStart) ? direct.scopeStart : 0;
+        const scopeEnd = Number.isInteger(direct.scopeEnd) ? direct.scopeEnd : sourceText.length;
+        return {
+          scope: "document",
+          text: sourceText,
+          context: sourceText,
+          sourceText,
+          scopeStart,
+          scopeEnd: Math.max(scopeStart, scopeEnd),
+          caretOffset: Number.isInteger(direct.caretOffset) ? clamp(direct.caretOffset, 0, sourceText.length) : null,
+        };
+      }
+    }
+
+    if (!fallbackSnapshot) {
+      return null;
+    }
+
+    const sourceText = String(
+      fallbackSnapshot.sourceText
+      || fallbackSnapshot.context
+      || fallbackSnapshot.text
+      || ""
+    );
+    return {
+      scope: "document",
+      text: sourceText,
+      context: sourceText,
+      sourceText,
+      scopeStart: 0,
+      scopeEnd: sourceText.length,
+      caretOffset: null,
+    };
+  }
+
+  refreshGraphChunkTree(adapter, fallbackSnapshot = null) {
+    const docSnapshot = this.resolveGraphDocumentSnapshot(adapter, fallbackSnapshot);
+    const sourceText = String(docSnapshot?.text || "");
+    if (!sourceText.trim()) {
+      this.graphChunkTree = null;
+      this.graphActiveChunkId = null;
+      return;
+    }
+
+    const graphCaret = Number.isInteger(docSnapshot?.caretOffset)
+      ? docSnapshot.caretOffset
+      : this.resolveCaretOffsetInScope(docSnapshot, adapter);
+    const chunkWindow = this.resolveChunkWindow(docSnapshot, graphCaret);
+    this.graphChunkTree = this.buildChunkTree(
+      chunkWindow.text,
+      chunkWindow.caretOffset,
+      chunkWindow.baseOffset
+    );
+    this.graphActiveChunkId = this.graphChunkTree?.activeChunkId || null;
+  }
+
   syncChunkSnapshotFromEditor(reason = "typing") {
     const adapter = this.activeAdapter;
     if (!adapter || !adapter.isConnected()) {
@@ -3108,9 +3221,13 @@ class ZetaApp {
     const snapshot = adapter.getScopeSnapshot(effectiveScope);
     const scopeText = String(snapshot.text || "");
 
+    this.refreshGraphChunkTree(adapter, snapshot);
+
     if (!scopeText.trim()) {
       this.chunkTree = null;
       this.activeChunkId = null;
+      this.graphChunkTree = null;
+      this.graphActiveChunkId = null;
       this.persistPanelSnapshot({
         chunkTree: null,
         activeChunkId: null,
@@ -3127,14 +3244,14 @@ class ZetaApp {
     );
     this.activeChunkId = this.chunkTree?.activeChunkId || null;
     this.persistPanelSnapshot({
-      chunkTree: this.serializeChunkTree(this.chunkTree),
-      activeChunkId: this.activeChunkId,
+      chunkTree: this.serializeChunkTree(this.graphChunkTree || this.chunkTree),
+      activeChunkId: this.graphActiveChunkId || this.activeChunkId,
     });
   }
 
   resolveScopeForReason(reason) {
     // Always analyze the full editor while typing to keep backend context complete.
-    if (reason === "typing" || reason === "init" || reason === "adapter-switch") {
+    if (reason === "typing" || reason === "init" || reason === "adapter-switch" || reason === "graph-node") {
       return "document";
     }
     return normalizeScope(this.settings.scope);
@@ -3155,6 +3272,14 @@ class ZetaApp {
 
     const effectiveScope = this.resolveScopeForReason(reason);
     const snapshot = adapter.getScopeSnapshot(effectiveScope);
+    const graphTarget = reason === "graph-node" && this.graphAnalysisTarget
+      ? { ...this.graphAnalysisTarget }
+      : null;
+    const graphTargetLabel = graphTarget?.label ? String(graphTarget.label).trim() : "";
+    if (reason === "graph-node") {
+      this.graphAnalysisTarget = null;
+    }
+    this.refreshGraphChunkTree(adapter, snapshot);
     this.currentMacroList = this.extractMacroNames(snapshot.context || snapshot.text || "");
     const scopeText = String(snapshot.text || "");
     logTrace("analysis_begin", {
@@ -3173,6 +3298,8 @@ class ZetaApp {
       };
       this.chunkTree = null;
       this.activeChunkId = null;
+      this.graphChunkTree = null;
+      this.graphActiveChunkId = null;
       this.focusedIssueIndex = -1;
       this.panel.setStatus("idle", "Nothing to analyze in this scope.");
       this.panel.setIssues([], -1);
@@ -3206,6 +3333,25 @@ class ZetaApp {
       chunkWindow.baseOffset
     );
     this.activeChunkId = this.chunkTree?.activeChunkId || null;
+    if (graphTarget) {
+      const selectedLeaf = this.selectLeafChunkForTarget(
+        ensureArray(this.chunkTree?.leafChunks),
+        graphTarget.start,
+        graphTarget.end
+      );
+      if (selectedLeaf?.chunkId) {
+        this.activeChunkId = selectedLeaf.chunkId;
+        if (this.chunkTree && typeof this.chunkTree === "object") {
+          this.chunkTree.activeChunkId = selectedLeaf.chunkId;
+        }
+      }
+      if (graphTarget.chunkId) {
+        this.graphActiveChunkId = graphTarget.chunkId;
+        if (this.graphChunkTree && typeof this.graphChunkTree === "object") {
+          this.graphChunkTree.activeChunkId = graphTarget.chunkId;
+        }
+      }
+    }
     const sentencePlan = this.buildSentencePlan(snapshot, force, proseSpans);
     logTrace("analysis_plan", {
       cachedSentences: sentencePlan.cachedCount,
@@ -3268,7 +3414,9 @@ class ZetaApp {
 
     this.panel.setGlobalState(
       "analyzing",
-      `global · analyzing ${sentencePlan.pending.length} sentence${sentencePlan.pending.length === 1 ? "" : "s"}`
+      graphTargetLabel
+        ? `Analyzing... ${graphTargetLabel}`
+        : `global · analyzing ${sentencePlan.pending.length} sentence${sentencePlan.pending.length === 1 ? "" : "s"}`
     );
 
     for (let i = 0; i < sentencePlan.pending.length; i += 1) {
@@ -3298,7 +3446,9 @@ class ZetaApp {
       });
       this.panel.setStatus(
         "analyzing",
-        `Analyzing sentence ${i + 1}/${sentencePlan.pending.length} (${modeToLabel(this.settings.mode)})...`
+        graphTargetLabel
+          ? `Analyzing... ${graphTargetLabel}`
+          : `Analyzing sentence ${i + 1}/${sentencePlan.pending.length} (${modeToLabel(this.settings.mode)})...`
       );
       this.panel.setInferenceTime(this.lastInferenceMs, remaining);
 
@@ -3693,12 +3843,23 @@ class ZetaApp {
 
     const envById = new Map(envChunks.map((chunk) => [chunk.chunkId, chunk]));
 
+    // Assign section parents by level stack so every \section, \subsection, etc. gets the correct parent.
+    const sectionParentStack = [];
     for (const sectionChunk of sectionChunks) {
-      let parentId = this.pickSectionParentId(sectionChunk, sectionChunks);
-      if (!parentId) {
-        parentId = this.pickContainingEnvironmentId(sectionChunk, envChunks);
+      const level = Number.isInteger(sectionChunk.sectionLevel) ? sectionChunk.sectionLevel : 99;
+      while (sectionParentStack.length > 0) {
+        const top = sectionParentStack[sectionParentStack.length - 1];
+        const topLevel = Number.isInteger(top.sectionLevel) ? top.sectionLevel : 99;
+        if (topLevel < level) {
+          break;
+        }
+        sectionParentStack.pop();
       }
-      sectionChunk.parentId = parentId || documentChunk.chunkId;
+      const parentId = sectionParentStack.length > 0
+        ? sectionParentStack[sectionParentStack.length - 1].chunkId
+        : this.pickContainingEnvironmentId(sectionChunk, envChunks) || documentChunk.chunkId;
+      sectionChunk.parentId = parentId;
+      sectionParentStack.push(sectionChunk);
     }
 
     for (let i = 0; i < envChunks.length; i += 1) {
@@ -4231,6 +4392,65 @@ class ZetaApp {
     }
 
     return bestChunk.chunkId;
+  }
+
+  selectLeafChunkForTarget(leafChunks, rawStart, rawEnd) {
+    const leaves = ensureArray(leafChunks);
+    if (leaves.length === 0) {
+      return null;
+    }
+
+    let start = Number.isInteger(rawStart) ? rawStart : null;
+    let end = Number.isInteger(rawEnd) ? rawEnd : null;
+    if (!Number.isInteger(start) && Number.isInteger(end)) {
+      start = end;
+    }
+    if (!Number.isInteger(end) && Number.isInteger(start)) {
+      end = start;
+    }
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      return leaves[0];
+    }
+    if (end < start) {
+      const swap = start;
+      start = end;
+      end = swap;
+    }
+
+    const midpoint = Math.floor((start + end) / 2);
+    for (const chunk of leaves) {
+      if (midpoint >= chunk.start && midpoint <= chunk.end) {
+        return chunk;
+      }
+    }
+
+    let bestOverlapChunk = null;
+    let bestOverlap = 0;
+    for (const chunk of leaves) {
+      const overlap = Math.min(chunk.end, end) - Math.max(chunk.start, start);
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestOverlapChunk = chunk;
+      }
+    }
+    if (bestOverlapChunk) {
+      return bestOverlapChunk;
+    }
+
+    let bestChunk = leaves[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const chunk of leaves) {
+      const distance = midpoint < chunk.start
+        ? chunk.start - midpoint
+        : midpoint > chunk.end
+          ? midpoint - chunk.end
+          : 0;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestChunk = chunk;
+      }
+    }
+    return bestChunk;
   }
 
   stripLatexComment(line) {
@@ -5060,7 +5280,7 @@ class ZetaApp {
     if (isLeanSolve || isAnalyze) {
       const baseMinTimeoutMs = this.settings.mode === "accurate" ? 90000 : 70000;
       const leanAlignedMinTimeoutMs = Number.isFinite(leanTimeoutSeconds) && leanTimeoutSeconds > 0
-        ? Math.round(leanTimeoutSeconds * 1000) + 12000
+        ? Math.round(leanTimeoutSeconds * 1000) + 30000
         : 0;
       const minTimeoutMs = Math.max(baseMinTimeoutMs, leanAlignedMinTimeoutMs);
       if (configured < minTimeoutMs) {
@@ -6286,8 +6506,8 @@ class ZetaApp {
       healthScore: score,
       healthBreakdown: breakdown,
       issueCount: issues.length,
-      chunkTree: this.serializeChunkTree(this.chunkTree),
-      activeChunkId: this.activeChunkId,
+      chunkTree: this.serializeChunkTree(this.graphChunkTree || this.chunkTree),
+      activeChunkId: this.graphActiveChunkId || this.activeChunkId,
     });
 
     if (this.activeAdapter && state.snapshot) {

@@ -699,7 +699,7 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   border: 0;
   background: var(--zeta-surface);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -733,6 +733,48 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   border-top: 0;
   background: color-mix(in srgb, var(--zeta-surface) 78%, var(--zeta-nav) 22%);
   padding: 2px 10px 10px;
+  position: relative;
+}
+
+.zeta-graph-sparkle {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--zeta-accent) 38%, var(--zeta-border) 62%);
+  background: radial-gradient(circle at 30% 30%, #ffffff 0%, #fff3cf 38%, #ffe28d 100%);
+  color: #7f6200;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(18, 24, 33, 0.18);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+  animation: zeta-sparkle-pulse 1.7s ease-in-out infinite;
+}
+
+.zeta-graph-sparkle:hover {
+  transform: translateY(-1px) scale(1.05);
+  box-shadow: 0 2px 6px rgba(18, 24, 33, 0.24);
+}
+
+.zeta-graph-sparkle:focus-visible {
+  outline: 2px solid var(--zeta-accent);
+  outline-offset: 1px;
+}
+
+@keyframes zeta-sparkle-pulse {
+  0% {
+    filter: saturate(0.95);
+  }
+  50% {
+    filter: saturate(1.2) brightness(1.05);
+  }
+  100% {
+    filter: saturate(0.95);
+  }
 }
 
 .zeta-graph-node.is-expanded > .zeta-graph-body {

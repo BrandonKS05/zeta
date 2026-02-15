@@ -21,6 +21,7 @@
     scope: "document",
     theme: "light",
     checkOnType: true,
+    autoAnalyzeDocument: true,
     autocompleteEnabled: true,
     autocompleteShowTopK: false,
     autocompleteManualTrigger: false,

@@ -437,6 +437,10 @@ class ZetaPanel {
               <input id="zeta-autocomplete-enabled" type="checkbox" />
             </div>
             <div class="zeta-settings-row">
+              <span>Auto-analyze document</span>
+              <input id="zeta-auto-analyze-document" type="checkbox" />
+            </div>
+            <div class="zeta-settings-row">
               <span>Check on typing</span>
               <input id="zeta-check-on-type" type="checkbox" />
             </div>
@@ -524,6 +528,7 @@ class ZetaPanel {
       timeout: this.root.querySelector("#zeta-timeout"),
       retries: this.root.querySelector("#zeta-retries"),
       autocompleteEnabled: this.root.querySelector("#zeta-autocomplete-enabled"),
+      autoAnalyzeDocument: this.root.querySelector("#zeta-auto-analyze-document"),
       checkOnType: this.root.querySelector("#zeta-check-on-type"),
       autocompleteTopK: this.root.querySelector("#zeta-autocomplete-topk"),
       autocompleteManual: this.root.querySelector("#zeta-autocomplete-manual"),
@@ -566,6 +571,7 @@ class ZetaPanel {
         requestTimeoutMs: Number(this.refs.timeout.value),
         retries: Number(this.refs.retries.value),
         autocompleteEnabled: this.refs.autocompleteEnabled.checked,
+        autoAnalyzeDocument: this.refs.autoAnalyzeDocument.checked,
         checkOnType: this.refs.checkOnType.checked,
         autocompleteShowTopK: this.refs.autocompleteTopK.checked,
         autocompleteManualTrigger: this.refs.autocompleteManual.checked,
@@ -740,6 +746,7 @@ class ZetaPanel {
     this.refs.timeout.value = String(settings.requestTimeoutMs);
     this.refs.retries.value = String(settings.retries);
     this.refs.autocompleteEnabled.checked = settings.autocompleteEnabled !== false;
+    this.refs.autoAnalyzeDocument.checked = settings.autoAnalyzeDocument !== false;
     this.refs.checkOnType.checked = !!settings.checkOnType;
     this.refs.autocompleteTopK.checked = !!settings.autocompleteShowTopK;
     this.refs.autocompleteManual.checked = !!settings.autocompleteManualTrigger;

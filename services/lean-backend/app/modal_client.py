@@ -272,6 +272,10 @@ def _normalize_generated_payload(data: dict[str, Any]) -> GeneratedLean:
     nested_result = data.get("result")
     if isinstance(nested_result, dict):
         candidates.append(nested_result)
+    for key in ("output", "response", "data"):
+        val = data.get(key)
+        if isinstance(val, dict):
+            candidates.append(val)
 
     for candidate in candidates:
         code_key, lean_code = _extract_lean_code(candidate)
@@ -290,9 +294,11 @@ def _normalize_generated_payload(data: dict[str, Any]) -> GeneratedLean:
 
         return GeneratedLean(code=lean_code, metadata={})
 
+    top_keys = list(data.keys()) if isinstance(data, dict) else []
     raise ModalClientError(
         "Modal response missing Lean code. Expected one of: "
-        "'lean_code', 'lean_source', 'code', or 'result.lean_code'."
+        "'lean_code', 'lean_source', 'code', or 'result.lean_code'. "
+        f"Response keys: {top_keys!r}."
     )
 
 
@@ -349,6 +355,12 @@ async def generate_lean(
             if response.status_code >= 500:
                 raise _RetriableModalError(
                     f"Modal server error {response.status_code}: {response.text[:500]}"
+                )
+            if response.status_code == 202:
+                raise ModalClientError(
+                    "Modal returned 202 Accepted (async job). Translation expects a synchronous "
+                    "response with lean_code. Use an endpoint that returns 200 with the result in the body, "
+                    "or implement polling for the job URL."
                 )
             if response.status_code >= 400:
                 logger.warning(
@@ -444,6 +456,34 @@ def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: di
         for c in raw["candidates"]:
             if isinstance(c, str) and c.strip():
                 candidates.append(c.strip())
+                continue
+            if isinstance(c, dict):
+                for key in ("completion", "text", "output", "result"):
+                    val = c.get(key)
+                    if isinstance(val, str) and val.strip():
+                        candidates.append(val.strip())
+                        break
+
+    # Support OpenAI-style and chat-style wrappers from upstream proxies.
+    choices = raw.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            for key in ("text", "completion", "output"):
+                val = choice.get(key)
+                if isinstance(val, str) and val.strip():
+                    candidates.append(val.strip())
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    candidates.append(content.strip())
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str) and content.strip():
+                    candidates.append(content.strip())
     for key in ("lean_code", "text", "output", "completion", "result"):
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
@@ -459,7 +499,41 @@ def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: di
         if isinstance(nested.get("text"), str) and nested["text"].strip():
             candidates.append(nested["text"].strip())
 
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        normalized = str(item or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    candidates = deduped
+
     selected = candidates[0] if candidates else None
+    upstream_reasons = raw.get("no_suggestion_reasons")
+    if isinstance(upstream_reasons, list):
+        reasons = [str(reason).strip() for reason in upstream_reasons if str(reason).strip()]
+    else:
+        reasons = []
+    if not reasons and not candidates:
+        reasons = ["Herald returned no completion"]
+    no_suggestion_debug: dict[str, Any] | None = None
+    if not candidates:
+        raw_preview = ""
+        try:
+            raw_preview = json.dumps(raw, ensure_ascii=False)[:800]
+        except Exception:
+            raw_preview = str(raw)[:800]
+        no_suggestion_debug = {
+            "upstream_keys": sorted(raw.keys()),
+            "raw_preview": raw_preview,
+            "has_choices": isinstance(raw.get("choices"), list),
+            "has_candidates": isinstance(raw.get("candidates"), list),
+        }
+
     return {
         "model": raw.get("model", "herald"),
         "status": "ok" if candidates else "no_suggestion",
@@ -470,7 +544,8 @@ def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: di
         "cache_hit": False,
         "latency_ms": int(raw.get("latency_ms", 0)),
         "timings_ms": raw.get("timings_ms") or {},
-        "no_suggestion_reasons": [] if candidates else ["Herald returned no completion"],
+        "no_suggestion_reasons": [] if candidates else reasons,
+        "no_suggestion_debug": no_suggestion_debug,
     }
 
 

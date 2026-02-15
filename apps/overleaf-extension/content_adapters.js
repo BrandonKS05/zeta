@@ -56,6 +56,10 @@ class AdapterBase {
     };
   }
 
+  getDocumentSnapshot() {
+    return null;
+  }
+
   getVisibleTextSnapshot() {
     return { text: "", segments: [], lines: [] };
   }
@@ -170,6 +174,20 @@ class TextareaAdapter extends AdapterBase {
     };
   }
 
+  getDocumentSnapshot() {
+    const sourceText = String(this.element?.value || "");
+    const caret = Number.isInteger(this.element?.selectionStart) ? this.element.selectionStart : 0;
+    return {
+      scope: "document",
+      text: sourceText,
+      context: sourceText,
+      sourceText,
+      scopeStart: 0,
+      scopeEnd: sourceText.length,
+      caretOffset: clamp(caret, 0, sourceText.length),
+    };
+  }
+
   getCaretOffset() {
     return this.element.selectionStart || 0;
   }
@@ -217,13 +235,179 @@ class TextareaAdapter extends AdapterBase {
 }
 
 class DomLineAdapter extends AdapterBase {
-  constructor(root, content, lineSelector, scroller) {
+  constructor(root, content, lineSelector, scroller, editorKind = "dom") {
     super(root);
     this.content = content;
     this.lineSelector = lineSelector;
     this.scroller = scroller || root;
+    this.editorKind = String(editorKind || "dom").toLowerCase();
     this.supportsInlineHighlights = true;
     this.supportsDirectRangeReplace = true;
+  }
+
+  getDocumentSnapshot() {
+    const sourceText = this.getDocumentSourceText();
+    if (typeof sourceText !== "string") {
+      return null;
+    }
+    const caretOffset = this.getDocumentCaretOffset(sourceText);
+    return {
+      scope: "document",
+      text: sourceText,
+      context: sourceText,
+      sourceText,
+      scopeStart: 0,
+      scopeEnd: sourceText.length,
+      caretOffset: Number.isInteger(caretOffset) ? clamp(caretOffset, 0, sourceText.length) : null,
+    };
+  }
+
+  getDocumentSourceText() {
+    if (this.editorKind === "cm") {
+      const view = this.resolveCodeMirrorView();
+      const doc = view?.state?.doc;
+      if (doc && typeof doc.toString === "function") {
+        try {
+          return String(doc.toString() || "");
+        } catch (_error) {
+          // fall through to DOM snapshot
+        }
+      }
+    }
+
+    if (this.editorKind === "ace") {
+      const editor = this.resolveAceEditor();
+      if (editor && typeof editor.getValue === "function") {
+        try {
+          return String(editor.getValue() || "");
+        } catch (_error) {
+          // fall through to DOM snapshot
+        }
+      }
+    }
+
+    return String(this.getVisibleTextSnapshot().text || "");
+  }
+
+  getDocumentCaretOffset(sourceText = "") {
+    if (this.editorKind === "cm") {
+      const view = this.resolveCodeMirrorView();
+      const selection = view?.state?.selection;
+      const main = selection?.main;
+      if (main && Number.isInteger(main.head)) {
+        return clamp(main.head, 0, String(sourceText || "").length);
+      }
+    }
+
+    if (this.editorKind === "ace") {
+      const editor = this.resolveAceEditor();
+      const selection = editor?.selection;
+      if (selection && typeof selection.getCursor === "function") {
+        const cursor = selection.getCursor();
+        const index = this.acePositionToIndex(editor, cursor, sourceText);
+        if (Number.isInteger(index)) {
+          return clamp(index, 0, String(sourceText || "").length);
+        }
+      }
+    }
+
+    const visible = this.getVisibleTextSnapshot();
+    return this.getCaretOffset(visible);
+  }
+
+  resolveCodeMirrorView() {
+    const readViewFromHost = (host) => {
+      if (!host) {
+        return null;
+      }
+      const direct = host.view || host.editorView;
+      if (direct?.state?.doc && typeof direct.state.doc.toString === "function") {
+        return direct;
+      }
+      const cmView = host.cmView;
+      if (cmView?.view?.state?.doc && typeof cmView.view.state.doc.toString === "function") {
+        return cmView.view;
+      }
+      if (cmView?.state?.doc && typeof cmView.state.doc.toString === "function") {
+        return cmView;
+      }
+      const legacy = host.CodeMirror || host.cm || host.cmEditor;
+      if (legacy?.state?.doc && typeof legacy.state.doc.toString === "function") {
+        return legacy;
+      }
+      return null;
+    };
+
+    const candidates = [this.root, this.content, this.scroller];
+    for (const host of candidates) {
+      const view = readViewFromHost(host);
+      if (view) {
+        return view;
+      }
+    }
+
+    // Some CM6 embeds keep the editor view on descendant nodes (often cm-content / cm-line)
+    // via internal cmView pointers rather than directly on the root wrapper.
+    const rootsToScan = [this.content, this.root, this.scroller].filter(Boolean);
+    for (const scanRoot of rootsToScan) {
+      const descendants = scanRoot.querySelectorAll?.(".cm-content, .cm-scroller, .cm-line");
+      if (!descendants || descendants.length === 0) {
+        continue;
+      }
+      for (const node of descendants) {
+        const view = readViewFromHost(node);
+        if (view) {
+          return view;
+        }
+      }
+    }
+    return null;
+  }
+
+  resolveAceEditor() {
+    const candidates = [this.root, this.content, this.scroller];
+    for (const host of candidates) {
+      if (!host) {
+        continue;
+      }
+      const envEditor = host.env && host.env.editor;
+      if (envEditor && typeof envEditor.getValue === "function") {
+        return envEditor;
+      }
+      if (host.editor && typeof host.editor.getValue === "function") {
+        return host.editor;
+      }
+    }
+    return null;
+  }
+
+  acePositionToIndex(editor, position, sourceText = "") {
+    if (!editor || !position || !Number.isInteger(position.row) || !Number.isInteger(position.column)) {
+      return null;
+    }
+    const session = editor.session || (typeof editor.getSession === "function" ? editor.getSession() : null);
+    const doc = session?.doc;
+    if (doc && typeof doc.positionToIndex === "function") {
+      try {
+        return doc.positionToIndex(position, 0);
+      } catch (_error) {
+        // fall back to manual line walk
+      }
+    }
+
+    const text = String(sourceText || "");
+    if (!text) {
+      return 0;
+    }
+    const lines = text.split("\n");
+    const row = clamp(position.row, 0, Math.max(0, lines.length - 1));
+    const col = clamp(position.column, 0, (lines[row] || "").length);
+    let index = 0;
+    for (let i = 0; i < row; i += 1) {
+      index += (lines[i] || "").length + 1;
+    }
+    index += col;
+    return clamp(index, 0, text.length);
   }
 
   setupObservers(onChange, onScroll) {
@@ -337,10 +521,17 @@ class DomLineAdapter extends AdapterBase {
   }
 
   getScopeSnapshot(scope) {
+    const scopeName = normalizeScope(scope);
+    if (scopeName === "document") {
+      const fullDoc = this.getDocumentSnapshot();
+      if (fullDoc && typeof fullDoc.text === "string") {
+        return fullDoc;
+      }
+    }
+
     const snap = this.getVisibleTextSnapshot();
     const selected = this.getSelectionText().trim();
     const selection = window.getSelection();
-    const scopeName = normalizeScope(scope);
 
     const caretOffset = this.getCaretOffset(snap) ?? 0;
     let scopeStart = 0;
@@ -368,6 +559,10 @@ class DomLineAdapter extends AdapterBase {
 
     if (!selection || selection.rangeCount === 0) {
       resolvedScope = "document";
+      const fullDoc = this.getDocumentSnapshot();
+      if (fullDoc && typeof fullDoc.text === "string") {
+        return fullDoc;
+      }
     }
 
     return {
