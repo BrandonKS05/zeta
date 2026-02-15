@@ -70,7 +70,7 @@ def _normalize_imports(raw_imports: Any) -> list[str]:
         return [raw_imports.strip()]
     return []
 
-
+ 
 def _normalize_temperature(raw_temperature: Any) -> float:
     if isinstance(raw_temperature, bool):
         return 0.0
