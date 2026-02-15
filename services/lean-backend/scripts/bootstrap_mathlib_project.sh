@@ -6,6 +6,7 @@ MATHLIB_GIT_URL="${MATHLIB_GIT_URL:-https://github.com/leanprover-community/math
 MATHLIB_REVISION="${MATHLIB_REVISION:-}"
 MATHLIB_BOOTSTRAP_TOOLCHAIN="${MATHLIB_BOOTSTRAP_TOOLCHAIN:-stable}"
 MATHLIB_PREBUILD_MODULES="${MATHLIB_PREBUILD_MODULES:-Mathlib.Data.Real.Basic}"
+CORRUPT_HEAD_PATTERN="could not resolve 'HEAD' to a commit"
 
 if ! command -v lake >/dev/null 2>&1; then
   echo "lake command not found. Install Lean/Lake first." >&2
@@ -46,7 +47,29 @@ EOF
 fi
 
 echo "Bootstrapping Lake project at ${PROJECT_DIR}"
-lake update
+run_lake_update() {
+  local update_log
+  update_log="$(mktemp)"
+  if lake update 2>&1 | tee "${update_log}"; then
+    rm -f "${update_log}"
+    return 0
+  fi
+
+  if grep -q "${CORRUPT_HEAD_PATTERN}" "${update_log}"; then
+    echo "Detected corrupt mathlib git checkout. Cleaning and retrying lake update..." >&2
+    rm -rf .lake/packages/mathlib
+    rm -f lake-manifest.json
+    if lake update; then
+      rm -f "${update_log}"
+      return 0
+    fi
+  fi
+
+  rm -f "${update_log}"
+  return 1
+}
+
+run_lake_update
 lake exe cache get
 
 IFS=',' read -r -a modules <<< "${MATHLIB_PREBUILD_MODULES}"
