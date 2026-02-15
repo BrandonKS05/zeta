@@ -31,10 +31,22 @@ _INTERPRET_STDOUT_MAX_CHARS = 1_200
 _INTERPRET_DIAGNOSTICS_MAX_CHARS = 2_500
 
 
+def _use_responses_api(settings: Settings) -> bool:
+    """Use OpenAI Responses API for gpt-5* models (recommended by OpenAI)."""
+    if settings.llm_endpoint_url:
+        return "/responses" in settings.llm_endpoint_url.rstrip("/")
+    base = (settings.llm_base_url or "").strip().lower()
+    model = (settings.llm_model or "").strip().lower()
+    return "api.openai.com" in base and (model.startswith("gpt-5") or "gpt-5" in model)
+
+
 def _endpoint_url(settings: Settings) -> str:
     if settings.llm_endpoint_url:
         return settings.llm_endpoint_url
-    return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+    base = settings.llm_base_url.rstrip("/")
+    if _use_responses_api(settings):
+        return f"{base}/responses"
+    return f"{base}/chat/completions"
 
 
 def _token_limit_key(_endpoint: str) -> str:
@@ -300,20 +312,52 @@ def _normalize_interpretation(
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str | None:
+    # Chat Completions: choices[0].message.content
     choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            message = first_choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+                    if parts:
+                        return "\n".join(parts)
 
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        return None
+    # Responses API: output_text or output (array of items)
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
 
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        return None
+    output = payload.get("output")
+    if isinstance(output, list):
+        parts = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+            if item.get("type") == "message" and isinstance(item.get("content"), str):
+                parts.append(item["content"])
+        if parts:
+            return "\n".join(parts)
 
-    content = message.get("content")
-    return content if isinstance(content, str) else None
+    return None
 
 
 def _fallback_interpretation(
@@ -366,6 +410,11 @@ async def repair_lean_compile_errors(
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
+    system_content = (
+        "You are an expert Lean 4 engineer. Fix compilation errors so the code compiles. "
+        "If the error involves #check or a def without a body (expected ':=', 'where' or '|'), replace the incomplete def with an axiom and keep #check. "
+        "Return only the corrected Lean 4 source code, no markdown, no explanation."
+    )
     user_prompt = (
         "This Lean 4 code fails to compile. Fix the compilation errors below so the code compiles.\n\n"
         "Rules:\n"
@@ -379,23 +428,24 @@ async def repair_lean_compile_errors(
         f"Broken Lean code:\n{truncate_text(code, _REPAIR_CODE_MAX_CHARS)}"
     )
 
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert Lean 4 engineer. Fix compilation errors so the code compiles. "
-                    "If the error involves #check or a def without a body (expected ':=', 'where' or '|'), replace the incomplete def with an axiom and keep #check. "
-                    "Return only the corrected Lean 4 source code, no markdown, no explanation."
-                ),
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-    }
     token_key = _token_limit_key(endpoint)
     limit = min(settings.llm_max_completion_tokens, 2048) if settings.llm_max_completion_tokens > 0 else 2048
-    payload[token_key] = limit
+    if _use_responses_api(settings):
+        payload = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": user_prompt,
+            token_key: limit,
+        }
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_prompt},
+            ],
+            token_key: limit,
+        }
 
     timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 60))
     try:
@@ -424,7 +474,35 @@ async def repair_lean_compile_errors(
 
     content = _extract_message_content(data)
     if not content or not isinstance(content, str):
-        return (None, "empty_content")
+        finish_reason = ""
+        if isinstance(data.get("choices"), list) and data["choices"]:
+            first = data["choices"][0]
+            if isinstance(first, dict):
+                finish_reason = first.get("finish_reason") or ""
+        err_payload = data.get("error")
+        err_msg = err_payload.get("message", str(err_payload))[:200] if isinstance(err_payload, dict) else ""
+        detail = "empty_content"
+        if finish_reason:
+            detail += f" finish_reason={finish_reason}"
+        if err_msg:
+            detail += f" error={err_msg}"
+        msg = None
+        refusal = ""
+        if isinstance(data.get("choices"), list) and data["choices"]:
+            first = data["choices"][0]
+            if isinstance(first, dict):
+                msg = first.get("message")
+                if isinstance(msg, dict) and msg.get("refusal"):
+                    refusal = str(msg.get("refusal"))[:150]
+        if refusal:
+            detail += f" refusal={refusal}"
+        logger.warning(
+            "repair_lean_compile_errors empty_content keys=%s finish_reason=%s message_keys=%s",
+            list(data.keys()),
+            finish_reason,
+            list(msg.keys()) if isinstance(msg, dict) else msg,
+        )
+        return (None, detail)
 
     fixed = content.strip()
     if fixed.startswith("```"):
@@ -454,6 +532,7 @@ async def repair_lean_def_check(
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
+    system_content = "You are an expert Lean 4 engineer. Return only the corrected Lean 4 source code, nothing else."
     user_prompt = (
         "This Lean 4 code fails to compile with the following error:\n\n"
         f"{diagnostic_message}\n\n"
@@ -465,19 +544,24 @@ async def repair_lean_def_check(
         f"Broken Lean code:\n{truncate_text(code, _REPAIR_CODE_MAX_CHARS)}"
     )
 
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are an expert Lean 4 engineer. Return only the corrected Lean 4 source code, nothing else.",
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-    }
     token_key = _token_limit_key(endpoint)
     limit = min(settings.llm_max_completion_tokens, 1024) if settings.llm_max_completion_tokens > 0 else 1024
-    payload[token_key] = limit
+    if _use_responses_api(settings):
+        payload = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": user_prompt,
+            token_key: limit,
+        }
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_prompt},
+            ],
+            token_key: limit,
+        }
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
     try:
