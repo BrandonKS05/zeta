@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+
+import httpx
 import pytest
 
 from app.modal_client import (
     ModalClientError,
     _build_modal_payload,
     _normalize_generated_payload,
+    generate_lean,
 )
+from app.settings import Settings
 
 
 def test_build_payload_for_analyze_endpoint_matches_expected_shape() -> None:
@@ -107,3 +112,55 @@ def test_normalize_generated_payload_raises_on_non_ok_status() -> None:
 
     with pytest.raises(ModalClientError):
         _normalize_generated_payload(response_data)
+
+
+def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json, headers):
+            nonlocal captured_headers
+            captured_headers = dict(headers or {})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "lean_source": "import Std\naxiom add_zero_right : ∀ n : Nat, n + 0 = n\n",
+                },
+            )
+
+    monkeypatch.setattr("app.modal_client.httpx.AsyncClient", _FakeAsyncClient)
+
+    settings = Settings(
+        modal_endpoint_url="https://example.modal.run/v1/analyze",
+        modal_api_key="test-api-key",
+    )
+
+    async def _run() -> None:
+        generated = await generate_lean(
+            prompt=r"For all $n \\in \\mathbb{N}$, we have $n + 0 = n$.",
+            context={
+                "theorem_name": "add_zero_right",
+                "imports": ["Std"],
+                "temperature": 0.0,
+            },
+            max_iters=1,
+            settings=settings,
+        )
+        assert generated.code.startswith("import Std")
+
+    asyncio.run(_run())
+
+    assert captured_headers.get("Authorization") == "Bearer test-api-key"
+    assert captured_headers.get("x-api-key") == "test-api-key"

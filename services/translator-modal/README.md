@@ -205,6 +205,23 @@ For low-latency UI suggestions, call `/v1/generate` (or set `skip_lean_check=tru
   - `GPU_MIN_CONTAINERS`, `GPU_BUFFER_CONTAINERS`, `GPU_MAX_CONTAINERS`
   - `API_MIN_CONTAINERS`, `API_MAX_CONTAINERS`
 
+### Optional vLLM backend
+
+You can switch generation from Hugging Face `transformers` to `vllm` without changing API routes.
+
+```bash
+export INFERENCE_BACKEND=vllm
+```
+
+Optional vLLM tuning env vars:
+
+- `VLLM_GPU_MEMORY_UTILIZATION` (default `0.9`)
+- `VLLM_MAX_MODEL_LEN` (default `4096`)
+- `VLLM_MAX_NUM_SEQS` (default `8`)
+- `VLLM_ENFORCE_EAGER` (default `false`)
+
+`/healthz` now reports the active backend via `inference_backend`.
+
 ## 11. Batch evaluation suite
 
 Run all built-in test prompts and save responses:

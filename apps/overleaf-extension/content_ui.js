@@ -2,7 +2,7 @@
   "use strict";
 
   const zeta = window.__zetaContent || (window.__zetaContent = {});
-  const { MAX_HIGHLIGHT_RECTS, ensureArray, normalizeSeverity, normalizeTheme, clamp } = zeta;
+  const { MAX_HIGHLIGHT_RECTS, ensureArray, normalizeSeverity, clamp } = zeta;
 
 class ZetaOverlay {
   constructor() {
@@ -248,17 +248,11 @@ class ZetaPanel {
     this.root.setAttribute("role", "complementary");
     this.root.setAttribute("aria-label", "zeta math checker panel");
 
-    this.fab = document.createElement("button");
-    this.fab.type = "button";
-    this.fab.className = "zeta-fab";
-    this.fab.setAttribute("aria-label", "Toggle zeta panel");
-    this.fab.innerHTML = `<img src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />`;
-
     this.root.innerHTML = `
       <header class="zeta-header">
         <div class="zeta-header-top">
           <div class="zeta-brand">
-            <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />
+            <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/zeta-black-white-2048.png")}" alt="zeta" />
             <div>
               <h2>zeta</h2>
               <p>Grammarly for Math</p>
@@ -269,7 +263,6 @@ class ZetaPanel {
               <span id="zeta-global-dot" class="zeta-global-dot"></span>
               <span id="zeta-global-text">global · idle</span>
             </div>
-            <button type="button" id="zeta-theme-btn" class="zeta-icon-btn">Light</button>
             <button type="button" id="zeta-collapse-btn" class="zeta-icon-btn">Hide</button>
           </div>
         </div>
@@ -335,18 +328,8 @@ class ZetaPanel {
             <h3>Live Feedback</h3>
             <span id="zeta-feedback-count" class="zeta-card-meta">0</span>
           </div>
-          <div class="zeta-tab-strip" role="tablist" aria-label="Feedback tabs">
-            <button type="button" id="zeta-tab-feedback" class="zeta-tab-btn" role="tab" aria-selected="true">Feedback</button>
-            <button type="button" id="zeta-tab-chunks" class="zeta-tab-btn" role="tab" aria-selected="false">Chunks</button>
-          </div>
-          <div id="zeta-tabpanel-feedback" class="zeta-tab-panel" role="tabpanel">
-            <ul id="zeta-issues" class="zeta-list"></ul>
-            <p id="zeta-issues-empty" class="zeta-empty">No issues found.</p>
-          </div>
-          <div id="zeta-tabpanel-chunks" class="zeta-tab-panel" role="tabpanel" hidden>
-            <ul id="zeta-chunk-tree" class="zeta-list zeta-fs-list"></ul>
-            <p id="zeta-chunk-empty" class="zeta-empty">No chunk tree yet.</p>
-          </div>
+          <ul id="zeta-issues" class="zeta-list"></ul>
+          <p id="zeta-issues-empty" class="zeta-empty">No issues found.</p>
         </section>
         <section id="zeta-settings-card" class="zeta-card" style="display:none">
           <div class="zeta-card-header">
@@ -380,18 +363,39 @@ class ZetaPanel {
             <button type="button" id="zeta-save-settings" class="zeta-btn zeta-btn--primary">Save Settings</button>
           </div>
           <ul class="zeta-shortcuts">
-            <li><code>Alt+Shift+Z</code> toggle panel</li>
-            <li><code>Alt+Shift+N</code> next issue</li>
-            <li><code>Alt+Shift+P</code> previous issue</li>
-            <li><code>Ctrl/Cmd+Enter</code> run check now</li>
-            <li><code>Alt+Shift+A</code> apply focused replacement</li>
-            <li><code>Alt+Shift+U</code> undo last action</li>
+            <li><code>⌥⇧N</code> ➡️ next issue</li>
+            <li><code>⌥⇧P</code> ⬅️ previous issue</li>
+            <li><code>⌘↩</code> ⚡ run check now</li>
+            <li><code>⌥⇧R</code> 🔄 refresh checker</li>
+            <li><code>⌥⇧H</code> 🧹 clear activity history</li>
+            <li><code>⌥⇧A</code> ✅ apply focused replacement</li>
+            <li><code>⌥⇧U</code> ↩️ undo last action</li>
           </ul>
         </section>
       </div>
     `;
 
-    document.body.append(this.root, this.fab);
+    document.body.append(this.root);
+    this.fab = document.createElement("button");
+    this.fab.type = "button";
+    this.fab.className = "zeta-fab";
+    this.fab.setAttribute("aria-label", "Open zeta panel");
+    this.fab.innerHTML = `
+      <img src="${chrome.runtime.getURL("assets/zeta-black-white-2048.png")}" alt="" />
+    `;
+    document.body.append(this.fab);
+    this.popupMirror = document.createElement("aside");
+    this.popupMirror.className = "zeta-popup-mirror";
+    this.popupMirror.setAttribute("aria-hidden", "true");
+    this.popupMirror.innerHTML = `
+      <iframe
+        class="zeta-popup-mirror-frame"
+        src="${chrome.runtime.getURL("popup.html?embedded=1")}"
+        title="zeta popup mirror"
+      ></iframe>
+    `;
+    document.body.append(this.popupMirror);
+    this.isPopupOpen = false;
 
     this.refs = {
       statusDot: this.root.querySelector("#zeta-status-dot"),
@@ -409,14 +413,8 @@ class ZetaPanel {
       healthLabel: this.root.querySelector("#zeta-health-label"),
       activity: this.root.querySelector("#zeta-activity"),
       activityEmpty: this.root.querySelector("#zeta-activity-empty"),
-      feedbackTab: this.root.querySelector("#zeta-tab-feedback"),
-      chunksTab: this.root.querySelector("#zeta-tab-chunks"),
-      feedbackPanel: this.root.querySelector("#zeta-tabpanel-feedback"),
-      chunksPanel: this.root.querySelector("#zeta-tabpanel-chunks"),
       issues: this.root.querySelector("#zeta-issues"),
       issuesEmpty: this.root.querySelector("#zeta-issues-empty"),
-      chunkTree: this.root.querySelector("#zeta-chunk-tree"),
-      chunkEmpty: this.root.querySelector("#zeta-chunk-empty"),
       runBtn: this.root.querySelector("#zeta-run-btn"),
       regenerateBtn: this.root.querySelector("#zeta-regenerate-btn"),
       nextBtn: this.root.querySelector("#zeta-next-btn"),
@@ -424,9 +422,8 @@ class ZetaPanel {
       undoBtn: this.root.querySelector("#zeta-undo-btn"),
       clearHistoryBtn: this.root.querySelector("#zeta-clear-history-btn"),
       settingsBtn: this.root.querySelector("#zeta-settings-btn"),
-      themeBtn: this.root.querySelector("#zeta-theme-btn"),
-      settingsCard: this.root.querySelector("#zeta-settings-card"),
       collapseBtn: this.root.querySelector("#zeta-collapse-btn"),
+      settingsCard: this.root.querySelector("#zeta-settings-card"),
       backendUrl: this.root.querySelector("#zeta-backend-url"),
       timeout: this.root.querySelector("#zeta-timeout"),
       retries: this.root.querySelector("#zeta-retries"),
@@ -436,23 +433,19 @@ class ZetaPanel {
     };
 
     this.isSettingsOpen = false;
-    this.activeTab = "feedback";
     this.bindEvents();
-    this.setTab(this.activeTab);
+    this.setOpen(false);
   }
 
   bindEvents() {
-    this.fab.addEventListener("click", () => this.handlers.onTogglePanel());
-    this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel(false));
-    this.refs.themeBtn.addEventListener("click", () => this.handlers.onToggleTheme());
+    this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel?.(false));
+    this.fab.addEventListener("click", () => this.handlers.onTogglePanel?.(!this.isPopupOpen));
     this.refs.runBtn.addEventListener("click", () => this.handlers.onRunNow());
     this.refs.regenerateBtn.addEventListener("click", () => this.handlers.onRegenerate());
     this.refs.undoBtn.addEventListener("click", () => this.handlers.onUndoLast());
     this.refs.clearHistoryBtn.addEventListener("click", () => this.handlers.onClearHistory());
     this.refs.nextBtn.addEventListener("click", () => this.handlers.onNextIssue());
     this.refs.prevBtn.addEventListener("click", () => this.handlers.onPrevIssue());
-    this.refs.feedbackTab.addEventListener("click", () => this.setTab("feedback"));
-    this.refs.chunksTab.addEventListener("click", () => this.setTab("chunks"));
 
     this.refs.scopeSelect.addEventListener("change", () => {
       this.handlers.onScopeChange(this.refs.scopeSelect.value);
@@ -510,16 +503,17 @@ class ZetaPanel {
   }
 
   setOpen(open) {
-    this.root.classList.toggle("is-collapsed", !open);
-    this.fab.classList.toggle("is-hidden", !!open);
+    this.isPopupOpen = !!open;
+    // Keep the legacy shell hidden; the mirror iframe shows the same UI as the toolbar popup.
+    this.root.classList.add("is-collapsed");
+    this.popupMirror.classList.toggle("is-open", this.isPopupOpen);
+    this.popupMirror.setAttribute("aria-hidden", this.isPopupOpen ? "false" : "true");
+    this.fab.setAttribute("aria-expanded", this.isPopupOpen ? "true" : "false");
   }
 
-  setTheme(theme) {
-    const next = normalizeTheme(theme);
-    this.root.setAttribute("data-theme", next);
-    this.fab.setAttribute("data-theme", next);
-    document.documentElement.setAttribute("data-zeta-theme", next);
-    this.refs.themeBtn.textContent = next === "dark" ? "Light" : "Dark";
+  setTheme(_theme) {
+    this.root.setAttribute("data-theme", "light");
+    document.documentElement.setAttribute("data-zeta-theme", "light");
   }
 
   setGlobalState(state, text) {
@@ -576,152 +570,6 @@ class ZetaPanel {
 
   setSentenceStats(cachedCount, pendingCount) {
     this.refs.sentenceStats.textContent = `${cachedCount} cached · ${pendingCount} pending`;
-  }
-
-  setTab(tab) {
-    const next = tab === "chunks" ? "chunks" : "feedback";
-    this.activeTab = next;
-
-    const feedbackActive = next === "feedback";
-    this.refs.feedbackTab.classList.toggle("is-active", feedbackActive);
-    this.refs.chunksTab.classList.toggle("is-active", !feedbackActive);
-    this.refs.feedbackTab.setAttribute("aria-selected", feedbackActive ? "true" : "false");
-    this.refs.chunksTab.setAttribute("aria-selected", feedbackActive ? "false" : "true");
-    this.refs.feedbackPanel.hidden = !feedbackActive;
-    this.refs.chunksPanel.hidden = feedbackActive;
-  }
-
-  setChunkTree(chunkTree, activeChunkId) {
-    const list = this.refs.chunkTree;
-    list.replaceChildren();
-
-    const chunks = ensureArray(chunkTree?.chunks).slice().sort((a, b) => (a.start || 0) - (b.start || 0));
-    const leafChunks = ensureArray(chunkTree?.leafChunks);
-    if (chunks.length === 0) {
-      this.refs.chunkEmpty.style.display = "block";
-      this.refs.chunksTab.textContent = "Chunks";
-      return;
-    }
-
-    const rootId = "__root__";
-    const byParent = new Map();
-    const pushChild = (parentId, chunk) => {
-      const key = parentId || rootId;
-      const bucket = byParent.get(key) || [];
-      bucket.push(chunk);
-      byParent.set(key, bucket);
-    };
-    for (const chunk of chunks) {
-      pushChild(chunk.parentId, chunk);
-    }
-    for (const bucket of byParent.values()) {
-      bucket.sort((a, b) => (a.start || 0) - (b.start || 0));
-    }
-
-    const cleanExcerpt = (value, maxChars = 96) => {
-      const text = String(value || "").replace(/\s+/g, " ").trim();
-      if (text.length <= maxChars) {
-        return text;
-      }
-      return `${text.slice(0, maxChars - 3)}...`;
-    };
-
-    const makeNode = (className, depth) => {
-      const item = document.createElement("li");
-      item.className = className;
-      item.setAttribute("data-depth", String(depth));
-      return item;
-    };
-
-    const appendSentenceNode = (targetList, sentence, index, depth) => {
-      const item = makeNode("zeta-fs-node zeta-fs-node--sentence", depth);
-      const text = cleanExcerpt(sentence?.text || "", 110);
-      item.innerHTML = `
-        <div class="zeta-fs-row">
-          <span class="zeta-fs-label">sentence ${index + 1}</span>
-          <span class="zeta-fs-meta">${sentence?.start ?? 0}-${sentence?.end ?? 0}</span>
-        </div>
-        <p class="zeta-fs-text">${text || "(empty sentence)"}</p>
-      `;
-      targetList.appendChild(item);
-    };
-
-    const describeChunk = (chunk) => {
-      const type = String(chunk.type || "chunk");
-      if (type === "section") {
-        const sectionKind = chunk.sectionName ? String(chunk.sectionName).toLowerCase() : "section";
-        const sectionTitle = cleanExcerpt(chunk.sectionTitle || "", 64);
-        return sectionTitle ? `${sectionKind} ${sectionTitle}` : sectionKind;
-      }
-      if (type === "environment") {
-        const envName = chunk.envName ? String(chunk.envName) : "environment";
-        return envName;
-      }
-      if (type === "command") {
-        return String(chunk.commandName || "command");
-      }
-      return "text";
-    };
-
-    const appendChunkNode = (targetList, chunk, depth) => {
-      const item = makeNode("zeta-fs-node zeta-fs-node--chunk", depth);
-      if (chunk.chunkId === activeChunkId) {
-        item.classList.add("is-active");
-      }
-
-      const label = describeChunk(chunk);
-      const rangeText = `${chunk.start ?? 0}-${chunk.end ?? 0}`;
-      const sentenceCount = ensureArray(chunk.sentences).length;
-
-      item.innerHTML = `
-        <div class="zeta-fs-row">
-          <span class="zeta-fs-label">${label}</span>
-          <span class="zeta-fs-meta">${rangeText} · ${sentenceCount} sentence${sentenceCount === 1 ? "" : "s"}</span>
-        </div>
-      `;
-
-      const children = document.createElement("ul");
-      children.className = "zeta-fs-children";
-      let childCount = 0;
-
-      const childChunks = ensureArray(byParent.get(chunk.chunkId));
-      for (const childChunk of childChunks) {
-        appendChunkNode(children, childChunk, depth + 1);
-        childCount += 1;
-      }
-
-      const sentences = ensureArray(chunk.sentences);
-      for (let i = 0; i < sentences.length; i += 1) {
-        appendSentenceNode(children, sentences[i], i, depth + 1);
-        childCount += 1;
-      }
-
-      if (childCount > 0) {
-        item.appendChild(children);
-      }
-
-      targetList.appendChild(item);
-    };
-
-    const root = makeNode("zeta-fs-node zeta-fs-node--root", 0);
-    root.innerHTML = `
-      <div class="zeta-fs-row">
-        <span class="zeta-fs-label">document</span>
-        <span class="zeta-fs-meta">${chunks.length} node${chunks.length === 1 ? "" : "s"}</span>
-      </div>
-    `;
-    const rootChildren = document.createElement("ul");
-    rootChildren.className = "zeta-fs-children";
-    root.appendChild(rootChildren);
-
-    const rootChunks = ensureArray(byParent.get(rootId));
-    for (const chunk of rootChunks) {
-      appendChunkNode(rootChildren, chunk, 1);
-    }
-
-    list.appendChild(root);
-    this.refs.chunkEmpty.style.display = list.children.length > 0 ? "none" : "block";
-    this.refs.chunksTab.textContent = `Chunks (${leafChunks.length})`;
   }
 
   setActivity(entries, canUndo) {
@@ -805,8 +653,9 @@ class ZetaPanel {
   }
 
   remove() {
-    this.root.remove();
     this.fab.remove();
+    this.popupMirror.remove();
+    this.root.remove();
   }
 }
 

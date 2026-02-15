@@ -25,6 +25,10 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "popup.html",
+        "popup.css",
+        "popup.js",
+        "assets/vendor/latex_parser_simple.browser.js",
         "assets/fonts/dm-sans.woff2",
         "assets/icon-16.png",
         "assets/icon-32.png",

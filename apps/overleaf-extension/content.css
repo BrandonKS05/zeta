@@ -6,6 +6,13 @@
   font-display: swap;
 }
 
+.zeta-shell,
+.zeta-shell *,
+.zeta-suggestion-popover,
+.zeta-suggestion-popover * {
+  border-radius: 0 !important;
+}
+
 .zeta-highlight-layer {
   position: fixed;
   inset: 0;
@@ -16,8 +23,8 @@
 .zeta-highlight {
   position: fixed;
   pointer-events: none;
-  border-bottom: 2px solid #ff2d2d;
-  border-radius: 1px;
+  border-bottom: 2px solid #b1040e;
+  border-radius: 0 !important;
   opacity: 0.98;
 }
 
@@ -31,10 +38,10 @@
 }
 
 .zeta-suggestion-popover {
-  --popover-bg: #131313;
-  --popover-border: #2c2c2c;
-  --popover-text: #f5f5f5;
-  --popover-muted: #b6b6b6;
+  --popover-bg: #fffdf9;
+  --popover-border: #dfcfbf;
+  --popover-text: #2e2d29;
+  --popover-muted: #6e6258;
   position: fixed;
   width: min(360px, calc(100vw - 24px));
   border: 1px solid var(--popover-border);
@@ -45,14 +52,6 @@
   z-index: 2147483647;
   font-family: "DM Sans", sans-serif;
   color: var(--popover-text);
-}
-
-html[data-zeta-theme="light"] .zeta-suggestion-popover {
-  --popover-bg: #ffffff;
-  --popover-border: #d6d6d6;
-  --popover-text: #121212;
-  --popover-muted: #5c5c5c;
-  box-shadow: 0 20px 36px rgba(0, 0, 0, 0.2);
 }
 
 .zeta-suggestion-title {
@@ -78,7 +77,7 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 }
 
 .zeta-suggestion-option:hover {
-  border-color: #7a7a7a;
+  border-color: #8c1515;
 }
 
 .zeta-suggestion-option strong {
@@ -96,60 +95,102 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 
 .zeta-fab {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 2147483620;
-  width: 54px;
-  height: 54px;
-  border-radius: 999px;
-  border: 1px solid #2f2f2f;
-  background: #101010;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.4);
+  right: 16px;
+  bottom: 16px;
+  width: 58px;
+  height: 58px;
+  border-radius: 9999px !important;
+  border: 1px solid #dfcfbf;
+  background: #fffdf9;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  padding: 0;
-  transition: transform 160ms ease, opacity 160ms ease;
-}
-
-.zeta-fab[data-theme="light"] {
-  border-color: #cfcfcf;
-  background: #f9f9f9;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+  z-index: 2147483617;
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
 }
 
 .zeta-fab img {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px !important;
+  background: #fffdf9;
+}
+
+.zeta-fab:hover {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+}
+
+.zeta-fab:active {
+  transform: translateY(1px);
 }
 
 .zeta-fab.is-hidden {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(10px);
+  transform: translateY(8px) scale(0.93);
 }
 
-.zeta-shell {
-  --zeta-bg: #0f0f0f;
-  --zeta-surface: #171717;
-  --zeta-surface-2: #101010;
-  --zeta-border: #2a2a2a;
-  --zeta-text: #f4f4f4;
-  --zeta-muted: #9f9f9f;
-  --zeta-emphasis: #ffffff;
-  --zeta-btn-bg: #1b1b1b;
-  --zeta-btn-text: #f0f0f0;
-  --zeta-mode-thumb: #f0f0f0;
-  --zeta-mode-active: #141414;
-  --zeta-card-shadow: rgba(0, 0, 0, 0.38);
-  --zeta-track: #2b2b2b;
-  --zeta-health-fill: linear-gradient(90deg, #ffffff 0%, #919191 100%);
+.zeta-popup-mirror {
   position: fixed;
-  top: 14px;
+  right: 14px;
+  bottom: 88px;
+  width: min(420px, calc(100vw - 20px));
+  height: min(88vh, 920px);
+  border: 1px solid #dfcfbf;
+  background: #fffdf9;
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.12);
+  z-index: 2147483618;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.zeta-popup-mirror.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.zeta-popup-mirror-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #f8f5f0;
+}
+
+
+.zeta-shell {
+  --zeta-bg: #f8f5f0;
+  --zeta-surface: #fffdf9;
+  --zeta-surface-2: #fffaf4;
+  --zeta-border: #dfcfbf;
+  --zeta-text: #2e2d29;
+  --zeta-muted: #6e6258;
+  --zeta-emphasis: #2e2d29;
+  --zeta-btn-bg: #fffdf9;
+  --zeta-btn-text: #2e2d29;
+  --zeta-mode-thumb: #ecd2cb;
+  --zeta-mode-active: #2e2d29;
+  --zeta-card-shadow: rgba(0, 0, 0, 0.12);
+  --zeta-track: #f0e4d7;
+  --zeta-health-fill: linear-gradient(90deg, #8c1515 0%, #b83c3c 100%);
+  --zeta-accent: #8c1515;
+  --zeta-success: #2f8f5b;
+  --zeta-error: #b1040e;
+  position: fixed;
+  top: auto;
+  bottom: 88px;
   right: 14px;
   width: min(430px, calc(100vw - 20px));
-  max-height: calc(100vh - 28px);
+  min-height: 620px;
+  max-height: min(88vh, 920px);
   overflow: hidden;
-  border-radius: 16px;
   border: 1px solid var(--zeta-border);
   background: var(--zeta-bg);
   color: var(--zeta-text);
@@ -162,20 +203,23 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 }
 
 .zeta-shell[data-theme="light"] {
-  --zeta-bg: #ffffff;
-  --zeta-surface: #f6f6f6;
-  --zeta-surface-2: #ffffff;
-  --zeta-border: #dadada;
-  --zeta-text: #141414;
-  --zeta-muted: #666666;
-  --zeta-emphasis: #000000;
-  --zeta-btn-bg: #ffffff;
-  --zeta-btn-text: #111111;
-  --zeta-mode-thumb: #111111;
-  --zeta-mode-active: #ffffff;
-  --zeta-card-shadow: rgba(0, 0, 0, 0.18);
-  --zeta-track: #e9e9e9;
-  --zeta-health-fill: linear-gradient(90deg, #111111 0%, #777777 100%);
+  --zeta-bg: #f8f5f0;
+  --zeta-surface: #fffdf9;
+  --zeta-surface-2: #fffaf4;
+  --zeta-border: #dfcfbf;
+  --zeta-text: #2e2d29;
+  --zeta-muted: #6e6258;
+  --zeta-emphasis: #2e2d29;
+  --zeta-btn-bg: #fffdf9;
+  --zeta-btn-text: #2e2d29;
+  --zeta-mode-thumb: #ecd2cb;
+  --zeta-mode-active: #2e2d29;
+  --zeta-card-shadow: rgba(0, 0, 0, 0.12);
+  --zeta-track: #f0e4d7;
+  --zeta-health-fill: linear-gradient(90deg, #8c1515 0%, #b83c3c 100%);
+  --zeta-accent: #8c1515;
+  --zeta-success: #2f8f5b;
+  --zeta-error: #b1040e;
 }
 
 .zeta-shell.is-collapsed {
@@ -206,7 +250,7 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
   height: 36px;
   border-radius: 999px;
   border: 1px solid var(--zeta-border);
-  background: #fff;
+  background: var(--zeta-surface);
 }
 
 .zeta-brand h2 {
@@ -246,24 +290,24 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #8d8d8d;
+  background: color-mix(in srgb, var(--zeta-muted) 78%, #ffffff 22%);
 }
 
 .zeta-global-pill.is-analyzing .zeta-global-dot {
-  background: #f8f8f8;
+  background: var(--zeta-accent);
   animation: zeta-pulse 900ms ease-in-out infinite;
 }
 
 .zeta-global-pill.is-ready .zeta-global-dot {
-  background: #58d68d;
+  background: var(--zeta-success);
 }
 
 .zeta-global-pill.is-error .zeta-global-dot {
-  background: #ff4f4f;
+  background: var(--zeta-error);
 }
 
 .zeta-global-pill.is-offline .zeta-global-dot {
-  background: #999999;
+  background: color-mix(in srgb, var(--zeta-muted) 86%, #ffffff 14%);
 }
 
 .zeta-status-row {
@@ -286,20 +330,20 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #888;
+  background: color-mix(in srgb, var(--zeta-muted) 80%, #ffffff 20%);
 }
 
 .zeta-status-dot.is-analyzing {
-  background: #ffffff;
+  background: var(--zeta-accent);
   animation: zeta-pulse 900ms ease-in-out infinite;
 }
 
 .zeta-status-dot.is-success {
-  background: #58d68d;
+  background: var(--zeta-success);
 }
 
 .zeta-status-dot.is-error {
-  background: #ff4f4f;
+  background: var(--zeta-error);
 }
 
 .zeta-inference {
@@ -419,7 +463,7 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 
 .zeta-icon-btn:hover,
 .zeta-btn:hover {
-  border-color: #7a7a7a;
+  border-color: var(--zeta-accent);
 }
 
 .zeta-icon-btn:active,
@@ -515,7 +559,7 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 
 .zeta-tab-btn.is-active {
   color: var(--zeta-btn-text);
-  border-color: #7a7a7a;
+  border-color: var(--zeta-accent);
 }
 
 .zeta-tab-panel[hidden] {
@@ -523,24 +567,24 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 }
 
 .zeta-item {
-  border: 1px solid #3b3b3b;
-  border-left: 3px solid #ff3d3d;
+  border: 1px solid var(--zeta-border);
+  border-left: 3px solid var(--zeta-error);
   border-radius: 10px;
   padding: 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--zeta-surface-2) 88%, var(--zeta-accent) 12%);
 }
 
 .zeta-shell[data-theme="light"] .zeta-item {
-  border-color: #d6d6d6;
-  background: #ffffff;
+  border-color: var(--zeta-border);
+  background: color-mix(in srgb, var(--zeta-surface) 86%, var(--zeta-accent) 14%);
 }
 
 .zeta-item[data-severity="warning"] {
-  border-left-color: #ffd84a;
+  border-left-color: #c7851a;
 }
 
 .zeta-item[data-severity="info"] {
-  border-left-color: #7f7f7f;
+  border-left-color: color-mix(in srgb, var(--zeta-muted) 84%, #ffffff 16%);
 }
 
 .zeta-item strong {
@@ -586,23 +630,23 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 }
 
 .zeta-btn--primary {
-  border-color: #6e6e6e;
+  border-color: var(--zeta-accent);
 }
 
 .zeta-activity-item {
   border: 1px solid var(--zeta-border);
-  border-left: 3px solid #888;
+  border-left: 3px solid color-mix(in srgb, var(--zeta-muted) 80%, #ffffff 20%);
   border-radius: 10px;
   background: var(--zeta-surface-2);
   padding: 7px 8px;
 }
 
 .zeta-activity-item[data-level="success"] {
-  border-left-color: #58d68d;
+  border-left-color: var(--zeta-success);
 }
 
 .zeta-activity-item[data-level="error"] {
-  border-left-color: #ff4f4f;
+  border-left-color: var(--zeta-error);
 }
 
 .zeta-activity-item strong {
@@ -628,7 +672,7 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
 }
 
 .zeta-fs-node.is-active {
-  box-shadow: inset 0 0 0 1px #58d68d;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zeta-accent) 60%, #ffffff 40%);
 }
 
 .zeta-fs-node--root {
@@ -721,6 +765,20 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
     inset: 10px;
     width: auto;
     max-height: none;
+    bottom: 10px;
+  }
+
+  .zeta-fab {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .zeta-popup-mirror {
+    inset: 10px;
+    width: auto;
+    height: auto;
+    bottom: 10px;
+    right: 10px;
   }
 
   .zeta-toolbar {
@@ -731,8 +789,4 @@ html[data-zeta-theme="light"] .zeta-suggestion-popover {
     justify-content: flex-start;
   }
 
-  .zeta-fab {
-    right: 12px;
-    bottom: 12px;
-  }
 }

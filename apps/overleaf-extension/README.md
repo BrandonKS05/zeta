@@ -11,7 +11,18 @@ zeta now ships a real frontend shell for math statement checking:
 - inline issue underlines and caret-persistent suggestion popup
 - issue actions (`apply`, `ignore`, `regenerate`) plus activity/history with undo
 - persisted settings (`backend URL`, mode, scope, timeout, retries, notation strictness)
-- keyboard shortcuts for panel + issue navigation
+- keyboard shortcuts for issue navigation
+
+## LaTeX delimiter coverage
+
+Chunk/graph delimiters now include mainstream structural LaTeX commands, not only sectioning.
+
+- Sectioning: `\part`, `\chapter`, `\section`, `\subsection`, `\subsubsection`, `\paragraph`, `\subparagraph`
+- Front matter: `\title`, `\author`, `\date`, `\subtitle`, `\institute`, `\thanks`, `\maketitle`
+- Document structure: `\tableofcontents`, `\listoffigures`, `\listoftables`, `\appendix`, `\frontmatter`, `\mainmatter`, `\backmatter`
+- Bibliography: `\bibliography`, `\bibliographystyle`, `\addbibresource`, `\printbibliography`
+- Cross-ref/citations: `\label`, `\ref`, `\eqref`, `\pageref`, `\autoref`, `\cref`, `\Cref`, `\cite`, `\citet`, `\citep`
+- Layout/page controls: `\newpage`, `\clearpage`, `\cleardoublepage`, `\pagebreak`, `\linebreak`, `\vspace`, `\hspace`, `\smallskip`, `\medskip`, `\bigskip`
 
 ## Content Script Organization
 
@@ -43,7 +54,6 @@ Configure the endpoint in the panel Settings section.
 
 ## Keyboard shortcuts
 
-- `Alt+Shift+Z` toggle panel
 - `Alt+Shift+N` next issue
 - `Alt+Shift+P` previous issue
 - `Ctrl/Cmd+Enter` run check now
