@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates bash \
+    && apt-get install -y --no-install-recommends curl ca-certificates bash git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/app

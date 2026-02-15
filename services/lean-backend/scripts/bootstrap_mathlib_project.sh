@@ -17,6 +17,11 @@ if ! command -v lean >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v git >/dev/null 2>&1; then
+  echo "git command not found. Install git in this runtime image first." >&2
+  exit 1
+fi
+
 mkdir -p "${PROJECT_DIR}"
 cd "${PROJECT_DIR}"
 
