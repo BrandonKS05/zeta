@@ -88,6 +88,42 @@ def _trim_candidate(value: str | None) -> str | None:
     return candidate
 
 
+# LaTeX <-> Unicode so we can try both when matching excerpt to chunk (e.g. \geq vs ≥)
+_LATEX_TO_UNICODE = (
+    (r"\geq", "≥"),
+    (r"\leq", "≤"),
+    (r"\neq", "≠"),
+    (r"\mathbb{N}", "ℕ"),
+    (r"\in", "∈"),
+    (r"\forall", "∀"),
+    (r"\exists", "∃"),
+)
+
+
+def _excerpt_search_variants(query: str) -> list[str]:
+    """Return [query, ...] with LaTeX/Unicode variants so we can find in chunk text either way."""
+    q = query.strip().strip("$")
+    if not q:
+        return []
+    seen = {q}
+    out = [q]
+    # Unicode -> LaTeX (so if LLM returns "≥" we also try "\geq" in chunk)
+    for latex, unicode_char in _LATEX_TO_UNICODE:
+        if unicode_char in q:
+            v = q.replace(unicode_char, latex)
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+    # LaTeX -> Unicode
+    for latex, unicode_char in _LATEX_TO_UNICODE:
+        if latex in q:
+            v = q.replace(latex, unicode_char)
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+    return out
+
+
 def _find_text_in_chunk(chunk: HighlightChunk, query: str) -> tuple[int, int] | None:
     direct = chunk.text.find(query)
     if direct != -1:
@@ -96,6 +132,17 @@ def _find_text_in_chunk(chunk: HighlightChunk, query: str) -> tuple[int, int] | 
     lower_index = chunk.text.lower().find(query.lower())
     if lower_index != -1:
         return lower_index, lower_index + len(query)
+
+    # Try LaTeX/Unicode variants so chunk "n + 2 \geq n + 3" matches LLM excerpt "n + 2 ≥ n + 3"
+    for variant in _excerpt_search_variants(query):
+        if variant == query:
+            continue
+        idx = chunk.text.find(variant)
+        if idx != -1:
+            return idx, idx + len(variant)
+        idx_lower = chunk.text.lower().find(variant.lower())
+        if idx_lower != -1:
+            return idx_lower, idx_lower + len(variant)
 
     return None
 
