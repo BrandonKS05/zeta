@@ -168,8 +168,8 @@ const NON_ANALYZABLE_LATEX_COMMANDS = new Set([
 
 const AUTOCOMPLETE_DEBOUNCE_MS = 1000;
 const AUTOCOMPLETE_CACHE_TTL_MS = 30 * 1000;
-const AUTOCOMPLETE_MIN_FRAGMENT_CHARS = 12;
-const AUTOCOMPLETE_MIN_FRAGMENT_WORDS = 3;
+const AUTOCOMPLETE_MIN_FRAGMENT_CHARS = 8;
+const AUTOCOMPLETE_MIN_FRAGMENT_WORDS = 2;
 const AUTOCOMPLETE_MAX_TEXT_WINDOW = 16000;
 const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
 const MODAL_BASE_URL =
@@ -1345,6 +1345,20 @@ class ZetaApp {
     return true;
   }
 
+  /** Used for autocomplete only: allow any host with a valid editor (so localhost / dev works). */
+  isAutocompleteAllowedAdapter(adapter) {
+    if (!adapter?.root || !(adapter.root instanceof Element)) {
+      return false;
+    }
+    if (!adapter.root.matches(".cm-editor, .ace_editor")) {
+      return false;
+    }
+    if (adapter.root.closest(".pdfjs, .pdf-viewer, .pdf-preview, .preview, .ol-preview")) {
+      return false;
+    }
+    return true;
+  }
+
   resolveAutocompleteEndpoint() {
     const base = HARDCODED_ANALYZE_URL;
     if (base && /\/v1\/lean\/solve\/?$/.test(base)) {
@@ -1355,7 +1369,7 @@ class ZetaApp {
 
   collectAutocompleteContext() {
     const adapter = this.activeAdapter;
-    if (!adapter || !adapter.isConnected() || !this.isOverleafSourceAdapter(adapter)) {
+    if (!adapter || !adapter.isConnected() || !this.isAutocompleteAllowedAdapter(adapter)) {
       return null;
     }
 
@@ -1372,10 +1386,6 @@ class ZetaApp {
     const caretOffset = clamp(caretOffsetRaw, 0, sourceText.length);
     const prefixText = sourceText.slice(0, caretOffset);
     const suffixFromCursor = sourceText.slice(caretOffset);
-    const restOfLine = suffixFromCursor.split("\n")[0] || "";
-    if (/[^\s]/.test(restOfLine)) {
-      return null;
-    }
     if (this.isSentenceCompleteForAutocomplete(prefixText)) {
       return null;
     }
@@ -1498,8 +1508,10 @@ class ZetaApp {
     });
 
     if (!response.ok) {
-      const detail = String(response.text || response.error || response.statusText || "request failed");
-      const error = new Error(`HTTP error ${response.status || "unknown"}${detail ? `: ${detail}` : ""}`);
+      const serverMessage = response.json?.detail != null
+        ? String(response.json.detail)
+        : String(response.text || response.error || response.statusText || "request failed");
+      const error = new Error(`HTTP error ${response.status || "unknown"}${serverMessage ? `: ${serverMessage}` : ""}`);
       error.status = Number(response.status) || 0; // eslint-disable-line no-param-reassign
       error.endpointUrl = endpointUrl; // eslint-disable-line no-param-reassign
       throw error;
@@ -1814,7 +1826,7 @@ class ZetaApp {
     }
     const hasSuggestion = !!this.activeAutocomplete;
     const showThinking = !hasSuggestion && this.autocompleteInFlight && this.autocompletePendingSince > 0;
-    if ((!hasSuggestion && !showThinking) || !this.activeAdapter || !this.isOverleafSourceAdapter(this.activeAdapter)) {
+    if ((!hasSuggestion && !showThinking) || !this.activeAdapter || !this.isAutocompleteAllowedAdapter(this.activeAdapter)) {
       element.classList.add("is-hidden");
       element.textContent = "";
       return;
@@ -2033,7 +2045,7 @@ class ZetaApp {
     if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
       return false;
     }
-    if (!this.isOverleafSourceAdapter(this.activeAdapter)) {
+    if (!this.isAutocompleteAllowedAdapter(this.activeAdapter)) {
       return false;
     }
 
@@ -2124,7 +2136,7 @@ class ZetaApp {
     if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
       return false;
     }
-    if (!this.isOverleafSourceAdapter(this.activeAdapter)) {
+    if (!this.isAutocompleteAllowedAdapter(this.activeAdapter)) {
       return false;
     }
 

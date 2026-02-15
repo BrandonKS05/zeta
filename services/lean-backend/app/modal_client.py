@@ -27,6 +27,16 @@ _GENERATE_ENDPOINT_SUFFIX = "/v1/generate"
 _QUERY_ENDPOINT_SUFFIX = "/v1/query"
 _COMPLETE_ENDPOINT_SUFFIX = "/v1/complete"
 _ANALYZE_ACCEPTED_STATUSES = {"ok", "success", "needs_revision", "unchecked"}
+
+# System prompt for Herald (single POST / endpoint) when used for autocomplete
+HERALD_AUTOCOMPLETE_SYSTEM_PROMPT = """You are a math-writing autocomplete model. Your only task is to suggest a short completion for the user's current cursor position.
+
+Rules:
+1) You receive the document text and cursor position. Return ONLY the completion suffix to insert at the cursor (do not repeat the prefix).
+2) Prefer 1–3 short, natural continuations (a phrase or formula). Prefer mathematical content; no LaTeX declarations like \\documentclass, \\begin{document}, \\end{document}.
+3) Return valid JSON with a single key "candidates" whose value is a list of 1–3 strings, e.g. {"candidates": ["c^2.", " c^2 for the hypotenuse."]}.
+4) If the prefix is too short or unclear, return {"candidates": []}.
+"""
 _ANALYZE_METADATA_FIELDS = (
     "model",
     "status",
@@ -201,6 +211,14 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
     return resolved
 
 
+def _is_herald_root_endpoint(modal_endpoint_url: str) -> bool:
+    """True if the endpoint is Herald-style: single POST / (no /v1/analyze, /v1/complete, etc.)."""
+    normalized = modal_endpoint_url.strip()
+    parsed = urlsplit(normalized)
+    path = parsed.path.rstrip("/")
+    return path == "" or path == "/"
+
+
 def _resolve_modal_complete_url(modal_endpoint_url: str) -> str:
     """Resolve the Modal /v1/complete URL from the configured modal endpoint (e.g. /v1/generate or /v1/analyze)."""
     normalized = modal_endpoint_url.strip()
@@ -212,6 +230,8 @@ def _resolve_modal_complete_url(modal_endpoint_url: str) -> str:
         path = f"{path[: -len(_GENERATE_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
     elif path.endswith(_QUERY_ENDPOINT_SUFFIX):
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
+    elif path == "" or path == "/":
+        return urlunsplit((parsed.scheme, parsed.netloc, "/", parsed.query, parsed.fragment))
     else:
         path = _COMPLETE_ENDPOINT_SUFFIX
     return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
@@ -374,20 +394,94 @@ async def generate_lean(
         )
 
 
+def _build_herald_autocomplete_payload(
+    request_payload: dict[str, Any],
+    system_prompt: str,
+) -> dict[str, Any]:
+    """Build payload for Herald POST / (V1 Translate). Herald should accept system_prompt and use it for autocomplete."""
+    text = request_payload.get("text") or ""
+    cursor = request_payload.get("cursor_offset")
+    if cursor is None or (isinstance(text, str) and cursor > len(text)):
+        cursor = len(text) if isinstance(text, str) else 0
+    prefix = text[:cursor] if isinstance(text, str) and isinstance(cursor, int) else text
+    return {
+        "text": text,
+        "cursor_offset": cursor,
+        "context": request_payload.get("context") or "",
+        "system_prompt": system_prompt,
+        "max_new_tokens": min(int(request_payload.get("max_new_tokens") or 24), 64),
+        "temperature": float(request_payload.get("temperature") or 0.35),
+        "autocomplete_mode": True,
+    }
+
+
+def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
+    """Convert Herald translate response into the shape the extension expects (candidates, selected_completion)."""
+    candidates: list[str] = []
+    text = request_payload.get("text") or ""
+    cursor = request_payload.get("cursor_offset")
+    if cursor is None:
+        cursor = len(text) if isinstance(text, str) else 0
+    prefix = text[:cursor] if isinstance(text, str) else ""
+
+    if isinstance(raw.get("candidates"), list):
+        for c in raw["candidates"]:
+            if isinstance(c, str) and c.strip():
+                candidates.append(c.strip())
+    for key in ("lean_code", "text", "output", "completion", "result"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            suffix = val.strip()
+            if suffix.startswith(prefix):
+                suffix = suffix[len(prefix) :].strip()
+            if suffix and suffix not in candidates:
+                candidates.append(suffix)
+    nested = raw.get("result") if isinstance(raw.get("result"), dict) else None
+    if nested and not candidates:
+        if isinstance(nested.get("lean_code"), str) and nested["lean_code"].strip():
+            candidates.append(nested["lean_code"].strip())
+        if isinstance(nested.get("text"), str) and nested["text"].strip():
+            candidates.append(nested["text"].strip())
+
+    selected = candidates[0] if candidates else None
+    return {
+        "model": raw.get("model", "herald"),
+        "status": "ok" if candidates else "no_suggestion",
+        "input_text": text,
+        "prefix_text": prefix,
+        "selected_completion": selected,
+        "candidates": [{"completion": c, "score": 1.0, "model_score": 1.0, "retrieval_score": 0.0, "syntax_score": 0.0, "rejected_reasons": []} for c in candidates],
+        "cache_hit": False,
+        "latency_ms": int(raw.get("latency_ms", 0)),
+        "timings_ms": raw.get("timings_ms") or {},
+        "no_suggestion_reasons": [] if candidates else ["Herald returned no completion"],
+    }
+
+
 async def complete_autocomplete(
     request_payload: dict[str, Any],
     *,
     system_prompt: str | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Call Modal /v1/complete with the given request body. Optionally pass a custom system_prompt."""
+    """Call Modal /v1/complete, or Herald POST / with autocomplete system prompt when endpoint is root."""
     settings = settings or get_settings()
     if not settings.modal_endpoint_url:
-        raise ModalClientError("MODAL_ENDPOINT_URL is not configured")
+        raise ModalClientError(
+            "MODAL_ENDPOINT_URL is not configured. Set it on the lean-backend server (e.g. to your Modal app URL like https://user--app.modal.run or .../v1/generate) so autocomplete can run."
+        )
+    use_herald = _is_herald_root_endpoint(settings.modal_endpoint_url)
     complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
-    payload = dict(request_payload)
-    if system_prompt is not None and system_prompt.strip():
-        payload["system_prompt"] = system_prompt.strip()
+    herald_system = (system_prompt or getattr(settings, "modal_complete_system_prompt", None) or HERALD_AUTOCOMPLETE_SYSTEM_PROMPT).strip()
+    if use_herald:
+        payload = _build_herald_autocomplete_payload(request_payload, herald_system)
+    else:
+        payload = dict(request_payload)
+        if system_prompt is not None and system_prompt.strip():
+            payload["system_prompt"] = system_prompt.strip()
+        elif getattr(settings, "modal_complete_system_prompt", None):
+            payload["system_prompt"] = settings.modal_complete_system_prompt.strip()
+
     headers = {"Content-Type": "application/json"}
     if settings.modal_api_key:
         headers["Authorization"] = f"Bearer {settings.modal_api_key}"
@@ -399,10 +493,21 @@ async def complete_autocomplete(
         except (httpx.TransportError, httpx.TimeoutException) as exc:
             raise ModalClientError(f"Modal complete request failed: {exc}") from exc
         if response.status_code >= 400:
+            body_preview = (response.text or "")[:400].strip()
+            hint = ""
+            if response.status_code == 404 and not use_herald:
+                hint = " Ensure the Modal app exposes POST /v1/complete."
+            elif response.status_code == 502:
+                hint = " Modal app may be cold or failing; check the Modal dashboard."
             raise ModalClientError(
-                f"Modal complete returned HTTP {response.status_code}: {(response.text or '')[:500]}"
+                f"Modal complete returned HTTP {response.status_code}: {body_preview or 'no body'}.{hint}"
             )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            raise ModalClientError("Modal complete returned non-JSON response")
         if not isinstance(data, dict):
-            raise ModalClientError("Modal complete returned non-JSON or non-object response")
+            raise ModalClientError("Modal complete returned non-object response")
+        if use_herald:
+            return _normalize_herald_complete_response(data, request_payload)
         return data
