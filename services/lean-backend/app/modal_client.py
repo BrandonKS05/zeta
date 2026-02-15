@@ -43,6 +43,17 @@ _ANALYZE_METADATA_FIELDS = (
 )
 
 
+def _uses_analyze_payload_shape(endpoint_url: str) -> bool:
+    """Translator-modal accepts this shape on root, /v1/analyze, /v1/generate, and /v1/query."""
+    path = urlsplit(endpoint_url.strip()).path.rstrip("/")
+    return (
+        path == ""
+        or path.endswith(_ANALYZE_ENDPOINT_SUFFIX)
+        or path.endswith(_GENERATE_ENDPOINT_SUFFIX)
+        or path.endswith(_QUERY_ENDPOINT_SUFFIX)
+    )
+
+
 def _compact_dict(data: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in data.items() if value is not None}
 
@@ -126,10 +137,7 @@ def _build_modal_payload(
     if include_raw_model_output is not None:
         analyze_payload["include_raw_model_output"] = include_raw_model_output
 
-    normalized_endpoint = endpoint_url.rstrip("/")
-    if normalized_endpoint.endswith(_ANALYZE_ENDPOINT_SUFFIX) or normalized_endpoint.endswith(
-        _GENERATE_ENDPOINT_SUFFIX
-    ):
+    if _uses_analyze_payload_shape(endpoint_url):
         return analyze_payload
 
     return _compact_dict(
@@ -144,7 +152,8 @@ def _build_modal_payload(
 
 
 def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
-    parsed = urlsplit(endpoint_url.strip())
+    normalized = endpoint_url.strip()
+    parsed = urlsplit(normalized)
     path = parsed.path.rstrip("/")
 
     target_suffix = _GENERATE_ENDPOINT_SUFFIX if use_generate else _ANALYZE_ENDPOINT_SUFFIX
@@ -157,8 +166,8 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{target_suffix}"
         rewritten = True
     elif path == "":
-        path = target_suffix
-        rewritten = True
+        # Root translator endpoint is valid and should be used as-is.
+        return normalized
 
     resolved = urlunsplit((parsed.scheme, parsed.netloc, path or "/", parsed.query, parsed.fragment))
     if rewritten:

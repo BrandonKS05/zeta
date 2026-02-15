@@ -94,12 +94,31 @@ def test_build_payload_for_generate_endpoint_matches_expected_shape() -> None:
     }
 
 
-def test_resolve_modal_endpoint_defaults_to_generate_path() -> None:
+def test_resolve_modal_endpoint_keeps_root_path() -> None:
     endpoint = _resolve_modal_endpoint(
         "https://example.modal.run",
         use_generate=True,
     )
-    assert endpoint == "https://example.modal.run/v1/generate"
+    assert endpoint == "https://example.modal.run"
+
+
+def test_build_payload_for_root_endpoint_uses_analyze_shape() -> None:
+    payload = _build_modal_payload(
+        prompt="For all real numbers x, x = x.",
+        context_payload={
+            "theorem_name": "real_refl",
+            "imports": ["Mathlib.Data.Real.Basic"],
+        },
+        max_iters=1,
+        endpoint_url="https://example.modal.run",
+    )
+
+    assert payload == {
+        "text": "For all real numbers x, x = x.",
+        "theorem_name": "real_refl",
+        "imports": ["Mathlib.Data.Real.Basic"],
+        "temperature": 0.0,
+    }
 
 
 def test_resolve_modal_endpoint_rewrites_analyze_to_generate() -> None:

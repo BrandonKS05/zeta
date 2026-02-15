@@ -6,7 +6,7 @@ Minimal, production-leaning FastAPI backend for NL theorem/proof -> Lean generat
 
 - `POST /v1/lean/solve`
   - Calls Modal endpoint to generate Lean code.
-  - For Modal endpoints ending with `/v1/analyze` or `/v1/generate`, request payload is sent as:
+  - For translator Modal endpoints (root URL, `/v1/analyze`, `/v1/generate`, or `/v1/query`), request payload is sent as:
     - `text` <- `nl_input`
     - `theorem_name` <- `context.theorem_name` (or fallback `generated_theorem`)
     - `imports` <- `context.imports` (default `["Std"]`)
@@ -51,13 +51,13 @@ services/lean-backend/
 
 ## Required Environment Variables
 
-- `MODAL_ENDPOINT_URL` (required): Modal HTTP endpoint for Lean generation (recommended: `/v1/generate`).
+- `MODAL_ENDPOINT_URL` (required): Modal HTTP endpoint for Lean generation (root URL or explicit API path).
 
 ## Optional Environment Variables
 
 - Modal:
   - `MODAL_API_KEY`
-  - `MODAL_USE_GENERATE_ENDPOINT` (default `true`; rewrites `/v1/analyze` or base URL to `/v1/generate`)
+  - `MODAL_USE_GENERATE_ENDPOINT` (default `true`; rewrites `/v1/analyze` or `/v1/query` to `/v1/generate`, but leaves root endpoints unchanged)
   - `MODAL_TIMEOUT_SECONDS` (default `20`)
   - `MODAL_MAX_RETRIES` (default `2`)
 - Lean compile:
@@ -148,7 +148,7 @@ Recommended AWS setup:
 2. Bootstrap Mathlib project once:
    - `./scripts/bootstrap_mathlib_project.sh /opt/lean-state/mathlib-project`
 3. Configure env:
-   - `MODAL_ENDPOINT_URL=https://...modal.run/v1/generate`
+   - `MODAL_ENDPOINT_URL=https://...modal.run`
    - `LAKE_PROJECT_DIR=/opt/lean-state/mathlib-project`
    - `LEAN_TEMP_DIR=/opt/lean-state/tmp`
    - `LEAN_TIMEOUT_SECONDS=30` (optional for heavier imports)
