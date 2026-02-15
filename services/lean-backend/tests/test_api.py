@@ -337,7 +337,8 @@ def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pyte
             code=(
                 "import Mathlib.Data.Real.Basic\n\n"
                 "namespace MathGrammar\n"
-                "axiom real_refl : ∀ (x : Real), x = x\n"
+                "theorem real_refl (x : Real) : x = x := by\n"
+                "  rfl\n"
                 "#check real_refl\n"
                 "end MathGrammar\n"
             ),
@@ -377,5 +378,66 @@ def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pyte
         assert payload["compile"]["success"] is True
         assert payload["pipeline"]["semantic"]["success"] is True
         assert payload["pipeline"]["semantic"]["reasons"] == []
+
+    asyncio.run(_run())
+
+
+def test_solve_axiom_is_treated_as_unverified_by_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        return GeneratedLean(
+            code=(
+                "import Mathlib.Data.Real.Basic\n\n"
+                "namespace MathGrammar\n"
+                "axiom real_sub_comm (x y : Real) : x - y = y - x\n"
+                "#check real_sub_comm\n"
+                "end MathGrammar\n"
+            ),
+            metadata={"status": "unchecked", "is_valid_lean": None},
+        )
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        return CompileResult(
+            success=True,
+            stdout="MathGrammar.real_sub_comm (x y : ℝ) : x - y = y - x\n",
+            stderr="",
+            diagnostics=[],
+        )
+
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        raise AssertionError("LLM interpretation should be skipped for unverified policy failures.")
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.interpret_errors", fake_interpret_errors)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={"nl_input": "For all real numbers x and y, x - y = y - x."},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is False
+        assert payload["pipeline"]["semantic"]["success"] is False
+        assert payload["pipeline"]["semantic"]["unverified_by_policy"] is True
+        assert any("unverified by policy" in reason for reason in payload["pipeline"]["semantic"]["reasons"])
+        llm_stage = next(
+            stage for stage in payload["pipeline"]["stages"] if stage["stage"] == "llm_interpretation"
+        )
+        assert llm_stage["attempted"] is False
+        assert llm_stage["details"]["reason"] == "unverified_policy"
 
     asyncio.run(_run())

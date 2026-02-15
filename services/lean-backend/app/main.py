@@ -45,6 +45,7 @@ _FALSE_DECL_RE = re.compile(
 _FALSE_STDOUT_RE = re.compile(
     r"^\s*(?P<name>[A-Za-z0-9_'.]+)(?:\s*\([^)]*\))*\s*:\s*False\s*$"
 )
+_AXIOM_DECL_RE = re.compile(r"(?m)^\s*axiom\s+(?P<name>[A-Za-z0-9_'.]+)\b")
 
 
 @app.middleware("http")
@@ -235,7 +236,9 @@ def build_dashboard_advice(
             next_actions=[],
         )
 
-    if semantic_validation.collapsed_to_false:
+    if semantic_validation.unverified_by_policy:
+        headline = "Lean statement is unverified by policy."
+    elif semantic_validation.collapsed_to_false:
         headline = "Generated Lean statement collapsed to False."
     elif interpretation and interpretation.summary:
         headline = interpretation.summary
@@ -403,10 +406,27 @@ def run_semantic_validation(
     generated_code: str,
     compile_stdout: str,
     modal_metadata: dict[str, object] | None,
+    *,
+    require_proof_terms: bool,
 ) -> SemanticValidation:
     reasons: list[str] = []
     declaration_name: str | None = None
     collapsed_to_false = False
+    unverified_by_policy = False
+    unverified_preview: str | None = None
+
+    if require_proof_terms:
+        axiom_names = [
+            match.group("name")
+            for match in _AXIOM_DECL_RE.finditer(generated_code)
+            if match.group("name")
+        ]
+        if axiom_names:
+            unverified_by_policy = True
+            preview = ", ".join(axiom_names[:3])
+            if len(axiom_names) > 3:
+                preview = f"{preview}, ..."
+            unverified_preview = preview
 
     decl_match = _FALSE_DECL_RE.search(generated_code)
     if decl_match:
@@ -433,11 +453,20 @@ def run_semantic_validation(
     modal_is_unchecked = modal_status == "unchecked"
     if modal_valid is False and not modal_is_unchecked:
         reasons.append("Modal metadata reported is_valid_lean=false.")
+    if unverified_by_policy:
+        reasons.append(
+            f"Generated Lean uses axiom declaration(s): {unverified_preview}. Treated as unverified by policy."
+        )
 
-    success = not collapsed_to_false and (modal_valid is not False or modal_is_unchecked)
+    success = (
+        not collapsed_to_false
+        and not unverified_by_policy
+        and (modal_valid is not False or modal_is_unchecked)
+    )
     return SemanticValidation(
         success=success,
         collapsed_to_false=collapsed_to_false,
+        unverified_by_policy=unverified_by_policy,
         declaration_name=declaration_name,
         reasons=reasons,
     )
@@ -503,6 +532,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         generated.code,
         compile_result.stdout,
         generated.metadata,
+        require_proof_terms=bool(settings.require_proof_terms),
     )
     semantic_elapsed_ms = (time.perf_counter() - semantic_start) * 1000
     logger.info(
@@ -519,6 +549,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             duration_ms=semantic_elapsed_ms,
             details={
                 "collapsed_to_false": semantic_validation.collapsed_to_false,
+                "unverified_by_policy": semantic_validation.unverified_by_policy,
                 "declaration_name": semantic_validation.declaration_name,
                 "reason_count": len(semantic_validation.reasons),
             },
@@ -548,7 +579,29 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
     interpretation_error: str | None = None
     llm_attempted = False
 
-    if (
+    if not compile_result.success and semantic_validation.collapsed_to_false:
+        logger.info("stage_skipped stage=llm_interpretation reason=semantic_false")
+        stages.append(
+            PipelineStage(
+                stage="llm_interpretation",
+                attempted=False,
+                success=None,
+                duration_ms=None,
+                details={"reason": "semantic_false"},
+            )
+        )
+    elif not compile_result.success and semantic_validation.unverified_by_policy:
+        logger.info("stage_skipped stage=llm_interpretation reason=unverified_policy")
+        stages.append(
+            PipelineStage(
+                stage="llm_interpretation",
+                attempted=False,
+                success=None,
+                duration_ms=None,
+                details={"reason": "unverified_policy"},
+            )
+        )
+    elif (
         not compile_result.success
         and settings.enable_llm_interpretation
         and not semantic_validation.collapsed_to_false
@@ -593,17 +646,6 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                     details={"error": str(exc)},
                 )
             )
-    elif not compile_result.success and semantic_validation.collapsed_to_false:
-        logger.info("stage_skipped stage=llm_interpretation reason=semantic_false")
-        stages.append(
-            PipelineStage(
-                stage="llm_interpretation",
-                attempted=False,
-                success=None,
-                duration_ms=None,
-                details={"reason": "semantic_false"},
-            )
-        )
     elif not compile_result.success:
         logger.info("stage_skipped stage=llm_interpretation reason=disabled")
         stages.append(
