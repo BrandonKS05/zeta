@@ -68,6 +68,28 @@ def _normalize_temperature(raw_temperature: Any) -> float:
     return 0.0
 
 
+def _normalize_mode(raw_mode: Any, max_iters: int) -> str | None:
+    if isinstance(raw_mode, str):
+        candidate = raw_mode.strip().lower()
+        if candidate in {"fast", "thinking"}:
+            return candidate
+    if max_iters > 1:
+        return "thinking"
+    return None
+
+
+def _normalize_optional_bool(raw_value: Any) -> bool | None:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        lowered = raw_value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
 def _build_modal_payload(
     prompt: str,
     context_payload: dict[str, Any],
@@ -90,6 +112,19 @@ def _build_modal_payload(
     }
     if isinstance(model, str) and model.strip():
         analyze_payload["model"] = model.strip()
+    mode = _normalize_mode(context_payload.get("mode"), max_iters)
+    if mode is not None:
+        analyze_payload["mode"] = mode
+    if mode == "thinking":
+        analyze_payload["max_iters"] = max_iters
+
+    include_iteration_history = _normalize_optional_bool(context_payload.get("include_iteration_history"))
+    if include_iteration_history is not None:
+        analyze_payload["include_iteration_history"] = include_iteration_history
+
+    include_raw_model_output = _normalize_optional_bool(context_payload.get("include_raw_model_output"))
+    if include_raw_model_output is not None:
+        analyze_payload["include_raw_model_output"] = include_raw_model_output
 
     normalized_endpoint = endpoint_url.rstrip("/")
     if normalized_endpoint.endswith(_ANALYZE_ENDPOINT_SUFFIX) or normalized_endpoint.endswith(
