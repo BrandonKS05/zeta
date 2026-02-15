@@ -986,6 +986,20 @@
             li.appendChild(inlinePipeline);
           }
 
+          const actions = document.createElement("div");
+          actions.className = "zeta-activity-actions";
+          const viewPipelineBtn = document.createElement("button");
+          viewPipelineBtn.type = "button";
+          viewPipelineBtn.className = "zeta-activity-pipeline-btn";
+          viewPipelineBtn.textContent = "View pipeline";
+          viewPipelineBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openPipelineModal(entry, detailText);
+          });
+          actions.appendChild(viewPipelineBtn);
+          li.appendChild(actions);
+
           const pre = document.createElement("pre");
           pre.className = "zeta-activity-detail";
           pre.textContent = detailText;

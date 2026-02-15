@@ -630,7 +630,17 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
 }
 
 .zeta-activity-pipeline-btn {
+  border: 1px solid var(--zeta-border);
+  padding: 5px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
   background: color-mix(in srgb, var(--zeta-accent-soft) 46%, var(--zeta-nav) 54%);
+  color: var(--zeta-text);
+  font-family: inherit;
+}
+.zeta-activity-pipeline-btn:hover {
+  background: color-mix(in srgb, var(--zeta-accent-soft) 60%, var(--zeta-nav) 40%);
 }
 
 .zeta-activity-detail {

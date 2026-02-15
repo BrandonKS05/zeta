@@ -173,7 +173,7 @@ const AUTOCOMPLETE_MIN_FRAGMENT_WORDS = 3;
 const AUTOCOMPLETE_MAX_TEXT_WINDOW = 16000;
 const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
 const MODAL_BASE_URL =
-  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run";
+  "https://amirzeinali--herald-translator-translator-v1-translate-batch.modal.run";
 const DEFAULT_MODAL_ANALYZE_URL = `${MODAL_BASE_URL}/v1/analyze`;
 const DEFAULT_LEAN_SOLVE_URL = "http://13.57.35.202:8000/v1/lean/solve";
 const DEFAULT_MODAL_COMPLETE_URL = `${MODAL_BASE_URL}/v1/complete`;
