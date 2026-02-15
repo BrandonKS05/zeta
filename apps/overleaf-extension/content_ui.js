@@ -203,19 +203,23 @@ class ZetaPopover {
       });
       this.close();
     };
+    const derivedFromSuggestion = suggestionText && issue?.targetText
+      ? deriveReplacementFromSuggestion(suggestionText, issue.targetText)
+      : "";
     const isSameFix = resolvedReplacement && suggestionText && (
       suggestionText === resolvedReplacement ||
-      suggestionText.replace(/^suggested fix:\s*/i, "").trim() === resolvedReplacement
+      suggestionText.replace(/^suggested fix:\s*/i, "").trim() === resolvedReplacement ||
+      (derivedFromSuggestion && derivedFromSuggestion === resolvedReplacement)
     );
     if (resolvedReplacement) {
       const applyBtn = document.createElement("button");
       applyBtn.type = "button";
       applyBtn.className = "zeta-suggestion-option zeta-suggestion-option--clickable";
       const strong = document.createElement("strong");
-      strong.textContent = isSameFix && suggestionText ? "Apply" : "Apply replacement";
+      strong.textContent = isSameFix ? "Apply" : "Apply replacement";
       const span = document.createElement("span");
       span.className = "zeta-suggestion-fix-text";
-      span.textContent = (isSameFix && suggestionText ? suggestionText : resolvedReplacement);
+      span.textContent = resolvedReplacement;
       applyBtn.append(strong, span);
       applyBtn.addEventListener("click", (event) => {
         event.preventDefault();

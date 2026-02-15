@@ -6549,11 +6549,19 @@ class ZetaApp {
       return;
     }
 
-    this.panel.setStatus("idle", "Replacement applied.");
+    this.popover.close();
     if (String(issue?.key || "") === this.pinnedPopoverIssueKey) {
       this.pinnedPopoverIssueKey = "";
     }
-    this.popover.close();
+    const appliedKey = String(issue?.key || "");
+    if (appliedKey && this.lastRun.issues) {
+      this.lastRun.issues = this.lastRun.issues.filter(
+        (item) => item && String(item.key || "") !== appliedKey
+      );
+      this.focusedIssueIndex = clamp(this.focusedIssueIndex, -1, this.lastRun.issues.length - 1);
+      this.renderState(this.lastRun);
+    }
+    this.panel.setStatus("idle", "Replacement applied.");
     this.addActivity(
       `Applied suggestion${issue.targetText ? ` for '${issue.targetText}'` : ""}.`,
       "success",
