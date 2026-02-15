@@ -9,6 +9,7 @@ from app.modal_client import (
     ModalClientError,
     _build_modal_payload,
     _normalize_generated_payload,
+    _resolve_modal_endpoint,
     generate_lean,
 )
 from app.settings import Settings
@@ -52,6 +53,30 @@ def test_build_payload_for_generate_endpoint_matches_expected_shape() -> None:
         "imports": ["Std"],
         "temperature": 0.3,
     }
+
+
+def test_resolve_modal_endpoint_defaults_to_generate_path() -> None:
+    endpoint = _resolve_modal_endpoint(
+        "https://example.modal.run",
+        use_generate=True,
+    )
+    assert endpoint == "https://example.modal.run/v1/generate"
+
+
+def test_resolve_modal_endpoint_rewrites_analyze_to_generate() -> None:
+    endpoint = _resolve_modal_endpoint(
+        "https://example.modal.run/v1/analyze",
+        use_generate=True,
+    )
+    assert endpoint == "https://example.modal.run/v1/generate"
+
+
+def test_resolve_modal_endpoint_keeps_analyze_when_disabled() -> None:
+    endpoint = _resolve_modal_endpoint(
+        "https://example.modal.run/v1/analyze",
+        use_generate=False,
+    )
+    assert endpoint == "https://example.modal.run/v1/analyze"
 
 
 def test_normalize_generated_payload_for_lean_source_response() -> None:
@@ -118,6 +143,7 @@ def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_headers: dict[str, str] = {}
+    captured_url: str | None = None
 
     class _FakeAsyncClient:
         def __init__(self, timeout=None):
@@ -130,7 +156,8 @@ def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
             return False
 
         async def post(self, url, json, headers):
-            nonlocal captured_headers
+            nonlocal captured_headers, captured_url
+            captured_url = str(url)
             captured_headers = dict(headers or {})
             return httpx.Response(
                 200,
@@ -145,6 +172,7 @@ def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
     settings = Settings(
         modal_endpoint_url="https://example.modal.run/v1/analyze",
         modal_api_key="test-api-key",
+        modal_use_generate_endpoint=True,
     )
 
     async def _run() -> None:
@@ -164,3 +192,4 @@ def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
 
     assert captured_headers.get("Authorization") == "Bearer test-api-key"
     assert captured_headers.get("x-api-key") == "test-api-key"
+    assert captured_url == "https://example.modal.run/v1/generate"

@@ -48,12 +48,13 @@ services/lean-backend/
 
 ## Required Environment Variables
 
-- `MODAL_ENDPOINT_URL` (required): Modal HTTP endpoint for Lean generation.
+- `MODAL_ENDPOINT_URL` (required): Modal HTTP endpoint for Lean generation (recommended: `/v1/generate`).
 
 ## Optional Environment Variables
 
 - Modal:
   - `MODAL_API_KEY`
+  - `MODAL_USE_GENERATE_ENDPOINT` (default `true`; rewrites `/v1/analyze` or base URL to `/v1/generate`)
   - `MODAL_TIMEOUT_SECONDS` (default `20`)
   - `MODAL_MAX_RETRIES` (default `2`)
 - Lean compile:

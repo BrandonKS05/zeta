@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -23,6 +24,7 @@ class _RetriableModalError(ModalClientError):
 
 _ANALYZE_ENDPOINT_SUFFIX = "/v1/analyze"
 _GENERATE_ENDPOINT_SUFFIX = "/v1/generate"
+_QUERY_ENDPOINT_SUFFIX = "/v1/query"
 _ANALYZE_ACCEPTED_STATUSES = {"ok", "success", "needs_revision", "unchecked"}
 _ANALYZE_METADATA_FIELDS = (
     "model",
@@ -106,6 +108,34 @@ def _build_modal_payload(
     )
 
 
+def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
+    parsed = urlsplit(endpoint_url.strip())
+    path = parsed.path.rstrip("/")
+
+    target_suffix = _GENERATE_ENDPOINT_SUFFIX if use_generate else _ANALYZE_ENDPOINT_SUFFIX
+    rewritten = False
+
+    if path.endswith(_ANALYZE_ENDPOINT_SUFFIX):
+        path = f"{path[: -len(_ANALYZE_ENDPOINT_SUFFIX)]}{target_suffix}"
+        rewritten = True
+    elif path.endswith(_QUERY_ENDPOINT_SUFFIX):
+        path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{target_suffix}"
+        rewritten = True
+    elif path == "":
+        path = target_suffix
+        rewritten = True
+
+    resolved = urlunsplit((parsed.scheme, parsed.netloc, path or "/", parsed.query, parsed.fragment))
+    if rewritten:
+        logger.info(
+            "modal_endpoint_normalized configured=%s resolved=%s use_generate=%s",
+            endpoint_url,
+            resolved,
+            use_generate,
+        )
+    return resolved
+
+
 def _extract_lean_code(candidate: dict[str, Any]) -> tuple[str | None, str | None]:
     for key in ("lean_source", "lean_code", "code"):
         value = candidate.get(key)
@@ -168,6 +198,10 @@ async def generate_lean(
     settings = settings or get_settings()
     if not settings.modal_endpoint_url:
         raise ModalClientError("MODAL_ENDPOINT_URL is not configured")
+    endpoint_url = _resolve_modal_endpoint(
+        settings.modal_endpoint_url,
+        use_generate=bool(getattr(settings, "modal_use_generate_endpoint", True)),
+    )
 
     headers = {"Content-Type": "application/json"}
     if settings.modal_api_key:
@@ -180,11 +214,11 @@ async def generate_lean(
         prompt=prompt,
         context_payload=context_payload,
         max_iters=max_iters,
-        endpoint_url=settings.modal_endpoint_url,
+        endpoint_url=endpoint_url,
     )
     logger.info(
         "modal_request_prepared endpoint=%s prompt_chars=%s max_iters=%s theorem_name=%s",
-        settings.modal_endpoint_url,
+        endpoint_url,
         len(prompt),
         max_iters,
         payload.get("theorem_name"),
@@ -197,7 +231,7 @@ async def generate_lean(
         async def _call_modal() -> GeneratedLean:
             request_started = time.perf_counter()
             try:
-                response = await client.post(settings.modal_endpoint_url, json=payload, headers=headers)
+                response = await client.post(endpoint_url, json=payload, headers=headers)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 raise _RetriableModalError(f"Modal request transport error: {exc}") from exc
 

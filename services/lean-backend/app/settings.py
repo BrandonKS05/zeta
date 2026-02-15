@@ -12,6 +12,7 @@ class Settings(BaseModel):
 
     modal_endpoint_url: str | None = None
     modal_api_key: str | None = None
+    modal_use_generate_endpoint: bool = True
     modal_timeout_seconds: float = 20.0
     modal_max_retries: int = 2
 
@@ -50,6 +51,7 @@ def get_settings() -> Settings:
         log_level=_env("LOG_LEVEL", "INFO"),
         modal_endpoint_url=_env("MODAL_ENDPOINT_URL"),
         modal_api_key=_env("MODAL_API_KEY"),
+        modal_use_generate_endpoint=_env("MODAL_USE_GENERATE_ENDPOINT", "true"),
         modal_timeout_seconds=_env("MODAL_TIMEOUT_SECONDS", "20"),
         modal_max_retries=_env("MODAL_MAX_RETRIES", "2"),
         lean_command=_env("LEAN_COMMAND", "lean"),
