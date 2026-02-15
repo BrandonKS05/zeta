@@ -743,6 +743,11 @@ async def interpret_errors(
                 raise LLMClientError("LLM response JSON is not an object")
 
             content = _extract_message_content(data)
+            logger.info(
+                "llm_response (interpret_errors) content_len=%s preview=%s",
+                len(content) if content else 0,
+                truncate_text(content or "", 1200),
+            )
             if content is None:
                 logger.warning("llm_interpretation_missing_content fallback_to_compile")
                 return _fallback_interpretation(
@@ -858,10 +863,20 @@ async def interpret_semantic_sanity(
     except ValueError:
         return None
     content = _extract_message_content(data)
+    logger.info(
+        "llm_response (semantic_sanity) content_len=%s preview=%s",
+        len(content) if content else 0,
+        truncate_text(content or "", 1200),
+    )
     if not content:
+        logger.warning("llm_semantic_sanity content=empty")
         return None
     parsed = extract_json_object(content)
     if not isinstance(parsed, dict) or "items" not in parsed:
+        logger.warning(
+            "llm_semantic_sanity parse_failed or no items parsed_keys=%s",
+            list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+        )
         return None
     items_raw = parsed.get("items")
     if not isinstance(items_raw, list) or len(items_raw) == 0:
