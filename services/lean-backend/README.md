@@ -72,7 +72,6 @@ services/lean-backend/
   - `LEAN_TEMP_DIR` (optional parent dir for temp compile files)
   - `ELAN_HOME` (optional custom elan toolchain location)
   - `REQUIRE_LAKE_FOR_MATHLIB` (default `true`; reject Mathlib imports when no `LAKE_PROJECT_DIR`)
-  - `REQUIRE_PROOF_TERMS` (default `true`; treat generated `axiom` declarations as unverified)
   - `AUTO_CONFIGURE_ELAN_TOOLCHAIN` (default `true`; when Lean reports "no default toolchain configured", run `elan default ...` once and retry)
   - `ELAN_DEFAULT_TOOLCHAIN` (default `stable`; toolchain passed to `elan default`)
   - `ELAN_TOOLCHAIN_INSTALL_TIMEOUT_SECONDS` (default `180`)

@@ -35,7 +35,6 @@ class CompileResult(BaseModel):
 class SemanticValidation(BaseModel):
     success: bool
     collapsed_to_false: bool = False
-    unverified_by_policy: bool = False
     declaration_name: str | None = None
     reasons: list[str] = Field(default_factory=list)
 

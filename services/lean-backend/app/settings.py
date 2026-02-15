@@ -23,7 +23,6 @@ class Settings(BaseModel):
     lean_temp_dir: str | None = None
     elan_home: str | None = None
     require_lake_for_mathlib: bool = True
-    require_proof_terms: bool = True
     auto_configure_elan_toolchain: bool = True
     elan_default_toolchain: str = "stable"
     elan_toolchain_install_timeout_seconds: float = 180.0
@@ -67,7 +66,6 @@ def get_settings() -> Settings:
         lean_temp_dir=_env("LEAN_TEMP_DIR"),
         elan_home=_env("ELAN_HOME"),
         require_lake_for_mathlib=_env("REQUIRE_LAKE_FOR_MATHLIB", "true"),
-        require_proof_terms=_env("REQUIRE_PROOF_TERMS", "true"),
         auto_configure_elan_toolchain=_env("AUTO_CONFIGURE_ELAN_TOOLCHAIN", "true"),
         elan_default_toolchain=_env("ELAN_DEFAULT_TOOLCHAIN", "stable"),
         elan_toolchain_install_timeout_seconds=_env(
