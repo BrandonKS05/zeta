@@ -818,56 +818,77 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         and semantic_validation.success
         and (interpretation is None or not interpretation.items)
     ):
-        sanity_start = time.perf_counter()
-        try:
-            sanity_interp = await interpret_semantic_sanity(
-                payload.nl_input,
-                generated.code,
-                compile_result.stdout or "",
-                settings=settings,
-            )
-            sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
-            if sanity_interp is not None and sanity_interp.items:
-                interpretation = sanity_interp
-                logger.info(
-                    "stage_complete stage=llm_semantic_sanity duration_ms=%.2f item_count=%s",
-                    sanity_elapsed_ms,
-                    len(interpretation.items),
-                )
-                stages.append(
-                    PipelineStage(
-                        stage="llm_interpretation",
-                        attempted=True,
-                        success=True,
-                        duration_ms=sanity_elapsed_ms,
-                        details={"reason": "semantic_sanity", "item_count": len(interpretation.items)},
-                    )
-                )
-                llm_stage_appended = True
-            else:
-                stages.append(
-                    PipelineStage(
-                        stage="llm_interpretation",
-                        attempted=False,
-                        success=None,
-                        duration_ms=None,
-                        details={"reason": "compile_success"},
-                    )
-                )
-                llm_stage_appended = True
-        except Exception as exc:  # pragma: no cover
-            sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
-            logger.warning("interpret_semantic_sanity failed: %s", exc)
+        llm_configured = bool(
+            settings.enable_llm_interpretation and settings.llm_model and settings.llm_api_key
+        )
+        if not llm_configured:
+            logger.info("stage_skipped stage=llm_interpretation reason=llm_not_configured")
             stages.append(
                 PipelineStage(
                     stage="llm_interpretation",
                     attempted=False,
                     success=None,
                     duration_ms=None,
-                    details={"reason": "compile_success"},
+                    details={"reason": "llm_not_configured"},
                 )
             )
             llm_stage_appended = True
+        else:
+            sanity_start = time.perf_counter()
+            try:
+                sanity_interp = await interpret_semantic_sanity(
+                    payload.nl_input,
+                    generated.code,
+                    compile_result.stdout or "",
+                    settings=settings,
+                )
+                sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
+                if sanity_interp is not None and sanity_interp.items:
+                    interpretation = sanity_interp
+                    logger.info(
+                        "stage_complete stage=llm_semantic_sanity duration_ms=%.2f item_count=%s",
+                        sanity_elapsed_ms,
+                        len(interpretation.items),
+                    )
+                    stages.append(
+                        PipelineStage(
+                            stage="llm_interpretation",
+                            attempted=True,
+                            success=True,
+                            duration_ms=sanity_elapsed_ms,
+                            details={"reason": "semantic_sanity", "item_count": len(interpretation.items)},
+                        )
+                    )
+                    llm_stage_appended = True
+                else:
+                    # Model was called but returned no issues (or API/parse failed)
+                    item_count = len(sanity_interp.items) if sanity_interp else 0
+                    stages.append(
+                        PipelineStage(
+                            stage="llm_interpretation",
+                            attempted=True,
+                            success=(sanity_interp is not None),
+                            duration_ms=sanity_elapsed_ms,
+                            details={
+                                "reason": "no_issues_found" if sanity_interp is not None else "llm_error",
+                                "item_count": item_count,
+                            },
+                        )
+                    )
+                    llm_stage_appended = True
+            except Exception as exc:  # pragma: no cover
+                sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
+                logger.warning("interpret_semantic_sanity failed: %s", exc)
+                stages.append(
+                    PipelineStage(
+                        stage="llm_interpretation",
+                        attempted=True,
+                        success=False,
+                        duration_ms=sanity_elapsed_ms,
+                        details={"reason": "llm_error", "error": str(exc)},
+                    )
+                )
+                llm_stage_appended = True
 
     if (
         not compile_result.success

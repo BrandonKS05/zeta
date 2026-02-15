@@ -499,7 +499,13 @@ async def complete_autocomplete(
             raise ModalClientError(f"Modal complete request failed: {exc}") from exc
         if response.status_code >= 400:
             body_preview = (response.text or "")[:400].strip()
-            hint = " Check the Modal app (POST /) and dashboard." if response.status_code == 502 else ""
+            hint = ""
+            if response.status_code == 502:
+                hint = " Modal app may be cold or failing; check the Modal dashboard."
+            elif response.status_code == 500:
+                hint = (
+                    " The Modal app (POST /) must accept autocomplete payload (text, cursor_offset, context, system_prompt, autocomplete_mode) and return a completion-shaped response. If using Herald V1 Translate only, add autocomplete support or use an endpoint that does."
+                )
             raise ModalClientError(
                 f"Modal complete returned HTTP {response.status_code}: {body_preview or 'no body'}.{hint}"
             )

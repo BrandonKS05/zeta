@@ -990,8 +990,14 @@ class ZetaApp {
       return;
     }
 
-    if (altHeld && shiftHeld && (key === "m" || code === "KeyM")) {
+    if ((metaHeld || ctrlHeld) && shiftHeld && (key === "m" || code === "KeyM")) {
       event.preventDefault();
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
+        ts,
+        shortcut: metaHeld ? "Cmd+Shift+M" : "Ctrl+Shift+M",
+        action: "manual-autocomplete",
+      });
+      this.markShortcutTriggered(metaHeld ? "Cmd+Shift+M" : "Ctrl+Shift+M");
       this.triggerManualAutocomplete("shortcut");
       return;
     }

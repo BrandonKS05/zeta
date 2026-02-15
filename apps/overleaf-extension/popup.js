@@ -32,6 +32,8 @@
 
   const DEFAULT_SHORTCUTS = [
     { trigger: "Ctrl+Shift+Enter", text: "Ctrl+Shift+Enter", keys: ["⌃", "⇧", "↩"], label: "Run checker now", section: "Checking" },
+    { trigger: "Cmd+Shift+M", text: "Cmd+Shift+M", keys: ["⌘", "⇧", "M"], label: "Request autocomplete (manual)", section: "Checking" },
+    { trigger: "Ctrl+Shift+M", text: "Ctrl+Shift+M", keys: ["⌃", "⇧", "M"], label: "Request autocomplete (manual)", section: "Checking" },
     { trigger: "Alt+Shift+R", text: "Option+Shift+R", keys: ["⌥", "⇧", "R"], label: "Refresh checker", section: "Checking" },
     { trigger: "Alt+Shift+N", text: "Option+Shift+N", keys: ["⌥", "⇧", "N"], label: "Focus next issue", section: "Issues" },
     { trigger: "Alt+Shift+P", text: "Option+Shift+P", keys: ["⌥", "⇧", "P"], label: "Focus previous issue", section: "Issues" },
@@ -2118,7 +2120,7 @@
         currentSettings = { ...nextSettings };
         renderBackendStatus(
           enabled
-            ? "Manual autocomplete enabled. Use Alt+Shift+M to request suggestions."
+            ? "Manual autocomplete enabled. Use Cmd+Shift+M to request suggestions."
             : "Autocomplete will run automatically while typing.",
           "ok"
         );

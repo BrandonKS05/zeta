@@ -441,7 +441,7 @@ class ZetaPanel {
               <input id="zeta-autocomplete-topk" type="checkbox" />
             </div>
             <div class="zeta-settings-row">
-              <span>Manual trigger only (Alt+Shift+M)</span>
+              <span>Manual trigger only (Cmd+Shift+M)</span>
               <input id="zeta-autocomplete-manual" type="checkbox" />
             </div>
             <div class="zeta-field">
