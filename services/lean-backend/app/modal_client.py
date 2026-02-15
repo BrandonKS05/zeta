@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -568,6 +569,120 @@ def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: di
     }
 
 
+def _extract_json_object_from_text(text: str) -> dict[str, Any] | None:
+    content = str(text or "").strip()
+    if not content:
+        return None
+    try:
+        payload = json.loads(content)
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    fragment = content[start : end + 1]
+    try:
+        payload = json.loads(fragment)
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+async def _llm_autocomplete_candidates(
+    request_payload: dict[str, Any],
+    *,
+    settings: Settings,
+) -> list[str]:
+    if not settings.enable_llm_interpretation:
+        return []
+    if not settings.llm_model:
+        return []
+    if not settings.llm_api_key:
+        return []
+
+    text = str(request_payload.get("text") or "")
+    if not text:
+        return []
+    cursor_raw = request_payload.get("cursor_offset")
+    try:
+        cursor = int(cursor_raw) if cursor_raw is not None else len(text)
+    except Exception:
+        cursor = len(text)
+    cursor = max(0, min(cursor, len(text)))
+    prefix = text[:cursor]
+    suffix = text[cursor:]
+    context = request_payload.get("context")
+    context_str = context if isinstance(context, str) else ""
+    max_candidates = max(1, min(int(request_payload.get("max_candidates") or 3), 5))
+
+    endpoint = settings.llm_endpoint_url or f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.llm_api_key}"}
+    system = (
+        "You are an editor autocomplete assistant for LaTeX/math notes. "
+        "Return JSON only: {\"candidates\": [\"...\"]}. "
+        "Each candidate must be a short suffix to append at cursor (do not repeat prefix). "
+        f"Return up to {max_candidates} candidates."
+    )
+    user = (
+        f"Prefix:\n{prefix[-1200:]}\n\n"
+        f"Suffix:\n{suffix[:400]}\n\n"
+        f"Context:\n{context_str[-1600:]}\n"
+    )
+    payload = {
+        "model": settings.llm_model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": min(float(request_payload.get("temperature") or 0.35), 0.6),
+        "max_completion_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
+    }
+    timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 20))
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(endpoint, json=payload, headers=headers)
+        if response.status_code >= 400:
+            return []
+        try:
+            data = response.json()
+        except Exception:
+            return []
+    if not isinstance(data, dict):
+        return []
+    choices = data.get("choices")
+    content = ""
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                content = message.get("content") or ""
+            elif isinstance(first.get("text"), str):
+                content = first.get("text") or ""
+    parsed = _extract_json_object_from_text(content)
+    candidates: list[str] = []
+    if isinstance(parsed, dict) and isinstance(parsed.get("candidates"), list):
+        for item in parsed["candidates"]:
+            value = str(item or "").strip()
+            if value:
+                candidates.append(value)
+    elif content.strip():
+        candidates.append(content.strip())
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+        if len(deduped) >= max_candidates:
+            break
+    return deduped
+
+
 async def complete_autocomplete(
     request_payload: dict[str, Any],
     *,
@@ -661,6 +776,27 @@ async def complete_autocomplete(
                         payload_for_attempt = compat_payload
 
             normalized = _normalize_herald_complete_response(data, request_payload)
+            if isinstance(normalized, dict) and not normalized.get("candidates"):
+                llm_candidates = await _llm_autocomplete_candidates(request_payload, settings=settings)
+                if llm_candidates:
+                    normalized["status"] = "ok"
+                    normalized["selected_completion"] = llm_candidates[0]
+                    normalized["candidates"] = [
+                        {
+                            "completion": candidate,
+                            "score": 1.0,
+                            "model_score": 1.0,
+                            "retrieval_score": 0.0,
+                            "syntax_score": 0.0,
+                            "rejected_reasons": [],
+                        }
+                        for candidate in llm_candidates
+                    ]
+                    normalized["no_suggestion_reasons"] = []
+                    debug = normalized.get("no_suggestion_debug")
+                    if isinstance(debug, dict):
+                        debug["fallback"] = "llm_chat_completions"
+                        normalized["no_suggestion_debug"] = debug
             if (
                 isinstance(normalized, dict)
                 and normalized.get("status") == "no_suggestion"
