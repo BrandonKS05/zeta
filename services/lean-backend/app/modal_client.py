@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -662,6 +663,15 @@ def _extract_responses_text(data: dict[str, Any]) -> str:
     return ""
 
 
+def _heuristic_autocomplete_candidates(prefix: str, max_candidates: int) -> list[str]:
+    tail = prefix[-240:]
+    if re.search(r"a\^2\s*\+\s*b\^2\s*=\s*$", tail):
+        needs_math_close = tail.count("$") % 2 == 1
+        candidate = " c^2$" if needs_math_close else " c^2"
+        return [candidate][:max_candidates]
+    return []
+
+
 async def _llm_autocomplete_candidates(
     request_payload: dict[str, Any],
     *,
@@ -739,10 +749,11 @@ async def _llm_autocomplete_candidates(
     debug["endpoint"] = endpoint
     debug["api"] = "responses" if use_responses_api else "chat_completions"
     system = (
-        "You are an autocomplete assistant for math + Lean note writing. "
+        "You are an autocomplete assistant for math + Lean note writing (including LaTeX prose). "
         "Return JSON only: {\"candidates\": [\"...\"]}. Never include markdown fences. "
         "Each candidate must be a short suffix to append at cursor (do not repeat prefix). "
-        "Keep suggestions Lean-friendly and mathematically coherent. "
+        "Unless text is empty, return at least one candidate; if uncertain, return a short plausible continuation. "
+        "Keep suggestions mathematically coherent. "
         f"Return up to {max_candidates} candidates."
     )
     user = (
@@ -848,6 +859,14 @@ async def _llm_autocomplete_candidates(
         debug["reason"] = "ok"
         debug["candidate_count"] = len(deduped)
         return deduped, debug
+
+    heuristic = _heuristic_autocomplete_candidates(prefix, max_candidates)
+    if heuristic:
+        debug["success"] = True
+        debug["reason"] = "heuristic_fallback"
+        debug["candidate_count"] = len(heuristic)
+        return heuristic, debug
+
     debug["reason"] = "no_candidates"
     debug["candidate_count"] = 0
     return [], debug

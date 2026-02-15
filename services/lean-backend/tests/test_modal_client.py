@@ -376,3 +376,46 @@ def test_llm_autocomplete_extracts_output_text_from_responses_output_blocks(
         assert debug.get("success") is True
 
     asyncio.run(_run())
+
+
+def test_llm_autocomplete_uses_heuristic_fallback_for_pythagorean_equals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json, headers):
+            return httpx.Response(200, json={"output_text": "{\"candidates\": []}"})
+
+    monkeypatch.setattr("app.modal_client.httpx.AsyncClient", _FakeAsyncClient)
+
+    text = "For some right triangle, we have $a^2 + b^2 = "
+    settings = Settings(
+        llm_api_key="test-api-key",
+        llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-5-2025-08-07",
+        autocomplete_llm_fallback_enabled=True,
+        autocomplete_llm_fallback_model="",
+        autocomplete_llm_fallback_timeout_seconds=5,
+    )
+
+    async def _run() -> None:
+        candidates, debug = await _llm_autocomplete_candidates(
+            {
+                "text": text,
+                "cursor_offset": len(text),
+            },
+            settings=settings,
+        )
+        assert candidates and candidates[0].strip() == "c^2$"
+        assert debug.get("success") is True
+        assert debug.get("reason") == "heuristic_fallback"
+
+    asyncio.run(_run())
