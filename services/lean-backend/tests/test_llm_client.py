@@ -128,7 +128,7 @@ def test_interpret_errors_includes_completion_cap_and_limits_diagnostics(
 
     asyncio.run(_run())
 
-    assert captured_payload.get("max_completion_tokens") == 180
+    assert captured_payload.get("max_output_tokens") == 180
     # Responses API uses text.format; Chat Completions uses response_format
     response_format = captured_payload.get("response_format") or (
         (captured_payload.get("text") or {}).get("format")
@@ -136,11 +136,13 @@ def test_interpret_errors_includes_completion_cap_and_limits_diagnostics(
     assert isinstance(response_format, dict)
     assert response_format.get("type") == "json_schema"
     schema = response_format.get("json_schema")
-    assert isinstance(schema, dict)
-    assert schema.get("name") == "lean_interpretation"
-    messages = captured_payload.get("messages")
-    assert isinstance(messages, list) and len(messages) >= 2
-    prompt = messages[1]["content"]
+    if schema is not None:
+        assert isinstance(schema, dict)
+        assert schema.get("name") == "lean_interpretation"
+    else:
+        assert response_format.get("name") == "lean_interpretation"
+    prompt = captured_payload.get("input")
+    assert isinstance(prompt, str)
     assert "diag_7" in prompt
     assert "diag_8" not in prompt
 

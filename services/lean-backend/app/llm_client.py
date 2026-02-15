@@ -49,70 +49,77 @@ def _endpoint_url(settings: Settings) -> str:
     return f"{base}/chat/completions"
 
 
-def _token_limit_key(_endpoint: str) -> str:
-    """Use max_completion_tokens (OpenAI and others now support/require this)."""
-    return "max_completion_tokens"
+def _token_limit_key(*, use_responses_api: bool) -> str:
+    """Use API-specific output token key."""
+    return "max_output_tokens" if use_responses_api else "max_completion_tokens"
 
 
 def _should_enforce_json_mode(endpoint: str) -> bool:
-    """Use strict JSON mode only for OpenAI Chat Completions."""
+    """Use strict JSON mode only for OpenAI-hosted endpoints."""
     parsed = urlsplit(endpoint)
     return parsed.netloc.lower() == "api.openai.com"
 
 
-def _interpret_json_response_format() -> dict[str, Any]:
+def _interpret_json_schema() -> dict[str, Any]:
     return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "lean_interpretation",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["summary", "items", "suggestions"],
-                "properties": {
-                    "summary": {"type": "string"},
+        "name": "lean_interpretation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["summary", "items", "suggestions"],
+            "properties": {
+                "summary": {"type": "string"},
+                "items": {
+                    "type": "array",
                     "items": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": [
-                                "error",
-                                "probable_cause",
-                                "suggested_fix",
-                                "source",
-                                "latex_start",
-                                "latex_end",
-                                "latex_excerpt",
-                                "lean_line",
-                                "lean_column",
-                                "replacement",
-                                "confidence",
-                            ],
-                            "properties": {
-                                "error": {"type": "string"},
-                                "probable_cause": {"type": ["string", "null"]},
-                                "suggested_fix": {"type": ["string", "null"]},
-                                "source": {
-                                    "type": "string",
-                                    "enum": ["latex", "lean", "both", "unknown"],
-                                },
-                                "latex_start": {"type": ["integer", "null"]},
-                                "latex_end": {"type": ["integer", "null"]},
-                                "latex_excerpt": {"type": ["string", "null"]},
-                                "lean_line": {"type": ["integer", "null"]},
-                                "lean_column": {"type": ["integer", "null"]},
-                                "replacement": {"type": ["string", "null"]},
-                                "confidence": {"type": ["number", "null"]},
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "error",
+                            "probable_cause",
+                            "suggested_fix",
+                            "source",
+                            "latex_start",
+                            "latex_end",
+                            "latex_excerpt",
+                            "lean_line",
+                            "lean_column",
+                            "replacement",
+                            "confidence",
+                        ],
+                        "properties": {
+                            "error": {"type": "string"},
+                            "probable_cause": {"type": ["string", "null"]},
+                            "suggested_fix": {"type": ["string", "null"]},
+                            "source": {
+                                "type": "string",
+                                "enum": ["latex", "lean", "both", "unknown"],
                             },
+                            "latex_start": {"type": ["integer", "null"]},
+                            "latex_end": {"type": ["integer", "null"]},
+                            "latex_excerpt": {"type": ["string", "null"]},
+                            "lean_line": {"type": ["integer", "null"]},
+                            "lean_column": {"type": ["integer", "null"]},
+                            "replacement": {"type": ["string", "null"]},
+                            "confidence": {"type": ["number", "null"]},
                         },
                     },
-                    "suggestions": {"type": "array", "items": {"type": "string"}},
                 },
+                "suggestions": {"type": "array", "items": {"type": "string"}},
             },
         },
     }
+
+
+def _interpret_json_response_format() -> dict[str, Any]:
+    # Chat Completions response_format shape.
+    return {"type": "json_schema", "json_schema": _interpret_json_schema()}
+
+
+def _interpret_json_text_format() -> dict[str, Any]:
+    # Responses API text.format shape.
+    return {"type": "json_schema", **_interpret_json_schema()}
 
 
 def _as_int(value: Any) -> int | None:
@@ -336,6 +343,10 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
         return output_text.strip()
+    if isinstance(output_text, list):
+        output_text_parts = [part.strip() for part in output_text if isinstance(part, str) and part.strip()]
+        if output_text_parts:
+            return "\n".join(output_text_parts)
 
     output = payload.get("output")
     if isinstance(output, list):
@@ -343,12 +354,20 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
         for item in output:
             if not isinstance(item, dict):
                 continue
+            item_type = item.get("type")
+            if item_type in {"text", "output_text"}:
+                item_text = item.get("text")
+                if isinstance(item_text, str):
+                    parts.append(item_text)
             content = item.get("content")
             if isinstance(content, str):
                 parts.append(content)
             elif isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type in {"text", "output_text"}:
                         text = block.get("text")
                         if isinstance(text, str):
                             parts.append(text)
@@ -428,9 +447,10 @@ async def repair_lean_compile_errors(
         f"Broken Lean code:\n{truncate_text(code, _REPAIR_CODE_MAX_CHARS)}"
     )
 
-    token_key = _token_limit_key(endpoint)
+    use_responses_api = _use_responses_api(settings)
+    token_key = _token_limit_key(use_responses_api=use_responses_api)
     limit = min(settings.llm_max_completion_tokens, 2048) if settings.llm_max_completion_tokens > 0 else 2048
-    if _use_responses_api(settings):
+    if use_responses_api:
         payload = {
             "model": settings.llm_model,
             "instructions": system_content,
@@ -544,9 +564,10 @@ async def repair_lean_def_check(
         f"Broken Lean code:\n{truncate_text(code, _REPAIR_CODE_MAX_CHARS)}"
     )
 
-    token_key = _token_limit_key(endpoint)
+    use_responses_api = _use_responses_api(settings)
+    token_key = _token_limit_key(use_responses_api=use_responses_api)
     limit = min(settings.llm_max_completion_tokens, 1024) if settings.llm_max_completion_tokens > 0 else 1024
-    if _use_responses_api(settings):
+    if use_responses_api:
         payload = {
             "model": settings.llm_model,
             "instructions": system_content,
@@ -637,25 +658,31 @@ async def interpret_errors(
         f"Structured diagnostics:\n{truncate_text(diagnostics_json, _INTERPRET_DIAGNOSTICS_MAX_CHARS)}"
     )
 
-    payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert Lean 4 engineer. Respond only with valid compact JSON."
-                ),
-            },
-            {"role": "user", "content": user_prompt},
-        ],
-    }
+    use_responses_api = _use_responses_api(settings)
+    system_content = "You are an expert Lean 4 engineer. Respond only with valid compact JSON."
+    if use_responses_api:
+        payload = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": user_prompt,
+        }
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
     if _should_enforce_json_mode(endpoint):
-        if _use_responses_api(settings):
-            payload["text"] = {"format": _interpret_json_response_format()}
+        if use_responses_api:
+            payload["text"] = {"format": _interpret_json_text_format()}
         else:
             payload["response_format"] = _interpret_json_response_format()
     if settings.llm_max_completion_tokens > 0:
-        payload["max_completion_tokens"] = settings.llm_max_completion_tokens
+        payload[_token_limit_key(use_responses_api=use_responses_api)] = (
+            settings.llm_max_completion_tokens
+        )
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
 
@@ -794,13 +821,20 @@ async def explain_issue_chat(
         "If the question is about this issue or Lean/math in this document, respond in plain prose. If it is off-topic, respond with exactly: [OFF_TOPIC] This assistant only helps with Lean checker issues. I can't help with that."
     )
 
-    body = {
-        "model": settings.llm_model,
-        "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": prompt},
-        ],
-    }
+    if _use_responses_api(settings):
+        body = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": prompt,
+        }
+    else:
+        body = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ],
+        }
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
 
     async with httpx.AsyncClient(timeout=timeout) as client:

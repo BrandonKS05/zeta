@@ -71,9 +71,14 @@ def test_highlight_llm_uses_json_schema_response_format(
 
     asyncio.run(_run())
 
-    response_format = captured_payload.get("response_format")
+    response_format = captured_payload.get("response_format") or (
+        (captured_payload.get("text") or {}).get("format")
+    )
     assert isinstance(response_format, dict)
     assert response_format.get("type") == "json_schema"
     schema = response_format.get("json_schema")
-    assert isinstance(schema, dict)
-    assert schema.get("name") == "lean_highlight_resolution"
+    if schema is not None:
+        assert isinstance(schema, dict)
+        assert schema.get("name") == "lean_highlight_resolution"
+    else:
+        assert response_format.get("name") == "lean_highlight_resolution"

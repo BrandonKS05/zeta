@@ -37,10 +37,19 @@ class _RetriableLLMHighlightError(LLMHighlightError):
     pass
 
 
+def _use_responses_api(settings: Settings) -> bool:
+    if settings.llm_endpoint_url:
+        return "/responses" in settings.llm_endpoint_url.rstrip("/")
+    base = (settings.llm_base_url or "").strip().lower()
+    model = (settings.llm_model or "").strip().lower()
+    return "api.openai.com" in base and (model.startswith("gpt-5") or "gpt-5" in model)
+
+
 def _endpoint_url(settings: Settings) -> str:
     if settings.llm_endpoint_url:
         return settings.llm_endpoint_url
-    return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+    suffix = "/responses" if _use_responses_api(settings) else "/chat/completions"
+    return f"{settings.llm_base_url.rstrip('/')}{suffix}"
 
 
 def _should_enforce_json_mode(endpoint: str) -> bool:
@@ -48,55 +57,60 @@ def _should_enforce_json_mode(endpoint: str) -> bool:
     return parsed.netloc.lower() == "api.openai.com"
 
 
-def _highlight_json_response_format() -> dict[str, Any]:
+def _highlight_json_schema() -> dict[str, Any]:
     return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "lean_highlight_resolution",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["highlights", "unresolved_items"],
-                "properties": {
-                    "highlights": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": [
-                                "item_index",
-                                "chunk_id",
-                                "start_in_chunk",
-                                "end_in_chunk",
-                                "source",
-                                "confidence",
-                            ],
-                            "properties": {
-                                "item_index": {"type": "integer"},
-                                "chunk_id": {"type": "string"},
-                                "start_in_chunk": {"type": "integer"},
-                                "end_in_chunk": {"type": "integer"},
-                                "source": {
-                                    "type": "string",
-                                    "enum": [
-                                        "latex_span",
-                                        "latex_excerpt",
-                                        "quoted_text",
-                                        "replacement_text",
-                                        "keyword",
-                                        "llm",
-                                    ],
-                                },
-                                "confidence": {"type": "number"},
+        "name": "lean_highlight_resolution",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["highlights", "unresolved_items"],
+            "properties": {
+                "highlights": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "item_index",
+                            "chunk_id",
+                            "start_in_chunk",
+                            "end_in_chunk",
+                            "source",
+                            "confidence",
+                        ],
+                        "properties": {
+                            "item_index": {"type": "integer"},
+                            "chunk_id": {"type": "string"},
+                            "start_in_chunk": {"type": "integer"},
+                            "end_in_chunk": {"type": "integer"},
+                            "source": {
+                                "type": "string",
+                                "enum": [
+                                    "latex_span",
+                                    "latex_excerpt",
+                                    "quoted_text",
+                                    "replacement_text",
+                                    "keyword",
+                                    "llm",
+                                ],
                             },
+                            "confidence": {"type": "number"},
                         },
                     },
-                    "unresolved_items": {"type": "array", "items": {"type": "integer"}},
                 },
+                "unresolved_items": {"type": "array", "items": {"type": "integer"}},
             },
         },
     }
+
+
+def _highlight_json_response_format() -> dict[str, Any]:
+    return {"type": "json_schema", "json_schema": _highlight_json_schema()}
+
+
+def _highlight_json_text_format() -> dict[str, Any]:
+    return {"type": "json_schema", **_highlight_json_schema()}
 
 
 def _as_int(value: Any) -> int | None:
@@ -163,16 +177,59 @@ def _normalize_source(raw: Any) -> str:
 
 def _extract_message_content(payload: dict[str, Any]) -> str | None:
     choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    first = choices[0]
-    if not isinstance(first, dict):
-        return None
-    message = first.get("message")
-    if not isinstance(message, dict):
-        return None
-    content = message.get("content")
-    return content if isinstance(content, str) else None
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") in {"text", "output_text"}:
+                            text = block.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+                    if parts:
+                        return "\n".join(parts)
+
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+    if isinstance(output_text, list):
+        parts = [part.strip() for part in output_text if isinstance(part, str) and part.strip()]
+        if parts:
+            return "\n".join(parts)
+
+    output = payload.get("output")
+    if isinstance(output, list):
+        parts = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"text", "output_text"}:
+                item_text = item.get("text")
+                if isinstance(item_text, str):
+                    parts.append(item_text)
+            content = item.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") in {"text", "output_text"}:
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+        if parts:
+            return "\n".join(parts)
+
+    return None
 
 
 def _normalize_highlight_payload(
@@ -347,18 +404,28 @@ async def resolve_highlights_with_llm(
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
-    request_payload = {
-        "model": settings.llm_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a precise text span resolver. Respond only with compact valid JSON.",
-            },
-            {"role": "user", "content": _build_prompt(payload)},
-        ],
-    }
+    use_responses_api = _use_responses_api(settings)
+    system_content = "You are a precise text span resolver. Respond only with compact valid JSON."
+    prompt = _build_prompt(payload)
+    if use_responses_api:
+        request_payload = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": prompt,
+        }
+    else:
+        request_payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ],
+        }
     if _should_enforce_json_mode(endpoint):
-        request_payload["response_format"] = _highlight_json_response_format()
+        if use_responses_api:
+            request_payload["text"] = {"format": _highlight_json_text_format()}
+        else:
+            request_payload["response_format"] = _highlight_json_response_format()
 
     timeout = httpx.Timeout(settings.llm_highlight_timeout_seconds)
 
