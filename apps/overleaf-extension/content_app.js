@@ -1487,15 +1487,17 @@ class ZetaApp {
   }
 
   async requestAutocomplete(endpointUrl, context, reason, options = {}) {
+    const maxNewTokens = 24;
+    const temperature = 0.1;
     const requestBody = {
       text: context.textWindow,
       cursor_offset: context.localCursorOffset,
       context: context.contextWindow,
       imports: ["Std"],
       max_candidates: 3,
-      max_new_tokens: this.settings.mode === "accurate" ? 24 : 16,
-      temperature: this.settings.mode === "accurate" ? 0.2 : 0.35,
-      include_debug: false,
+      max_new_tokens: maxNewTokens,
+      temperature,
+      include_debug: true,
       zeta_meta: {
         reason,
         scope: "document",
@@ -1601,8 +1603,8 @@ class ZetaApp {
     const textWindow = String(context.textWindow || "");
     const contextWindow = String(context.contextWindow || "");
     const cursorOffset = Number(context.localCursorOffset) || 0;
-    const maxNewTokens = this.settings.mode === "accurate" ? 24 : 16;
-    const temperature = this.settings.mode === "accurate" ? 0.2 : 0.35;
+    const maxNewTokens = 24;
+    const temperature = 0.1;
     const textSnippet = textWindow.slice(Math.max(0, cursorOffset - 50), cursorOffset + 70).replace(/\n/g, "↵").slice(0, 160);
     const contextTail = contextWindow.slice(-160).replace(/\n/g, "↵").slice(0, 180);
     const lines = [
