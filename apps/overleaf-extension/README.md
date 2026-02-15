@@ -9,6 +9,7 @@ zeta now ships a real frontend shell for math statement checking:
 - real-time pipeline with debounce, retry, timeout, and stale-result protection
 - natural-language suggestion rendering + compiler diagnostics
 - inline issue underlines and caret-persistent suggestion popup
+- Tab autocomplete on Overleaf source editors (LHS) using `/v1/complete`
 - issue actions (`apply`, `ignore`, `regenerate`) plus activity/history with undo
 - persisted settings (`backend URL`, mode, scope, timeout, retries, notation strictness)
 - keyboard shortcuts for issue navigation
@@ -43,6 +44,10 @@ Works with both response styles:
 - `POST /v1/lean/solve` (lean-backend)
 - `POST /v1/analyze` / `query` style (translator-modal)
 
+Autocomplete requires a backend that implements:
+
+- `POST /v1/complete`
+
 Configure the endpoint in the panel Settings section.
 
 ## Load in Chrome
@@ -59,3 +64,4 @@ Configure the endpoint in the panel Settings section.
 - `Ctrl/Cmd+Enter` run check now
 - `Alt+Shift+A` apply focused replacement
 - `Alt+Shift+U` undo last action
+- `Tab` accept active inline autocomplete suggestion

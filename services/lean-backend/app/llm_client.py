@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from .models import CompileResult, Interpretation, InterpretationItem
+from .models import ChatExplainRequest, CompileResult, Interpretation, InterpretationItem
 from .settings import Settings, get_settings
 from .utils import extract_json_object, retry_async, truncate_text
 
@@ -352,3 +352,114 @@ async def interpret_errors(
         )
 
     return interpretation
+
+
+async def explain_issue_chat(
+    payload: ChatExplainRequest,
+    *,
+    settings: Settings | None = None,
+) -> str:
+    settings = settings or get_settings()
+    if not settings.enable_llm_interpretation:
+        raise LLMClientError("LLM chat explanation is disabled")
+    if not settings.llm_model:
+        raise LLMClientError("LLM_MODEL is not configured")
+
+    endpoint = _endpoint_url(settings)
+    headers = {"Content-Type": "application/json"}
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
+    issue = payload.issue
+    history_lines = [
+        f"{turn.role}: {truncate_text(turn.content, 700)}"
+        for turn in payload.history[-8:]
+    ]
+    diagnostics_json = json.dumps(
+        [diag.model_dump() for diag in issue.diagnostics],
+        ensure_ascii=False,
+    )
+    semantic_json = json.dumps(issue.semantic_reasons, ensure_ascii=False)
+
+    prompt = (
+        "You are a math-writing assistant for a Lean pipeline. "
+        "Explain why this specific issue happened and how to fix it. "
+        "Use plain language and avoid mentioning internal chain-of-thought.\n\n"
+        f"Question:\n{truncate_text(payload.question, 3000)}\n\n"
+        "Issue metadata:\n"
+        f"- severity: {issue.severity or 'unknown'}\n"
+        f"- category: {issue.category or 'unknown'}\n"
+        f"- message: {truncate_text(issue.message or '', 1200)}\n"
+        f"- target_text: {truncate_text(issue.target_text or '', 1200)}\n"
+        f"- replacement_hint: {truncate_text(issue.replacement or '', 1200)}\n"
+        f"- source: {issue.source or 'unknown'}\n"
+        f"- location: line={issue.line}, column={issue.column}\n"
+        f"- sentence: {truncate_text(issue.sentence or '', 2400)}\n"
+        f"- chunk_id: {issue.chunk_id or ''}\n"
+        f"- compile_success: {issue.compile_success}\n"
+        f"- diagnostics: {truncate_text(diagnostics_json, 4000)}\n"
+        f"- semantic_reasons: {truncate_text(semantic_json, 3000)}\n"
+        f"- lean_code: {truncate_text(issue.lean_code or '', 6000)}\n\n"
+        f"Recent chat:\n{truncate_text(chr(10).join(history_lines), 5000)}\n\n"
+        "Response format:\n"
+        "1) one-sentence diagnosis\n"
+        "2) short reason grounded in issue metadata\n"
+        "3) a concrete rewrite the user can try next"
+    )
+
+    body = {
+        "model": settings.llm_model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are precise, concise, and practical about Lean/math errors.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    timeout = httpx.Timeout(settings.llm_timeout_seconds)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+
+        async def _call_llm() -> str:
+            try:
+                response = await client.post(endpoint, json=body, headers=headers)
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                raise _RetriableLLMError(f"LLM transport error: {exc}") from exc
+
+            if response.status_code >= 500:
+                raise _RetriableLLMError(
+                    f"LLM server error {response.status_code}: {response.text[:500]}"
+                )
+            if response.status_code >= 400:
+                raise LLMClientError(
+                    f"LLM returned HTTP {response.status_code}: {response.text[:500]}"
+                )
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise LLMClientError("LLM returned non-JSON response") from exc
+
+            if not isinstance(data, dict):
+                raise LLMClientError("LLM response JSON is not an object")
+
+            content = _extract_message_content(data)
+            if not content:
+                raise LLMClientError("LLM response missing message content")
+
+            answer = content.strip()
+            if not answer:
+                raise LLMClientError("LLM response content was empty")
+            return answer
+
+        attempts = max(1, settings.llm_max_retries + 1)
+        return await retry_async(
+            _call_llm,
+            attempts,
+            backoff_seconds=0.75,
+            retriable_exceptions=(_RetriableLLMError,),
+            logger=logger,
+            operation_name="llm.explain_issue_chat",
+        )

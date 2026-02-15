@@ -333,13 +333,9 @@ class ZetaPanel {
         </section>
         <section id="zeta-settings-card" class="zeta-card" style="display:none">
           <div class="zeta-card-header">
-            <h3>Settings</h3>
+            <h3>Autocomplete Settings</h3>
           </div>
           <div class="zeta-settings">
-            <div class="zeta-field">
-              <label for="zeta-backend-url">Backend URL</label>
-              <input id="zeta-backend-url" type="text" />
-            </div>
             <div class="zeta-field">
               <label for="zeta-timeout">Timeout (ms)</label>
               <input id="zeta-timeout" type="number" min="2000" step="500" />
@@ -349,8 +345,20 @@ class ZetaPanel {
               <input id="zeta-retries" type="number" min="0" max="4" step="1" />
             </div>
             <div class="zeta-settings-row">
+              <span>Enable autocomplete</span>
+              <input id="zeta-autocomplete-enabled" type="checkbox" />
+            </div>
+            <div class="zeta-settings-row">
               <span>Check on typing</span>
               <input id="zeta-check-on-type" type="checkbox" />
+            </div>
+            <div class="zeta-settings-row">
+              <span>Show Top-K autocomplete list</span>
+              <input id="zeta-autocomplete-topk" type="checkbox" />
+            </div>
+            <div class="zeta-settings-row">
+              <span>Manual trigger only (Alt+Shift+M)</span>
+              <input id="zeta-autocomplete-manual" type="checkbox" />
             </div>
             <div class="zeta-field">
               <label for="zeta-notation">Notation strictness</label>
@@ -368,6 +376,7 @@ class ZetaPanel {
             <li><code>⌘↩</code> ⚡ run check now</li>
             <li><code>⌥⇧R</code> 🔄 refresh checker</li>
             <li><code>⌥⇧H</code> 🧹 clear activity history</li>
+            <li><code>⌥⇧M</code> ✨ request autocomplete</li>
             <li><code>⌥⇧A</code> ✅ apply focused replacement</li>
             <li><code>⌥⇧U</code> ↩️ undo last action</li>
           </ul>
@@ -424,10 +433,12 @@ class ZetaPanel {
       settingsBtn: this.root.querySelector("#zeta-settings-btn"),
       collapseBtn: this.root.querySelector("#zeta-collapse-btn"),
       settingsCard: this.root.querySelector("#zeta-settings-card"),
-      backendUrl: this.root.querySelector("#zeta-backend-url"),
       timeout: this.root.querySelector("#zeta-timeout"),
       retries: this.root.querySelector("#zeta-retries"),
+      autocompleteEnabled: this.root.querySelector("#zeta-autocomplete-enabled"),
       checkOnType: this.root.querySelector("#zeta-check-on-type"),
+      autocompleteTopK: this.root.querySelector("#zeta-autocomplete-topk"),
+      autocompleteManual: this.root.querySelector("#zeta-autocomplete-manual"),
       notation: this.root.querySelector("#zeta-notation"),
       saveSettings: this.root.querySelector("#zeta-save-settings"),
     };
@@ -464,10 +475,12 @@ class ZetaPanel {
 
     this.refs.saveSettings.addEventListener("click", () => {
       this.handlers.onSaveSettings({
-        backendUrl: this.refs.backendUrl.value.trim(),
         requestTimeoutMs: Number(this.refs.timeout.value),
         retries: Number(this.refs.retries.value),
+        autocompleteEnabled: this.refs.autocompleteEnabled.checked,
         checkOnType: this.refs.checkOnType.checked,
+        autocompleteShowTopK: this.refs.autocompleteTopK.checked,
+        autocompleteManualTrigger: this.refs.autocompleteManual.checked,
         notationStrictness: this.refs.notation.value,
       });
     });
@@ -635,10 +648,12 @@ class ZetaPanel {
   }
 
   setSettings(settings) {
-    this.refs.backendUrl.value = settings.backendUrl;
     this.refs.timeout.value = String(settings.requestTimeoutMs);
     this.refs.retries.value = String(settings.retries);
+    this.refs.autocompleteEnabled.checked = settings.autocompleteEnabled !== false;
     this.refs.checkOnType.checked = !!settings.checkOnType;
+    this.refs.autocompleteTopK.checked = !!settings.autocompleteShowTopK;
+    this.refs.autocompleteManual.checked = !!settings.autocompleteManualTrigger;
     this.refs.notation.value = settings.notationStrictness;
     this.setMode(settings.mode);
     this.setScope(settings.scope);

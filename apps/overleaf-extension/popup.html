@@ -34,6 +34,7 @@
         <button type="button" class="zeta-top-nav-btn is-active" data-panel="main">Main</button>
         <button type="button" class="zeta-top-nav-btn" data-panel="history">History</button>
         <button type="button" class="zeta-top-nav-btn" data-panel="graph">Graph View</button>
+        <button type="button" class="zeta-top-nav-btn" data-panel="assistant">Assistant</button>
       </nav>
 
       <section class="zeta-panel is-active" data-panel-content="main">
@@ -70,6 +71,23 @@
             </button>
           </div>
           <p id="zeta-mode-note" class="zeta-mode-note"></p>
+        </section>
+
+        <section class="zeta-backend-section">
+          <p class="zeta-section-label">Autocomplete Settings</p>
+          <label class="zeta-backend-toggle">
+            <input id="zeta-autocomplete-enabled-toggle" type="checkbox" />
+            <span>Enable autocomplete</span>
+          </label>
+          <label class="zeta-backend-toggle">
+            <input id="zeta-autocomplete-topk-toggle" type="checkbox" />
+            <span>Show Top-K autocomplete list</span>
+          </label>
+          <label class="zeta-backend-toggle">
+            <input id="zeta-autocomplete-manual-toggle" type="checkbox" />
+            <span>Manual trigger only (Alt+Shift+M)</span>
+          </label>
+          <p id="zeta-backend-status" class="zeta-backend-status">Autocomplete uses the deployed Modal endpoint.</p>
         </section>
 
         <section class="zeta-legend">
@@ -128,6 +146,38 @@
           </div>
           <ul id="zeta-graph-list" class="zeta-list zeta-list--graph"></ul>
           <p id="zeta-graph-empty" class="zeta-hint">No chunk graph yet.</p>
+        </section>
+      </section>
+
+      <section class="zeta-panel" data-panel-content="assistant">
+        <section class="zeta-legend zeta-assistant-legend">
+          <div class="zeta-row">
+            <p class="zeta-section-label">Assistant</p>
+            <p id="zeta-assistant-count" class="zeta-chip">0 threads</p>
+          </div>
+          <div class="zeta-assistant-layout">
+            <div class="zeta-assistant-threads-wrap">
+              <ul id="zeta-assistant-threads" class="zeta-list zeta-list--assistant-threads"></ul>
+              <p id="zeta-assistant-threads-empty" class="zeta-hint">
+                No current issues to explain.
+              </p>
+            </div>
+            <div class="zeta-assistant-chat">
+              <div id="zeta-assistant-meta" class="zeta-assistant-meta">Select an issue thread.</div>
+              <ul id="zeta-assistant-messages" class="zeta-list zeta-list--assistant-messages"></ul>
+              <p id="zeta-assistant-messages-empty" class="zeta-hint">Ask why an issue happened.</p>
+              <form id="zeta-assistant-form" class="zeta-assistant-form">
+                <input
+                  id="zeta-assistant-input"
+                  class="zeta-assistant-input"
+                  type="text"
+                  placeholder="Ask why this error exists..."
+                  autocomplete="off"
+                />
+                <button id="zeta-assistant-send" class="zeta-assistant-send" type="submit">Send</button>
+              </form>
+            </div>
+          </div>
         </section>
       </section>
     </main>

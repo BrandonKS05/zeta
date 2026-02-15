@@ -8,16 +8,19 @@
   const IGNORED_KEY = "zetaIgnoredIssueKeys";
   const TELEMETRY_KEY = "zetaTelemetry";
   const PANEL_SNAPSHOT_KEY = "zetaPanelSnapshot";
+  const CHAT_SNAPSHOT_KEY = "zetaChatSnapshot";
   const UI_SURFACE_KEY = "zetaUiSurface";
   const CACHE_TTL_MS = 90 * 1000;
   const MAX_HIGHLIGHT_RECTS = 120;
 
   const DEFAULT_SETTINGS = {
-    backendUrl: "http://13.57.35.202:8000/v1/lean/solve",
     mode: "auto",
     scope: "document",
     theme: "light",
     checkOnType: true,
+    autocompleteEnabled: true,
+    autocompleteShowTopK: false,
+    autocompleteManualTrigger: false,
     requestTimeoutMs: 18000,
     retries: 1,
     notationStrictness: "balanced",
@@ -89,7 +92,22 @@
         resolve(defaults);
         return;
       }
-      chrome.storage.sync.get(defaults, (result) => resolve(result));
+      try {
+        chrome.storage.sync.get(defaults, (result) => {
+          try {
+            const runtimeError = chrome.runtime?.lastError;
+            if (runtimeError) {
+              resolve(defaults);
+              return;
+            }
+            resolve(result);
+          } catch (_error) {
+            resolve(defaults);
+          }
+        });
+      } catch (_error) {
+        resolve(defaults);
+      }
     });
   }
 
@@ -99,7 +117,18 @@
         resolve();
         return;
       }
-      chrome.storage.sync.set(payload, () => resolve());
+      try {
+        chrome.storage.sync.set(payload, () => {
+          try {
+            void chrome.runtime?.lastError;
+          } catch (_error) {
+            // ignore invalidated context
+          }
+          resolve();
+        });
+      } catch (_error) {
+        resolve();
+      }
     });
   }
 
@@ -109,7 +138,22 @@
         resolve(defaults);
         return;
       }
-      chrome.storage.local.get(defaults, (result) => resolve(result));
+      try {
+        chrome.storage.local.get(defaults, (result) => {
+          try {
+            const runtimeError = chrome.runtime?.lastError;
+            if (runtimeError) {
+              resolve(defaults);
+              return;
+            }
+            resolve(result);
+          } catch (_error) {
+            resolve(defaults);
+          }
+        });
+      } catch (_error) {
+        resolve(defaults);
+      }
     });
   }
 
@@ -119,7 +163,18 @@
         resolve();
         return;
       }
-      chrome.storage.local.set(payload, () => resolve());
+      try {
+        chrome.storage.local.set(payload, () => {
+          try {
+            void chrome.runtime?.lastError;
+          } catch (_error) {
+            // ignore invalidated context
+          }
+          resolve();
+        });
+      } catch (_error) {
+        resolve();
+      }
     });
   }
 
@@ -159,6 +214,7 @@
     IGNORED_KEY,
     TELEMETRY_KEY,
     PANEL_SNAPSHOT_KEY,
+    CHAT_SNAPSHOT_KEY,
     UI_SURFACE_KEY,
     CACHE_TTL_MS,
     MAX_HIGHLIGHT_RECTS,

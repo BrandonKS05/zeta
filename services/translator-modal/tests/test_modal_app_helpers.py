@@ -233,3 +233,64 @@ def test_analyze_with_iterations_stops_when_refinement_is_unchanged(monkeypatch)
     assert result.is_valid_lean is False
     assert any("stopped early" in item.lower() for item in result.feedback)
     assert any("final suggestions" in item.lower() for item in result.feedback)
+
+
+def test_validate_statement_type_rejects_declaration_prefix() -> None:
+    message = app._validate_statement_type("theorem add_zero_right")
+    assert isinstance(message, str)
+    assert "declaration syntax" in message
+
+
+def test_extract_statement_payload_jsonish_fallback() -> None:
+    raw = (
+        '{ "lean_statement_type": "∀ n : Nat, n + 0 = n", '
+        '"assumptions": [], "notes": "ok", "unterminated": '
+    )
+    statement, assumptions, notes = app._extract_statement_payload(raw)
+    assert statement == "∀ n : Nat, n + 0 = n"
+    assert assumptions == []
+    assert notes == ""
+
+
+def test_complete_cache_key_changes_with_prefix() -> None:
+    req_a = app.CompleteRequest(text="For all n", cursor_offset=3, imports=["Std"])
+    req_b = app.CompleteRequest(text="For all n", cursor_offset=8, imports=["Std"])
+    assert app._complete_cache_key(req_a) != app._complete_cache_key(req_b)
+
+
+def test_rank_completion_candidates_filters_forbidden() -> None:
+    ranked, rejected = app._rank_completion_candidates(
+        prefix_text="For all n,",
+        retrieval_hints=["∀ n : Nat, n + 0 = n"],
+        raw_outputs=[
+            '{"candidates": [" theorem bad_candidate", " n + 0 = n"]}',
+        ],
+        max_candidates=3,
+    )
+    assert ranked
+    assert ranked[0].completion.strip() == "n + 0 = n"
+    assert rejected
+
+
+def test_extract_completion_candidates_from_schema_fragment_output() -> None:
+    raw = '"candidates": ["n", "n + 0 = n", "0 + n = n"]'
+    extracted = app._extract_completion_candidates_from_output(raw)
+    assert extracted[:2] == ["n", "n + 0 = n"]
+
+
+def test_extract_completion_candidates_from_truncated_json_fragment() -> None:
+    raw = '{"candidates": ["n", "n + 0 = n", "0 + n = n",'
+    extracted = app._extract_completion_candidates_from_output(raw)
+    assert extracted[:3] == ["n", "n + 0 = n", "0 + n = n"]
+
+
+def test_extract_completion_candidates_from_truncated_first_item() -> None:
+    raw = '{\n  "candidates": ["a * (b + c) ='
+    extracted = app._extract_completion_candidates_from_output(raw)
+    assert extracted == ["a * (b + c) ="]
+
+
+def test_normalize_completion_suffix_rejects_schema_fragment() -> None:
+    suffix, reasons = app._normalize_completion_suffix("For all n,", 'candidates": ["n + 0 = n"]')
+    assert suffix is None
+    assert "schema_fragment" in reasons

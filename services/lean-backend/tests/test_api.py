@@ -324,3 +324,73 @@ def test_solve_includes_highlights_and_dashboard(monkeypatch: pytest.MonkeyPatch
         assert highlight_stage["success"] is True
 
     asyncio.run(_run())
+
+
+def test_chat_explain_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.main.settings.enable_llm_interpretation", False)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/chat/explain",
+                json={
+                    "question": "Why is this wrong?",
+                    "mode": "fast",
+                    "issue": {
+                        "severity": "error",
+                        "category": "semantic-validation",
+                        "message": "Generated declaration has proposition type False.",
+                        "sentence": "For all n in N, n + 1 = n.",
+                        "semantic_reasons": [
+                            "Generated declaration 'add_zero_right' has proposition type False."
+                        ],
+                        "compile_success": True,
+                    },
+                    "history": [],
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source"] == "deterministic"
+        assert "Diagnosis:" in payload["answer"]
+        assert "Answer to your question" in payload["answer"]
+
+    asyncio.run(_run())
+
+
+def test_chat_explain_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_explain_issue_chat(payload, settings=None) -> str:
+        assert payload.question
+        return "This fails because the generated statement collapses to False."
+
+    monkeypatch.setattr("app.main.explain_issue_chat", fake_explain_issue_chat)
+    monkeypatch.setattr("app.main.settings.enable_llm_interpretation", True)
+    monkeypatch.setattr("app.main.settings.llm_model", "fake-model")
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/chat/explain",
+                json={
+                    "question": "Explain this compile diagnostic",
+                    "issue": {
+                        "severity": "error",
+                        "category": "lean-diagnostic",
+                        "message": "unknown constant 'Foo'",
+                        "diagnostics": [
+                            {"severity": "error", "message": "unknown constant 'Foo'", "line": 2, "column": 9}
+                        ],
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source"] == "llm"
+        assert payload["model"] == "fake-model"
+        assert "collapses to False" in payload["answer"]
+
+    asyncio.run(_run())

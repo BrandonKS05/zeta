@@ -106,3 +106,101 @@ def test_compile_lean_missing_lake_project_dir_is_clear(tmp_path: Path) -> None:
     assert "does not exist" in result.stderr
     assert result.diagnostics
     assert "LAKE_PROJECT_DIR" in result.diagnostics[0].message
+
+
+def test_compile_lean_falls_back_to_standalone_when_lake_fails_for_non_mathlib(
+    tmp_path: Path,
+) -> None:
+    fake_lean = tmp_path / "fake_lean.sh"
+    fake_lean.write_text(
+        "#!/usr/bin/env bash\n"
+        "file=\"$1\"\n"
+        "if grep -q BROKEN \"$file\"; then\n"
+        "  echo \"$file:2:9: error: unknown constant 'Foo'\" >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_lean.chmod(0o755)
+
+    fake_lake = tmp_path / "fake_lake.sh"
+    fake_lake.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo \"info: lean_backend_mathlib: no previous manifest, creating one from scratch\" >&2\n"
+        "echo \"info: mathlib: cloning https://github.com/leanprover-community/mathlib4.git\" >&2\n"
+        "echo \"error: external command 'git' exited with code 255\" >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_lake.chmod(0o755)
+
+    project_dir = tmp_path / "lake-project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "lakefile.lean").write_text(
+        "import Lake\n"
+        "open Lake DSL\n"
+        "package lean_backend_mathlib\n",
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        lean_command=str(fake_lean),
+        lake_command=str(fake_lake),
+        lake_project_dir=str(project_dir),
+        require_lake_for_mathlib=True,
+        lean_timeout_seconds=5.0,
+        compiler_output_max_chars=20_000,
+        lean_temp_dir=None,
+        elan_home=None,
+    )
+
+    result = asyncio.run(compile_lean("def ok : Nat := 1", settings=settings))
+
+    assert result.success is True
+    assert result.stderr == ""
+    assert result.diagnostics == []
+
+
+def test_compile_lean_does_not_fallback_to_standalone_for_mathlib_inputs(tmp_path: Path) -> None:
+    fake_lean = tmp_path / "fake_lean.sh"
+    fake_lean.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_lean.chmod(0o755)
+
+    fake_lake = tmp_path / "fake_lake.sh"
+    fake_lake.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo \"info: lean_backend_mathlib: no previous manifest, creating one from scratch\" >&2\n"
+        "echo \"info: mathlib: cloning https://github.com/leanprover-community/mathlib4.git\" >&2\n"
+        "echo \"error: external command 'git' exited with code 255\" >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_lake.chmod(0o755)
+
+    project_dir = tmp_path / "lake-project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "lakefile.lean").write_text(
+        "import Lake\n"
+        "open Lake DSL\n"
+        "package lean_backend_mathlib\n",
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        lean_command=str(fake_lean),
+        lake_command=str(fake_lake),
+        lake_project_dir=str(project_dir),
+        require_lake_for_mathlib=True,
+        lean_timeout_seconds=5.0,
+        compiler_output_max_chars=20_000,
+        lean_temp_dir=None,
+        elan_home=None,
+    )
+
+    result = asyncio.run(
+        compile_lean("import Mathlib.Data.Real.Basic\n#check (0 : Real)", settings=settings)
+    )
+
+    assert result.success is False
+    assert "external command 'git' exited with code 255" in result.stderr

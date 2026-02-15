@@ -5,11 +5,16 @@
   const SETTINGS_KEY = "zetaSettings";
   const TELEMETRY_KEY = "zetaTelemetry";
   const PANEL_SNAPSHOT_KEY = "zetaPanelSnapshot";
+  const CHAT_SNAPSHOT_KEY = "zetaChatSnapshot";
   const UI_SURFACE_KEY = "zetaUiSurface";
   const FALLBACK_MODE = "auto";
   const IS_EMBEDDED = new URLSearchParams(window.location.search).get("embedded") === "1";
+  if (IS_EMBEDDED && document.body) {
+    document.body.setAttribute("data-zeta-embedded", "1");
+  }
   const DEFAULT_SHORTCUTS = [
     { trigger: "Ctrl/Cmd+Enter", text: "Cmd+Enter", keys: ["⌘", "↩"], label: "Run checker now" },
+    { trigger: "Alt+Shift+M", text: "Option+Shift+M", keys: ["⌥", "⇧", "M"], label: "Manual autocomplete" },
     { trigger: "Alt+Shift+U", text: "Option+Shift+U", keys: ["⌥", "⇧", "U"], label: "Undo last action" },
     { trigger: "Alt+Shift+N", text: "Option+Shift+N", keys: ["⌥", "⇧", "N"], label: "Focus next issue" },
     { trigger: "Alt+Shift+P", text: "Option+Shift+P", keys: ["⌥", "⇧", "P"], label: "Focus previous issue" },
@@ -45,10 +50,29 @@
   const graphCount = document.getElementById("zeta-graph-count");
   const graphList = document.getElementById("zeta-graph-list");
   const graphEmpty = document.getElementById("zeta-graph-empty");
+  const assistantCount = document.getElementById("zeta-assistant-count");
+  const assistantThreads = document.getElementById("zeta-assistant-threads");
+  const assistantThreadsEmpty = document.getElementById("zeta-assistant-threads-empty");
+  const assistantMeta = document.getElementById("zeta-assistant-meta");
+  const assistantMessages = document.getElementById("zeta-assistant-messages");
+  const assistantMessagesEmpty = document.getElementById("zeta-assistant-messages-empty");
+  const assistantForm = document.getElementById("zeta-assistant-form");
+  const assistantInput = document.getElementById("zeta-assistant-input");
+  const assistantSend = document.getElementById("zeta-assistant-send");
+  const autocompleteEnabledToggle = document.getElementById("zeta-autocomplete-enabled-toggle");
+  const backendTopKToggle = document.getElementById("zeta-autocomplete-topk-toggle");
+  const backendManualToggle = document.getElementById("zeta-autocomplete-manual-toggle");
+  const backendStatus = document.getElementById("zeta-backend-status");
 
   let hasInitialized = false;
   let hasInitializedPanelNav = false;
   let lastAnimatedShortcutPulseId = 0;
+  let currentSettings = {};
+  let assistantSnapshot = {
+    threads: [],
+    activeThreadId: null,
+    updatedAt: 0,
+  };
   const expandedGraphNodeIds = new Set();
   const previewCache = new Map();
   const nowTs = () => new Date().toISOString();
@@ -192,12 +216,22 @@
     if (!chrome?.storage?.local) {
       return;
     }
-    chrome.storage.local.set({
-      [UI_SURFACE_KEY]: {
-        surface: String(surface || "").toLowerCase(),
-        updatedAt: Date.now(),
-      },
-    });
+    try {
+      chrome.storage.local.set({
+        [UI_SURFACE_KEY]: {
+          surface: String(surface || "").toLowerCase(),
+          updatedAt: Date.now(),
+        },
+      }, () => {
+        try {
+          void chrome.runtime?.lastError;
+        } catch (_error) {
+          // ignore invalidated context during reload
+        }
+      });
+    } catch (_error) {
+      // ignore invalidated context during reload
+    }
   }
 
   function notifyActiveTabSurface(surface) {
@@ -219,23 +253,57 @@
   }
 
   function sendActionToActiveTab(action) {
+    sendMessageToActiveTab({ type: "zeta-popup-action", action }, "popup_action", () => ({
+      action,
+    }));
+  }
+
+  function sendMessageToActiveTab(message, tag, extraPayloadFactory = null, onResponse = null) {
     if (!chrome?.tabs?.query || !chrome?.tabs?.sendMessage) {
-      console.warn("[zeta:popup] tabs_api_unavailable", { ts: nowTs() });
+      console.warn("[zeta:popup] tabs_api_unavailable", { ts: nowTs(), tag });
+      if (typeof onResponse === "function") {
+        onResponse(null);
+      }
       return;
     }
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs && tabs[0];
       if (!activeTab?.id) {
-        console.warn("[zeta:popup] no_active_tab_for_action", { ts: nowTs(), action });
+        console.warn("[zeta:popup] no_active_tab", { ts: nowTs(), tag });
+        if (typeof onResponse === "function") {
+          onResponse(null);
+        }
         return;
       }
-      console.info("[zeta:popup] sending_popup_action", { ts: nowTs(), action, tabId: activeTab.id });
-      chrome.tabs.sendMessage(activeTab.id, { type: "zeta-popup-action", action }, (response) => {
-        const message = chrome.runtime?.lastError?.message;
-        if (message) {
-          console.warn("[zeta:popup] action_delivery_failed", { ts: nowTs(), action, error: message });
+      const extra = typeof extraPayloadFactory === "function" ? extraPayloadFactory() : null;
+      console.info("[zeta:popup] sending_tab_message", {
+        ts: nowTs(),
+        tag,
+        tabId: activeTab.id,
+        ...(extra || {}),
+      });
+      chrome.tabs.sendMessage(activeTab.id, message, (response) => {
+        const runtimeError = chrome.runtime?.lastError?.message;
+        if (runtimeError) {
+          console.warn("[zeta:popup] tab_message_failed", {
+            ts: nowTs(),
+            tag,
+            error: runtimeError,
+            ...(extra || {}),
+          });
+          if (typeof onResponse === "function") {
+            onResponse(null);
+          }
         } else {
-          console.info("[zeta:popup] action_delivery_ok", { ts: nowTs(), action, response: response || null });
+          console.info("[zeta:popup] tab_message_ok", {
+            ts: nowTs(),
+            tag,
+            ...(extra || {}),
+            response: response || null,
+          });
+          if (typeof onResponse === "function") {
+            onResponse(response || null);
+          }
         }
       });
     });
@@ -262,6 +330,9 @@
     }
     if (altHeld && shiftHeld && (key === "u" || code === "KeyU")) {
       return { action: "undo-last", trigger: "Alt+Shift+U" };
+    }
+    if (altHeld && shiftHeld && (key === "m" || code === "KeyM")) {
+      return { action: "manual-autocomplete", trigger: "Alt+Shift+M" };
     }
     if (altHeld && shiftHeld && (key === "r" || code === "KeyR")) {
       return { action: "refresh-checker", trigger: "Alt+Shift+R" };
@@ -301,6 +372,8 @@
     if (!panelNav || !panelNavIndicator) {
       return;
     }
+    const navCount = Math.max(1, panelNavButtons.length);
+    panelNav.style.setProperty("--zeta-top-nav-count", String(navCount));
     const activeButton = panelNavButtons.find((button) => button.dataset.panel === panelName);
     if (!activeButton) {
       return;
@@ -378,10 +451,15 @@
   }
 
   function renderTelemetry(telemetry) {
-    const data = telemetry && typeof telemetry === "object" ? telemetry : {};
-    const inferenceMs = Number(data.inferenceMs);
-    const pendingCount = Number(data.pendingCount) || 0;
-    const updatedAt = Number(data.updatedAt);
+    let snapshotData;
+    try {
+      snapshotData = telemetry && typeof telemetry === "object" ? telemetry : {};
+    } catch (_error) {
+      snapshotData = {};
+    }
+    const inferenceMs = Number(snapshotData.inferenceMs);
+    const pendingCount = Number(snapshotData.pendingCount) || 0;
+    const updatedAt = Number(snapshotData.updatedAt);
 
     if (inferenceValue) {
       inferenceValue.textContent = Number.isFinite(inferenceMs) ? `${Math.round(inferenceMs)} ms` : "--";
@@ -392,7 +470,7 @@
     }
 
     const parts = [];
-    const statusPart = formatStatus(data.status);
+    const statusPart = formatStatus(snapshotData.status);
     if (statusPart) {
       parts.push(statusPart);
     }
@@ -414,18 +492,25 @@
   }
 
   function renderPanelSnapshot(snapshot) {
-    const data = snapshot && typeof snapshot === "object" ? snapshot : {};
-    const score = Math.max(0, Math.min(100, Number(data.healthScore) || 100));
-    const breakdown = data.healthBreakdown && typeof data.healthBreakdown === "object"
-      ? data.healthBreakdown
+    let snapshotData;
+    try {
+      snapshotData = snapshot && typeof snapshot === "object" ? snapshot : {};
+    } catch (_error) {
+      snapshotData = {};
+    }
+    const score = Math.max(0, Math.min(100, Number(snapshotData.healthScore) || 100));
+    const breakdown = snapshotData.healthBreakdown && typeof snapshotData.healthBreakdown === "object"
+      ? snapshotData.healthBreakdown
       : null;
-    const cached = Math.max(0, Number(data.sentenceCached) || 0);
-    const pending = Math.max(0, Number(data.sentencePending) || 0);
-    const activity = Array.isArray(data.activity) ? data.activity : [];
-    const chunkTree = data.chunkTree && typeof data.chunkTree === "object" ? data.chunkTree : null;
-    const activeChunkId = String(data.activeChunkId || chunkTree?.activeChunkId || "");
-    const shortcutPulseId = Number(data.shortcutPulseId) || 0;
-    const lastShortcut = String(data.lastShortcut || "");
+    const cached = Math.max(0, Number(snapshotData.sentenceCached) || 0);
+    const pending = Math.max(0, Number(snapshotData.sentencePending) || 0);
+    const activity = Array.isArray(snapshotData.activity) ? snapshotData.activity : [];
+    const chunkTree = snapshotData.chunkTree && typeof snapshotData.chunkTree === "object"
+      ? snapshotData.chunkTree
+      : null;
+    const activeChunkId = String(snapshotData.activeChunkId || chunkTree?.activeChunkId || "");
+    const snapshotShortcutPulseId = Number(snapshotData.shortcutPulseId) || 0;
+    const snapshotLastShortcut = String(snapshotData.lastShortcut || "");
     if (healthFill) {
       healthFill.style.width = `${Math.round(score)}%`;
     }
@@ -448,11 +533,19 @@
         const message = String(entry?.message || "Activity");
         const time = String(entry?.timeLabel || "");
         const detailText = String(entry?.detailText || "").trim();
+        const head = document.createElement("div");
+        head.className = "zeta-activity-head";
         const strong = document.createElement("strong");
+        strong.className = "zeta-activity-title";
         strong.textContent = message;
-        const p = document.createElement("p");
-        p.textContent = time;
-        li.append(strong, p);
+        const stamp = document.createElement("span");
+        stamp.className = "zeta-activity-time";
+        stamp.textContent = time;
+        head.append(strong, stamp);
+        li.append(head);
+        if (!detailText) {
+          li.classList.add("is-compact");
+        }
         if (detailText) {
           const toggle = document.createElement("button");
           toggle.type = "button";
@@ -462,10 +555,23 @@
           pre.className = "zeta-activity-detail";
           pre.textContent = detailText;
           pre.hidden = true;
-          toggle.addEventListener("click", () => {
+          const toggleExpanded = () => {
             const expanded = pre.hidden;
             pre.hidden = !expanded;
             toggle.textContent = expanded ? "Hide output" : "View output";
+            li.classList.toggle("is-expanded", expanded);
+          };
+          toggle.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleExpanded();
+          });
+          li.addEventListener("click", (event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest(".zeta-activity-detail")) {
+              return;
+            }
+            toggleExpanded();
           });
           li.append(toggle, pre);
         }
@@ -511,10 +617,236 @@
 
     renderGraphTree(chunkTree, activeChunkId);
 
-    if (shortcutPulseId > 0 && shortcutPulseId !== lastAnimatedShortcutPulseId) {
-      lastAnimatedShortcutPulseId = shortcutPulseId;
-      pulseShortcut(lastShortcut);
+    if (
+      Number.isFinite(snapshotShortcutPulseId) &&
+      snapshotShortcutPulseId > 0 &&
+      snapshotShortcutPulseId !== lastAnimatedShortcutPulseId
+    ) {
+      lastAnimatedShortcutPulseId = snapshotShortcutPulseId;
+      pulseShortcut(snapshotLastShortcut);
     }
+  }
+
+  function normalizeAssistantSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+      return {
+        threads: [],
+        activeThreadId: null,
+        updatedAt: 0,
+      };
+    }
+    const threads = Array.isArray(snapshot.threads)
+      ? snapshot.threads
+          .map((thread) => {
+            if (!thread || typeof thread !== "object") {
+              return null;
+            }
+            const messages = Array.isArray(thread.messages)
+              ? thread.messages
+                  .map((message) => {
+                    if (!message || typeof message !== "object") {
+                      return null;
+                    }
+                    const role = message.role === "assistant" ? "assistant" : "user";
+                    const text = String(message.text || "").trim();
+                    if (!text) {
+                      return null;
+                    }
+                    return {
+                      role,
+                      text,
+                      createdAt: Number(message.createdAt) || 0,
+                      error: !!message.error,
+                    };
+                  })
+                  .filter(Boolean)
+              : [];
+            return {
+              id: String(thread.id || "").trim(),
+              title: String(thread.title || "Issue thread"),
+              severity: String(thread.severity || "unknown"),
+              status: String(thread.status || "idle"),
+              updatedAt: Number(thread.updatedAt) || 0,
+              isActiveIssue: thread.isActiveIssue !== false,
+              issueMessage: String(thread.issueMessage || ""),
+              sentenceText: String(thread.sentenceText || ""),
+              messages,
+              lastSource: String(thread.lastSource || ""),
+              lastLatencyMs: Number(thread.lastLatencyMs) || 0,
+              lastError: String(thread.lastError || ""),
+            };
+          })
+          .filter((thread) => thread && thread.id)
+      : [];
+    const activeThreadId = String(snapshot.activeThreadId || "");
+    return {
+      threads,
+      activeThreadId: activeThreadId || (threads[0]?.id || null),
+      updatedAt: Number(snapshot.updatedAt) || 0,
+    };
+  }
+
+  function formatAssistantMeta(thread) {
+    if (!thread) {
+      return "Select an issue thread.";
+    }
+    const parts = [];
+    parts.push(`${thread.severity || "unknown"}`);
+    if (thread.status) {
+      parts.push(thread.status);
+    }
+    if (thread.lastSource) {
+      parts.push(thread.lastSource);
+    }
+    if (Number.isFinite(thread.lastLatencyMs) && thread.lastLatencyMs > 0) {
+      parts.push(`${Math.round(thread.lastLatencyMs)} ms`);
+    }
+    if (thread.lastError) {
+      parts.push("last request failed");
+    }
+    return parts.join(" · ");
+  }
+
+  function setAssistantActiveThread(threadId, notifyTab = false) {
+    const id = String(threadId || "").trim();
+    if (!id) {
+      assistantSnapshot = {
+        ...assistantSnapshot,
+        activeThreadId: null,
+      };
+      renderAssistantSnapshot(assistantSnapshot);
+      return;
+    }
+    assistantSnapshot = {
+      ...assistantSnapshot,
+      activeThreadId: id,
+    };
+    renderAssistantSnapshot(assistantSnapshot);
+    if (notifyTab) {
+      sendMessageToActiveTab(
+        {
+          type: "zeta-chat-open-thread",
+          threadId: id,
+        },
+        "chat_open_thread",
+        () => ({ threadId: id })
+      );
+    }
+  }
+
+  function renderAssistantSnapshot(snapshot) {
+    const normalized = normalizeAssistantSnapshot(snapshot);
+    assistantSnapshot = normalized;
+    const threads = normalized.threads;
+    const activeThreadId = normalized.activeThreadId || null;
+    const activeThread = threads.find((thread) => thread.id === activeThreadId) || null;
+
+    if (assistantCount) {
+      assistantCount.textContent = `${threads.length} threads`;
+    }
+
+    if (assistantThreads) {
+      assistantThreads.replaceChildren();
+      for (const thread of threads) {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "zeta-assistant-thread";
+        if (thread.id === activeThreadId) {
+          btn.classList.add("is-active");
+        }
+        const title = document.createElement("strong");
+        title.className = "zeta-assistant-thread-title";
+        title.textContent = thread.title;
+        const meta = document.createElement("p");
+        meta.className = "zeta-assistant-thread-meta";
+        meta.textContent = `${thread.severity || "unknown"} · ${thread.status || "idle"}`;
+        btn.append(title, meta);
+        btn.addEventListener("click", () => {
+          setAssistantActiveThread(thread.id, true);
+        });
+        li.appendChild(btn);
+        assistantThreads.appendChild(li);
+      }
+    }
+    if (assistantThreadsEmpty) {
+      assistantThreadsEmpty.style.display = threads.length > 0 ? "none" : "block";
+    }
+
+    if (assistantMeta) {
+      assistantMeta.textContent = activeThread ? formatAssistantMeta(activeThread) : "Select an issue thread.";
+    }
+
+    if (assistantMessages) {
+      assistantMessages.replaceChildren();
+      const messages = Array.isArray(activeThread?.messages) ? activeThread.messages : [];
+      for (const message of messages) {
+        const li = document.createElement("li");
+        li.className = `zeta-assistant-message zeta-assistant-message--${message.role}`;
+        if (message.error) {
+          li.classList.add("zeta-assistant-message--error");
+        }
+        const who = document.createElement("strong");
+        who.textContent = message.role === "assistant" ? "Zeta" : "You";
+        const body = document.createElement("p");
+        body.textContent = message.text;
+        li.append(who, body);
+        assistantMessages.appendChild(li);
+      }
+      if (messages.length > 0) {
+        assistantMessages.scrollTop = assistantMessages.scrollHeight;
+      }
+    }
+
+    if (assistantMessagesEmpty) {
+      const hasMessages = Array.isArray(activeThread?.messages) && activeThread.messages.length > 0;
+      assistantMessagesEmpty.style.display = hasMessages ? "none" : "block";
+    }
+
+    if (assistantInput) {
+      assistantInput.disabled = !activeThread;
+      if (activeThread) {
+        assistantInput.placeholder = "Ask why this error exists...";
+      } else {
+        assistantInput.placeholder = "Select a thread first.";
+      }
+    }
+    if (assistantSend) {
+      assistantSend.disabled = !activeThread;
+    }
+  }
+
+  function sendAssistantPrompt() {
+    const threadId = String(assistantSnapshot.activeThreadId || "");
+    const text = String(assistantInput?.value || "").trim();
+    if (!threadId || !text) {
+      return;
+    }
+
+    if (assistantSend) {
+      assistantSend.disabled = true;
+    }
+    if (assistantInput) {
+      assistantInput.value = "";
+    }
+
+    sendMessageToActiveTab(
+      {
+        type: "zeta-chat-send",
+        threadId,
+        message: text,
+      },
+      "chat_send",
+      () => ({ threadId, chars: text.length }),
+      (response) => {
+        if (assistantSend) {
+          assistantSend.disabled = false;
+        }
+        if (!response?.ok && assistantMeta) {
+          assistantMeta.textContent = "Could not reach Overleaf tab. Focus the Overleaf editor tab and try again.";
+        }
+      }
+    );
   }
 
   function graphLabel(chunk) {
@@ -762,7 +1094,20 @@
     }
 
     graphList.replaceChildren();
-    const chunks = Array.isArray(chunkTree?.chunks) ? chunkTree.chunks.slice() : [];
+    const rawChunks = Array.isArray(chunkTree?.chunks) ? chunkTree.chunks.slice() : [];
+    const rawById = new Map(
+      rawChunks
+        .map((chunk) => [String(chunk?.chunkId || ""), chunk])
+        .filter(([chunkId]) => !!chunkId)
+    );
+    // Hide command-only chunks (e.g. \maketitle, \title, \newpage) from the visual tree.
+    const hiddenCommandIds = new Set(
+      rawChunks
+        .filter((chunk) => String(chunk?.type || "") === "command")
+        .map((chunk) => String(chunk?.chunkId || ""))
+        .filter(Boolean)
+    );
+    const chunks = rawChunks.filter((chunk) => !hiddenCommandIds.has(String(chunk?.chunkId || "")));
     if (chunks.length === 0) {
       expandedGraphNodeIds.clear();
       graphCount.textContent = "0 nodes";
@@ -774,8 +1119,16 @@
     const byParent = new Map();
     const byId = new Map();
     const rootId = "__root__";
+    const resolveVisibleParentId = (parentId) => {
+      let cursorId = parentId ? String(parentId) : null;
+      while (cursorId && hiddenCommandIds.has(cursorId)) {
+        const hiddenChunk = rawById.get(cursorId);
+        cursorId = hiddenChunk?.parentId ? String(hiddenChunk.parentId) : null;
+      }
+      return cursorId;
+    };
     const addChild = (parentId, chunk) => {
-      const key = parentId || rootId;
+      const key = resolveVisibleParentId(parentId) || rootId;
       const bucket = byParent.get(key) || [];
       bucket.push(chunk);
       byParent.set(key, bucket);
@@ -791,11 +1144,18 @@
     }
 
     const activePath = new Set();
-    let cursorId = activeChunkId && byId.has(activeChunkId) ? activeChunkId : null;
+    let cursorId = activeChunkId ? String(activeChunkId) : null;
+    while (cursorId && !byId.has(cursorId)) {
+      const rawChunk = rawById.get(cursorId);
+      let parentId = rawChunk?.parentId ? String(rawChunk.parentId) : null;
+      parentId = resolveVisibleParentId(parentId);
+      cursorId = parentId;
+    }
     while (cursorId) {
       activePath.add(cursorId);
-      const cursorChunk = byId.get(cursorId);
-      cursorId = cursorChunk?.parentId ? String(cursorChunk.parentId) : null;
+      const cursorChunk = byId.get(cursorId) || rawById.get(cursorId);
+      const parentId = resolveVisibleParentId(cursorChunk?.parentId ? String(cursorChunk.parentId) : null);
+      cursorId = parentId && byId.has(parentId) ? parentId : null;
     }
 
     const buildNodes = (parentId, depth) => {
@@ -906,6 +1266,125 @@
     }
   }
 
+  function renderBackendStatus(message, tone = "muted") {
+    if (!backendStatus) {
+      return;
+    }
+    backendStatus.classList.remove("is-ok", "is-error");
+    if (tone === "ok") {
+      backendStatus.classList.add("is-ok");
+    } else if (tone === "error") {
+      backendStatus.classList.add("is-error");
+    }
+    backendStatus.textContent = String(message || "").trim();
+  }
+
+  function applySettingsToBackendControls(settings) {
+    const nextSettings = settings && typeof settings === "object" ? settings : {};
+    currentSettings = { ...nextSettings };
+    if (autocompleteEnabledToggle) {
+      autocompleteEnabledToggle.checked = nextSettings.autocompleteEnabled !== false;
+    }
+    if (backendTopKToggle) {
+      backendTopKToggle.checked = nextSettings.autocompleteShowTopK === true;
+    }
+    if (backendManualToggle) {
+      backendManualToggle.checked = nextSettings.autocompleteManualTrigger === true;
+    }
+  }
+
+  function persistAutocompleteEnabledSetting() {
+    if (!autocompleteEnabledToggle || typeof chrome === "undefined" || !chrome.storage?.sync) {
+      return;
+    }
+    const enabled = autocompleteEnabledToggle.checked !== false;
+    chrome.storage.sync.get({ [SETTINGS_KEY]: {} }, (result) => {
+      const settings = result[SETTINGS_KEY] && typeof result[SETTINGS_KEY] === "object"
+        ? result[SETTINGS_KEY]
+        : {};
+      if ((settings.autocompleteEnabled !== false) === enabled) {
+        return;
+      }
+      const nextSettings = {
+        ...settings,
+        autocompleteEnabled: enabled,
+      };
+      chrome.storage.sync.set({ [SETTINGS_KEY]: nextSettings }, () => {
+        const runtimeError = chrome.runtime?.lastError?.message;
+        if (runtimeError) {
+          renderBackendStatus(`Save failed: ${runtimeError}`, "error");
+          return;
+        }
+        currentSettings = { ...nextSettings };
+        renderBackendStatus(enabled ? "Autocomplete enabled." : "Autocomplete disabled.", "ok");
+      });
+    });
+  }
+
+  function persistAutocompleteTopKSetting() {
+    if (!backendTopKToggle || typeof chrome === "undefined" || !chrome.storage?.sync) {
+      return;
+    }
+    const enabled = backendTopKToggle.checked === true;
+    chrome.storage.sync.get({ [SETTINGS_KEY]: {} }, (result) => {
+      const settings = result[SETTINGS_KEY] && typeof result[SETTINGS_KEY] === "object"
+        ? result[SETTINGS_KEY]
+        : {};
+      if (settings.autocompleteShowTopK === enabled) {
+        return;
+      }
+      const nextSettings = {
+        ...settings,
+        autocompleteShowTopK: enabled,
+      };
+      chrome.storage.sync.set({ [SETTINGS_KEY]: nextSettings }, () => {
+        const runtimeError = chrome.runtime?.lastError?.message;
+        if (runtimeError) {
+          renderBackendStatus(`Save failed: ${runtimeError}`, "error");
+          return;
+        }
+        currentSettings = { ...nextSettings };
+        renderBackendStatus(
+          enabled ? "Top-K autocomplete list enabled." : "Top-K autocomplete list disabled (inline ghost mode).",
+          "ok"
+        );
+      });
+    });
+  }
+
+  function persistAutocompleteManualSetting() {
+    if (!backendManualToggle || typeof chrome === "undefined" || !chrome.storage?.sync) {
+      return;
+    }
+    const enabled = backendManualToggle.checked === true;
+    chrome.storage.sync.get({ [SETTINGS_KEY]: {} }, (result) => {
+      const settings = result[SETTINGS_KEY] && typeof result[SETTINGS_KEY] === "object"
+        ? result[SETTINGS_KEY]
+        : {};
+      if (settings.autocompleteManualTrigger === enabled) {
+        return;
+      }
+      const nextSettings = {
+        ...settings,
+        autocompleteManualTrigger: enabled,
+      };
+      chrome.storage.sync.set({ [SETTINGS_KEY]: nextSettings }, () => {
+        const runtimeError = chrome.runtime?.lastError?.message;
+        if (runtimeError) {
+          renderBackendStatus(`Save failed: ${runtimeError}`, "error");
+          return;
+        }
+        currentSettings = { ...nextSettings };
+        renderBackendStatus(
+          enabled
+            ? "Manual autocomplete enabled. Use Alt+Shift+M to request suggestions."
+            : "Autocomplete will run automatically while typing.",
+          "ok"
+        );
+      });
+    });
+  }
+
   function persistMode(mode) {
     if (typeof chrome === "undefined" || !chrome.storage?.sync) {
       return;
@@ -933,6 +1412,31 @@
   for (const button of panelNavButtons) {
     button.addEventListener("click", () => {
       setActivePanel(button.dataset.panel || "main");
+    });
+  }
+
+  if (assistantForm) {
+    assistantForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendAssistantPrompt();
+    });
+  }
+
+  if (autocompleteEnabledToggle) {
+    autocompleteEnabledToggle.addEventListener("change", () => {
+      persistAutocompleteEnabledSetting();
+    });
+  }
+
+  if (backendTopKToggle) {
+    backendTopKToggle.addEventListener("change", () => {
+      persistAutocompleteTopKSetting();
+    });
+  }
+
+  if (backendManualToggle) {
+    backendManualToggle.addEventListener("change", () => {
+      persistAutocompleteManualSetting();
     });
   }
 
@@ -986,8 +1490,17 @@
 
   if (chrome?.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
+      try {
       if (areaName === "sync" && changes[MODE_KEY]) {
         setActiveMode(normalizeMode(changes[MODE_KEY].newValue));
+      }
+      if (areaName === "sync" && changes[SETTINGS_KEY]) {
+        const nextSettings = changes[SETTINGS_KEY].newValue;
+        applySettingsToBackendControls(nextSettings);
+        renderBackendStatus("Autocomplete settings synced.", "ok");
+        if (nextSettings && typeof nextSettings === "object" && typeof nextSettings.mode === "string") {
+          setActiveMode(normalizeMode(nextSettings.mode));
+        }
       }
       if (areaName === "local" && changes[UI_SURFACE_KEY] && !IS_EMBEDDED) {
         const nextSurface = String(changes[UI_SURFACE_KEY].newValue?.surface || "").toLowerCase();
@@ -1002,14 +1515,26 @@
       if (areaName === "local" && changes[PANEL_SNAPSHOT_KEY]) {
         renderPanelSnapshot(changes[PANEL_SNAPSHOT_KEY].newValue);
       }
+      if (areaName === "local" && changes[CHAT_SNAPSHOT_KEY]) {
+        renderAssistantSnapshot(changes[CHAT_SNAPSHOT_KEY].newValue);
+      }
+      } catch (error) {
+        console.warn("[zeta:popup] storage_change_render_error", {
+          ts: nowTs(),
+          message: String(error?.message || error),
+        });
+      }
     });
   }
 
   if (typeof chrome === "undefined" || !chrome.storage?.sync) {
     setActivePanel("main");
     setActiveMode(FALLBACK_MODE);
+    applySettingsToBackendControls({});
+    renderBackendStatus("Running without sync storage; autocomplete settings are local-only.", "error");
     renderTelemetry(null);
     renderPanelSnapshot(null);
+    renderAssistantSnapshot(null);
     return;
   }
 
@@ -1019,18 +1544,29 @@
     window.addEventListener("beforeunload", () => publishSurface("none"));
   }
 
-  chrome.storage.sync.get({ [MODE_KEY]: FALLBACK_MODE }, (result) => {
+  chrome.storage.sync.get({ [MODE_KEY]: FALLBACK_MODE, [SETTINGS_KEY]: {} }, (result) => {
+    const settings = result[SETTINGS_KEY] && typeof result[SETTINGS_KEY] === "object"
+      ? result[SETTINGS_KEY]
+      : {};
+    const modeFromSettings = typeof settings.mode === "string" ? settings.mode : result[MODE_KEY];
     setActivePanel("main");
-    setActiveMode(normalizeMode(result[MODE_KEY]));
+    setActiveMode(normalizeMode(modeFromSettings));
+    applySettingsToBackendControls(settings);
+    renderBackendStatus("Autocomplete uses the deployed Modal endpoint.");
   });
 
   if (chrome.storage?.local) {
-    chrome.storage.local.get({ [TELEMETRY_KEY]: null, [PANEL_SNAPSHOT_KEY]: null }, (result) => {
+    chrome.storage.local.get(
+      { [TELEMETRY_KEY]: null, [PANEL_SNAPSHOT_KEY]: null, [CHAT_SNAPSHOT_KEY]: null },
+      (result) => {
       renderTelemetry(result[TELEMETRY_KEY]);
       renderPanelSnapshot(result[PANEL_SNAPSHOT_KEY]);
-    });
+        renderAssistantSnapshot(result[CHAT_SNAPSHOT_KEY]);
+      }
+    );
   } else {
     renderTelemetry(null);
     renderPanelSnapshot(null);
+    renderAssistantSnapshot(null);
   }
 })();

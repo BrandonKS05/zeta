@@ -20,7 +20,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v3"
+APP_VERSION = "2026-02-15-autocomplete-v1"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -72,6 +72,9 @@ MODEL_OUTPUT_CACHE_TTL_SECONDS = int(os.environ.get("MODEL_OUTPUT_CACHE_TTL_SECO
 MODEL_OUTPUT_CACHE_MAX_ENTRIES = int(os.environ.get("MODEL_OUTPUT_CACHE_MAX_ENTRIES", "512"))
 LEAN_CHECK_CACHE_TTL_SECONDS = int(os.environ.get("LEAN_CHECK_CACHE_TTL_SECONDS", "1200"))
 LEAN_CHECK_CACHE_MAX_ENTRIES = int(os.environ.get("LEAN_CHECK_CACHE_MAX_ENTRIES", "1024"))
+COMPLETE_CACHE_TTL_SECONDS = int(os.environ.get("COMPLETE_CACHE_TTL_SECONDS", "120"))
+COMPLETE_CACHE_MAX_ENTRIES = int(os.environ.get("COMPLETE_CACHE_MAX_ENTRIES", "512"))
+COMPLETE_RETRIEVAL_TOP_K = int(os.environ.get("COMPLETE_RETRIEVAL_TOP_K", "5"))
 INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "transformers").strip().lower()
 if INFERENCE_BACKEND not in {"transformers", "vllm"}:
     INFERENCE_BACKEND = "transformers"
@@ -90,6 +93,17 @@ Rules:
    - Integers: `Int` (never `ℤ` or `\\mathbb{Z}`)
    - Rationals: `Rat` (never `ℚ` or `\\mathbb{Q}`)
 5) Prefer conservative formalizations when ambiguous.
+"""
+
+COMPLETE_SYSTEM_PROMPT = """You are a math writing autocomplete model.
+Task: produce short suffix completions for the user's current cursor position.
+Return JSON only with key:
+- candidates: list of 1-8 short suffix strings to append at the cursor.
+Rules:
+1) Output suffixes only; do not repeat the full prefix.
+2) No declarations or Lean commands (`theorem`, `lemma`, `axiom`, `import`, `namespace`, `set_option`, `#check`).
+3) No proofs (`by`, `sorry`).
+4) Prefer concise continuations that keep mathematical meaning clear.
 """
 
 REWRITE_SYSTEM_PROMPT = """You are an expert Lean 4 refiner.
@@ -150,6 +164,71 @@ LEAN_IDENTIFIER_FALLBACKS = (
     ("ℚ", "Rat"),
     ("ℝ", "Real"),
     ("ℂ", "Complex"),
+)
+LEAN_RESERVED_STATEMENT_WORDS = {
+    "theorem",
+    "lemma",
+    "example",
+    "axiom",
+    "def",
+    "structure",
+    "inductive",
+}
+MAX_STATEMENT_TYPE_CHARS = int(os.environ.get("MAX_STATEMENT_TYPE_CHARS", "800"))
+LEAN_FORBIDDEN_STATEMENT_SNIPPETS = (
+    "import ",
+    "namespace ",
+    "set_option ",
+    "#check ",
+    "open ",
+)
+LEAN_STATEMENT_JSONISH_RE = re.compile(
+    r'"lean_statement_type"\s*:\s*"(?P<value>(?:\\.|[^"\\])*)"',
+    re.DOTALL,
+)
+
+COMPLETE_FORBIDDEN_TOKENS = (
+    "theorem ",
+    "lemma ",
+    "axiom ",
+    "import ",
+    "namespace ",
+    "set_option ",
+    "#check ",
+    "sorry",
+    "by ",
+)
+COMPLETE_TEXT_CLEANUP_RE = re.compile(r"^[\s:;,.-]+")
+COMPLETE_CANDIDATES_ARRAY_RE = re.compile(
+    r"(?:\"?candidates\"?\s*:\s*)?\[(?P<body>[^\]]+)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+COMPLETE_CANDIDATE_QUOTED_RE = re.compile(r'"(?P<item>(?:\\.|[^"\\])*)"')
+COMPLETE_TRUNCATED_FIRST_CANDIDATE_RE = re.compile(
+    r"candidates\"?\s*:\s*\[\s*\"(?P<item>[^\n\r\]\"]{1,220})",
+    re.IGNORECASE,
+)
+COMPLETE_RETRIEVAL_CORPUS = (
+    "∀ n : Nat, n + 0 = n",
+    "∀ n : Nat, 0 + n = n",
+    "∀ m n : Nat, m + n = n + m",
+    "∀ a b c : Nat, a * (b + c) = a * b + a * c",
+    "∀ x : Real, x = x",
+    "∀ x : Real, x ^ 2 ≥ 0",
+    "∀ x y : Real, x = y → y = x",
+    "∀ x y z : Real, x = y → y = z → x = z",
+    "∀ x : Real, x + 0 = x",
+    "∀ x : Real, 0 + x = x",
+    "∀ x : Real, x * 1 = x",
+    "∀ x : Real, 1 * x = x",
+    "∀ x y : Real, x + y = y + x",
+    "∀ x y : Real, x * y = y * x",
+    "∀ x : Real, x ≤ x",
+    "∀ x y z : Real, x ≤ y → y ≤ z → x ≤ z",
+    "∀ x : Real, |x| ≥ 0",
+    "∀ x : Real, x ≠ 0 → x * x⁻¹ = 1",
+    "∀ G : Type*, [Group G], ∀ a : G, a * 1 = a",
+    "∀ G : Type*, [Group G], ∀ a : G, 1 * a = a",
 )
 
 app = modal.App(APP_NAME)
@@ -283,6 +362,7 @@ _cache_lock = Lock()
 _analyze_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _model_output_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _lean_check_cache: OrderedDict[str, tuple[float, tuple[bool, list[dict[str, Any]], str]]] = OrderedDict()
+_complete_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _mathlib_runtime_probe_ok = False
 
 
@@ -350,6 +430,63 @@ class AnalyzeResponse(BaseModel):
     mode: Literal["fast", "thinking"] = "fast"
     iteration_count: int = 1
     iteration_history: list[dict[str, Any]] | None = None
+
+
+class CompleteRequest(BaseModel):
+    text: str = Field(min_length=1, description="Current editor text.")
+    cursor_offset: int | None = Field(default=None, ge=0)
+    context: str | None = Field(default=None, description="Optional surrounding document context.")
+    imports: list[str] = Field(default_factory=lambda: ["Std"])
+    max_candidates: int = Field(default=3, ge=1, le=8)
+    max_new_tokens: int = Field(default=36, ge=8, le=128)
+    temperature: float = Field(default=0.35, ge=0.0, le=1.5)
+    include_debug: bool = False
+
+    @field_validator("imports")
+    @classmethod
+    def _validate_imports(cls, value: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for item in value:
+            candidate = item.strip()
+            if LEAN_IMPORT_RE.fullmatch(candidate):
+                sanitized.append(candidate)
+        if not sanitized:
+            sanitized = ["Std"]
+        return list(dict.fromkeys(sanitized))
+
+    @field_validator("cursor_offset")
+    @classmethod
+    def _validate_cursor_offset(cls, value: int | None, info):  # type: ignore[override]
+        if value is None:
+            return None
+        text = info.data.get("text")
+        if isinstance(text, str) and value > len(text):
+            return len(text)
+        return value
+
+
+class CompletionCandidate(BaseModel):
+    completion: str
+    score: float
+    model_score: float
+    retrieval_score: float
+    syntax_score: float
+    rejected_reasons: list[str] = Field(default_factory=list)
+
+
+class CompleteResponse(BaseModel):
+    model: str
+    status: Literal["ok", "no_suggestion", "runtime_error"]
+    input_text: str
+    prefix_text: str
+    imports_used: list[str] = Field(default_factory=list)
+    retrieved_hints: list[str] = Field(default_factory=list)
+    selected_completion: str | None = None
+    candidates: list[CompletionCandidate] = Field(default_factory=list)
+    cache_hit: bool = False
+    timings_ms: dict[str, int] = Field(default_factory=dict)
+    latency_ms: int = 0
+    debug: dict[str, Any] | None = None
 
 
 def _normalize_input_text(text: str) -> str:
@@ -466,6 +603,28 @@ def _lean_check_cache_key(statement_type: str, imports: list[str]) -> str:
     )
 
 
+def _complete_cache_key(request: CompleteRequest) -> str:
+    cursor = request.cursor_offset if request.cursor_offset is not None else len(request.text)
+    prefix = request.text[: max(0, min(cursor, len(request.text)))]
+    context = request.context.strip() if request.context else None
+    if context == "":
+        context = None
+    return json.dumps(
+        {
+            "version": APP_VERSION,
+            "prefix": prefix,
+            "context": context,
+            "imports": _canonical_imports(request.imports),
+            "max_candidates": request.max_candidates,
+            "max_new_tokens": request.max_new_tokens,
+            "temperature": request.temperature,
+            "include_debug": request.include_debug,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
 def _requires_mathlib(imports: list[str], statement_type: str | None) -> bool:
     if any(item == MATHLIB_IMPORT or item.startswith(f"{MATHLIB_IMPORT}.") for item in imports):
         return True
@@ -510,6 +669,86 @@ def _user_prompt(request: AnalyzeRequest, normalized_text: str) -> str:
         f"{normalized_text}\n\n"
         "Return only a JSON object with `lean_statement_type`, `assumptions`, and `notes`."
     )
+
+
+def _complete_prefix(request: CompleteRequest) -> str:
+    cursor = request.cursor_offset if request.cursor_offset is not None else len(request.text)
+    cursor = max(0, min(cursor, len(request.text)))
+    return request.text[:cursor]
+
+
+def _tokenize_for_retrieval(text: str) -> list[str]:
+    lowered = text.lower()
+    lowered = re.sub(r"[^a-z0-9_]+", " ", lowered)
+    return [token for token in lowered.split() if token]
+
+
+def _token_overlap_score(a_text: str, b_text: str) -> float:
+    a_tokens = set(_tokenize_for_retrieval(a_text))
+    b_tokens = set(_tokenize_for_retrieval(b_text))
+    if not a_tokens or not b_tokens:
+        return 0.0
+    intersection = len(a_tokens & b_tokens)
+    return intersection / max(1, len(a_tokens | b_tokens))
+
+
+def _retrieve_completion_hints(prefix_text: str, top_k: int) -> list[str]:
+    ranked = sorted(
+        (
+            (_token_overlap_score(prefix_text, candidate), candidate)
+            for candidate in COMPLETE_RETRIEVAL_CORPUS
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    hints = [candidate for score, candidate in ranked if score > 0][: max(1, top_k)]
+    if not hints:
+        hints = list(COMPLETE_RETRIEVAL_CORPUS[: max(1, top_k)])
+    return hints
+
+
+def _complete_user_prompt(
+    *,
+    request: CompleteRequest,
+    prefix_text: str,
+    retrieval_hints: list[str],
+) -> str:
+    imports_text = ", ".join(_canonical_imports(request.imports))
+    context_block = f"Context:\n{request.context.strip()}\n\n" if request.context and request.context.strip() else ""
+    hints_block = "\n".join(f"- {item}" for item in retrieval_hints)
+    return (
+        f"{context_block}"
+        f"Lean imports available: {imports_text}\n"
+        "Top retrieval hints:\n"
+        f"{hints_block}\n\n"
+        "Current text prefix at cursor:\n"
+        f"{prefix_text}\n\n"
+        "Return JSON only: {\"candidates\": [\" ...\", \" ...\"]}"
+    )
+
+
+def _build_completion_prompt(
+    tokenizer: Any,
+    *,
+    request: CompleteRequest,
+    prefix_text: str,
+    retrieval_hints: list[str],
+) -> str:
+    user_prompt = _complete_user_prompt(
+        request=request,
+        prefix_text=prefix_text,
+        retrieval_hints=retrieval_hints,
+    )
+    if getattr(tokenizer, "chat_template", None):
+        return tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": COMPLETE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    return f"{COMPLETE_SYSTEM_PROMPT}\n\n{user_prompt}\n\nJSON:"
 
 
 def _ensure_model_downloaded() -> Path:
@@ -699,6 +938,249 @@ def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str
     return text
 
 
+def _generate_completion_outputs(
+    request: CompleteRequest,
+    *,
+    prefix_text: str,
+    retrieval_hints: list[str],
+) -> list[str]:
+    runtime = _load_runtime()
+    tokenizer = runtime.tokenizer
+    prompt = _build_completion_prompt(
+        tokenizer,
+        request=request,
+        prefix_text=prefix_text,
+        retrieval_hints=retrieval_hints,
+    )
+    num_return_sequences = max(1, min(3, request.max_candidates))
+    effective_max_new_tokens = max(8, min(request.max_new_tokens, 40))
+
+    if runtime.backend == "vllm":
+        llm = runtime.llm
+        if llm is None:
+            raise RuntimeError("vLLM backend selected but LLM runtime is unavailable.")
+        try:
+            from vllm import SamplingParams
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("INFERENCE_BACKEND=vllm but vLLM is unavailable in this image.") from exc
+
+        do_sample = request.temperature > 0
+        if not do_sample:
+            num_return_sequences = 1
+        sampling_kwargs: dict[str, Any] = {
+            "n": num_return_sequences,
+            "max_tokens": effective_max_new_tokens,
+            "temperature": request.temperature if do_sample else 0.0,
+            "top_p": 0.95 if do_sample else 1.0,
+        }
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_token_id, int):
+            sampling_kwargs["stop_token_ids"] = [eos_token_id]
+
+        outputs = llm.generate([prompt], sampling_params=SamplingParams(**sampling_kwargs), use_tqdm=False)
+        if not outputs:
+            return []
+        first_output = outputs[0]
+        candidates = getattr(first_output, "outputs", None) or []
+        return [str(getattr(item, "text", "")).strip() for item in candidates if str(getattr(item, "text", "")).strip()]
+
+    import torch
+
+    model = runtime.model
+    if model is None:
+        raise RuntimeError("Transformers backend selected but model is unavailable.")
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    do_sample = request.temperature > 0
+    if not do_sample:
+        num_return_sequences = 1
+    kwargs: dict[str, Any] = {
+        **inputs,
+        "max_new_tokens": effective_max_new_tokens,
+        "do_sample": do_sample,
+        "use_cache": True,
+        "pad_token_id": tokenizer.pad_token_id,
+        "num_return_sequences": num_return_sequences,
+    }
+    if tokenizer.eos_token_id is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
+    if do_sample:
+        kwargs["temperature"] = request.temperature
+        kwargs["top_p"] = 0.95
+
+    with torch.inference_mode():
+        outputs = model.generate(**kwargs)
+
+    input_tokens = inputs["input_ids"].shape[1]
+    decoded: list[str] = []
+    for row in outputs:
+        generated = row[input_tokens:]
+        text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+        if text:
+            decoded.append(text)
+    return decoded
+
+
+def _extract_completion_candidates_from_output(raw_output: str) -> list[str]:
+    payload = _extract_json(raw_output)
+    if payload is not None:
+        candidates_payload = payload.get("candidates")
+        if isinstance(candidates_payload, list):
+            return [str(item) for item in candidates_payload if str(item).strip()]
+        single = payload.get("completion")
+        if isinstance(single, str) and single.strip():
+            return [single.strip()]
+
+    array_matches = COMPLETE_CANDIDATES_ARRAY_RE.finditer(raw_output)
+    extracted_from_arrays: list[str] = []
+    for match in array_matches:
+        body = str(match.group("body") or "")
+        wrapped = f"[{body}]"
+        parsed_items: list[str] = []
+        try:
+            parsed = json.loads(wrapped)
+            if isinstance(parsed, list):
+                parsed_items = [str(item) for item in parsed if str(item).strip()]
+        except Exception:  # noqa: BLE001
+            parsed_items = []
+
+        if not parsed_items:
+            parsed_items = [
+                bytes(item, "utf-8").decode("unicode_escape")
+                for item in COMPLETE_CANDIDATE_QUOTED_RE.findall(body)
+                if item.strip()
+            ]
+        extracted_from_arrays.extend(parsed_items)
+
+    if extracted_from_arrays:
+        return extracted_from_arrays[:8]
+
+    if "candidates" in raw_output.lower():
+        partial_items = []
+        for item in COMPLETE_CANDIDATE_QUOTED_RE.findall(raw_output):
+            if not item.strip():
+                continue
+            decoded = bytes(item, "utf-8").decode("unicode_escape")
+            if decoded.strip().lower() == "candidates":
+                continue
+            partial_items.append(decoded)
+        if partial_items:
+            return partial_items[:8]
+        truncated_match = COMPLETE_TRUNCATED_FIRST_CANDIDATE_RE.search(raw_output)
+        if truncated_match:
+            item = str(truncated_match.group("item") or "").strip()
+            if item:
+                return [item]
+
+    lines: list[str] = []
+    for raw_line in raw_output.splitlines():
+        candidate = raw_line.strip()
+        if not candidate:
+            continue
+        candidate = re.sub(r"^[-*0-9.\)\s]+", "", candidate).strip()
+        if candidate:
+            lines.append(candidate)
+    return lines[:8]
+
+
+def _normalize_completion_suffix(prefix_text: str, candidate: str) -> tuple[str | None, list[str]]:
+    reasons: list[str] = []
+    cleaned = _strip_code_fences(candidate).replace("\r", "").strip().strip('"').strip("'")
+    if not cleaned:
+        return None, ["empty_candidate"]
+
+    if cleaned.startswith(prefix_text):
+        cleaned = cleaned[len(prefix_text) :].strip()
+    cleaned = COMPLETE_TEXT_CLEANUP_RE.sub("", cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None, ["empty_after_prefix_strip"]
+
+    lowered = cleaned.lower()
+    for forbidden in COMPLETE_FORBIDDEN_TOKENS:
+        if forbidden in lowered:
+            reasons.append(f"forbidden_token:{forbidden.strip()}")
+
+    if '"lean_statement_type"' in lowered or cleaned.startswith("{") or cleaned.endswith("}"):
+        reasons.append("json_like_candidate")
+    if re.search(r"\bcandidates?\b", lowered) or cleaned.startswith("[") or cleaned.endswith("]"):
+        reasons.append("schema_fragment")
+    if len(cleaned) > 220:
+        reasons.append("too_long")
+    if cleaned.count("\n") > 1:
+        reasons.append("too_many_newlines")
+
+    if reasons:
+        return None, reasons
+
+    if cleaned[:1].isalnum():
+        cleaned = " " + cleaned
+    return cleaned, []
+
+
+def _completion_syntax_score(candidate: str) -> float:
+    pairs = {")": "(",
+        "]": "[",
+        "}": "{",
+    }
+    openers = set(pairs.values())
+    stack: list[str] = []
+    for char in candidate:
+        if char in openers:
+            stack.append(char)
+            continue
+        if char in pairs:
+            if not stack or stack[-1] != pairs[char]:
+                return 0.0
+            stack.pop()
+    if stack:
+        return 0.4
+    return 1.0
+
+
+def _rank_completion_candidates(
+    *,
+    prefix_text: str,
+    retrieval_hints: list[str],
+    raw_outputs: list[str],
+    max_candidates: int,
+) -> tuple[list[CompletionCandidate], list[dict[str, Any]]]:
+    ranked: list[CompletionCandidate] = []
+    rejected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    raw_candidates: list[str] = []
+    for output in raw_outputs:
+        raw_candidates.extend(_extract_completion_candidates_from_output(output))
+
+    for idx, raw_candidate in enumerate(raw_candidates):
+        suffix, reasons = _normalize_completion_suffix(prefix_text, raw_candidate)
+        if suffix is None:
+            rejected.append({"candidate": raw_candidate, "reasons": reasons})
+            continue
+        if suffix in seen:
+            continue
+        seen.add(suffix)
+
+        model_score = max(0.0, 1.0 - (idx * 0.08))
+        retrieval_score = 0.0
+        if retrieval_hints:
+            retrieval_score = max(_token_overlap_score(suffix, hint) for hint in retrieval_hints)
+        syntax_score = _completion_syntax_score(suffix)
+        total_score = (0.55 * model_score) + (0.30 * retrieval_score) + (0.15 * syntax_score)
+        ranked.append(
+            CompletionCandidate(
+                completion=suffix,
+                score=round(total_score, 4),
+                model_score=round(model_score, 4),
+                retrieval_score=round(retrieval_score, 4),
+                syntax_score=round(syntax_score, 4),
+            )
+        )
+
+    ranked.sort(key=lambda item: item.score, reverse=True)
+    return ranked[:max_candidates], rejected
+
+
 def _generate_rewrite_output(statement_type: str, diagnostics: list["LeanDiagnostic"]) -> str | None:
     import torch
 
@@ -822,8 +1304,40 @@ def _extract_statement_payload(raw_output: str) -> tuple[str | None, list[str], 
         statement_type = _normalize_statement_type(candidate)
         return (statement_type if statement_type else None, assumptions, notes)
 
+    jsonish_match = LEAN_STATEMENT_JSONISH_RE.search(raw_output)
+    if jsonish_match:
+        try:
+            jsonish_value = json.loads(f"\"{jsonish_match.group('value')}\"")
+            if isinstance(jsonish_value, str):
+                statement_type = _normalize_statement_type(jsonish_value)
+                return (statement_type if statement_type else None, assumptions, notes)
+        except json.JSONDecodeError:
+            pass
+
     statement_type = _normalize_statement_type(raw_output)
     return (statement_type if statement_type else None, assumptions, notes)
+
+
+def _validate_statement_type(statement_type: str) -> str | None:
+    normalized = statement_type.strip()
+    lowered = normalized.lower()
+    if not normalized:
+        return "Extracted statement is empty."
+    if lowered in LEAN_RESERVED_STATEMENT_WORDS:
+        return f"Extracted statement is only a Lean declaration keyword: `{normalized}`."
+    if any(lowered.startswith(f"{word} ") for word in LEAN_RESERVED_STATEMENT_WORDS):
+        return f"Extracted statement starts with Lean declaration syntax: `{normalized[:80]}`."
+    if normalized.startswith("{") or normalized.endswith("}") or '"lean_statement_type"' in normalized:
+        return "Extracted statement still looks like JSON, not a Lean proposition."
+    if len(normalized) > MAX_STATEMENT_TYPE_CHARS:
+        return (
+            f"Extracted statement is too long ({len(normalized)} chars > {MAX_STATEMENT_TYPE_CHARS}). "
+            "Likely malformed output."
+        )
+    for snippet in LEAN_FORBIDDEN_STATEMENT_SNIPPETS:
+        if snippet in lowered:
+            return f"Extracted statement contains non-type Lean code (`{snippet.strip()}`)."
+    return None
 
 
 def _compose_lean_source(imports: list[str], declaration_name: str, statement_type: str) -> str:
@@ -1587,6 +2101,24 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             latency_ms=latency_ms,
         )
 
+    statement_error = _validate_statement_type(statement_type)
+    if statement_error:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return AnalyzeResponse(
+            model=MODEL_ID,
+            status="model_parse_error",
+            input_text=request.text,
+            normalized_text=normalized_text,
+            assumptions=assumptions,
+            notes=notes,
+            statement_type=statement_type,
+            diagnostics=[LeanDiagnostic(severity="error", message=statement_error)],
+            feedback=["Model output produced an invalid Lean proposition form."],
+            is_valid_lean=False,
+            model_output=raw_output if request.include_raw_model_output else None,
+            latency_ms=latency_ms,
+        )
+
     response = _evaluate_statement_type(
         request=request,
         normalized_text=normalized_text,
@@ -1597,6 +2129,73 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     )
     response.latency_ms = int((time.perf_counter() - started) * 1000)
     return response
+
+
+def _complete(request: CompleteRequest) -> CompleteResponse:
+    started = time.perf_counter()
+    prefix_text = _complete_prefix(request)
+    imports_used = _canonical_imports(request.imports)
+    timings: dict[str, int] = {}
+
+    try:
+        retrieval_started = time.perf_counter()
+        retrieval_hints = _retrieve_completion_hints(prefix_text, COMPLETE_RETRIEVAL_TOP_K)
+        timings["retrieval"] = int((time.perf_counter() - retrieval_started) * 1000)
+
+        generation_started = time.perf_counter()
+        raw_outputs = _generate_completion_outputs(
+            request,
+            prefix_text=prefix_text,
+            retrieval_hints=retrieval_hints,
+        )
+        timings["generation"] = int((time.perf_counter() - generation_started) * 1000)
+
+        ranking_started = time.perf_counter()
+        candidates, rejected = _rank_completion_candidates(
+            prefix_text=prefix_text,
+            retrieval_hints=retrieval_hints,
+            raw_outputs=raw_outputs,
+            max_candidates=request.max_candidates,
+        )
+        timings["ranking"] = int((time.perf_counter() - ranking_started) * 1000)
+    except Exception as exc:  # noqa: BLE001
+        return CompleteResponse(
+            model=MODEL_ID,
+            status="runtime_error",
+            input_text=request.text,
+            prefix_text=prefix_text,
+            imports_used=imports_used,
+            retrieved_hints=[],
+            candidates=[],
+            selected_completion=None,
+            cache_hit=False,
+            timings_ms=timings,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            debug={"error": str(exc)} if request.include_debug else None,
+        )
+
+    selected_completion = candidates[0].completion if candidates else None
+    status: Literal["ok", "no_suggestion", "runtime_error"] = "ok" if candidates else "no_suggestion"
+    debug_payload: dict[str, Any] | None = None
+    if request.include_debug:
+        debug_payload = {
+            "raw_outputs": raw_outputs,
+            "rejected_candidates": rejected,
+        }
+    return CompleteResponse(
+        model=MODEL_ID,
+        status=status,
+        input_text=request.text,
+        prefix_text=prefix_text,
+        imports_used=imports_used,
+        retrieved_hints=retrieval_hints,
+        selected_completion=selected_completion,
+        candidates=candidates,
+        cache_hit=False,
+        timings_ms=timings,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        debug=debug_payload,
+    )
 
 
 @app.function(**gpu_function_kwargs)
@@ -1619,6 +2218,23 @@ def analyze_rpc(request: dict[str, Any]) -> dict[str, Any]:
     payload = response.model_dump()
     payload["cache_hit"] = False
     _cache_put(_analyze_cache, key, payload, ANALYZE_CACHE_MAX_ENTRIES)
+    return payload
+
+
+@app.function(**gpu_function_kwargs)
+def complete_rpc(request: dict[str, Any]) -> dict[str, Any]:
+    parsed = CompleteRequest.model_validate(request)
+    key = _complete_cache_key(parsed)
+    cached_response = _cache_get(_complete_cache, key, COMPLETE_CACHE_TTL_SECONDS)
+    if isinstance(cached_response, dict):
+        cached_response["cache_hit"] = True
+        cached_response["latency_ms"] = min(int(cached_response.get("latency_ms", 0)), 5)
+        return cached_response
+
+    response = _complete(parsed)
+    payload = response.model_dump()
+    payload["cache_hit"] = False
+    _cache_put(_complete_cache, key, payload, COMPLETE_CACHE_MAX_ENTRIES)
     return payload
 
 
@@ -1688,6 +2304,13 @@ def api():
         payload = request.model_dump()
         payload["skip_lean_check"] = True
         return analyze_rpc.remote(payload)
+
+    @app_api.post("/v1/complete")
+    def complete_endpoint(
+        request: CompleteRequest,
+        _auth: None = Depends(require_api_key),
+    ) -> dict[str, Any]:
+        return complete_rpc.remote(request.model_dump())
 
     @app_api.post("/v1/analyze/jobs")
     def analyze_job_endpoint(

@@ -18,6 +18,7 @@ HTTP routes under the `api` endpoint:
 - `POST /v1/analyze`
 - `POST /v1/query` (alias of analyze)
 - `POST /v1/generate` (fast path: skips Lean check)
+- `POST /v1/complete` (tab-autocomplete candidates + retrieval/ranking)
 - `POST /v1/analyze/jobs` (async submit)
 - `GET /v1/analyze/jobs/{call_id}` (async poll)
 - `POST /v1/warmup`
@@ -104,6 +105,18 @@ python query_http.py \
   --imports Std
 ```
 
+Autocomplete query example:
+
+```bash
+python query_http.py \
+  --base-url "https://<your-api-endpoint>.modal.run" \
+  --endpoint complete \
+  --text "For all natural numbers n, n + 0" \
+  --cursor-offset 33 \
+  --imports Std \
+  --max-candidates 3
+```
+
 ### Fast vs thinking mode
 
 `/v1/analyze` supports two modes:
@@ -181,6 +194,12 @@ python query_http.py \
 Input accepts optional `context` to disambiguate nearby math prose.
 
 For low-latency UI suggestions, call `/v1/generate` (or set `skip_lean_check=true`) and run full `/v1/analyze` asynchronously in the background.
+
+`/v1/complete` is optimized for tab-autocomplete:
+
+- retrieval-enhanced prompt with local theorem hints
+- constrained post-filtering (rejects declaration/command/proof snippets)
+- ranked candidates (`model_score`, `retrieval_score`, `syntax_score`)
 
 ## 10. Cost and reliability notes
 

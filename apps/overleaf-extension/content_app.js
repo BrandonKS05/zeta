@@ -8,6 +8,7 @@
     IGNORED_KEY,
     TELEMETRY_KEY,
     PANEL_SNAPSHOT_KEY,
+    CHAT_SNAPSHOT_KEY,
     UI_SURFACE_KEY,
     CACHE_TTL_MS,
     DEFAULT_SETTINGS,
@@ -148,6 +149,17 @@ const NON_ANALYZABLE_LATEX_COMMANDS = new Set([
   "citep",
 ]);
 
+const AUTOCOMPLETE_DEBOUNCE_MS = 1000;
+const AUTOCOMPLETE_CACHE_TTL_MS = 30 * 1000;
+const AUTOCOMPLETE_MIN_FRAGMENT_CHARS = 12;
+const AUTOCOMPLETE_MIN_FRAGMENT_WORDS = 3;
+const AUTOCOMPLETE_MAX_TEXT_WINDOW = 1200;
+const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
+const DEFAULT_MODAL_ANALYZE_URL =
+  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/v1/analyze";
+const HARDCODED_ANALYZE_URL = DEFAULT_MODAL_ANALYZE_URL;
+const HARDCODED_COMPLETE_URL = HARDCODED_ANALYZE_URL.replace(/\/v1\/analyze\/?$/, "/v1/complete");
+
 class ZetaApp {
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS };
@@ -212,6 +224,22 @@ class ZetaApp {
     this.undoStack = [];
     this.lastShortcut = "";
     this.shortcutPulseId = 0;
+    this.chatThreads = [];
+    this.chatById = new Map();
+    this.activeChatThreadId = null;
+    this.lastChatSnapshotSignature = "";
+    this.autocompleteTimer = null;
+    this.autocompleteCache = new Map();
+    this.autocompleteRequestSeq = 0;
+    this.autocompleteInFlight = false;
+    this.autocompletePendingSince = 0;
+    this.autocompleteQueuedReason = "";
+    this.activeAutocomplete = null;
+    this.autocompleteAwaitingUserInput = false;
+    this.tabGhostElement = null;
+    this.autocompleteBackoffUntil = 0;
+    this.autocompleteLastErrorKey = "";
+    this.autocompleteLastErrorAt = 0;
 
     this.boundSelectionChange = this.handleSelectionChange.bind(this);
     this.boundFocusIn = this.handleFocusIn.bind(this);
@@ -223,6 +251,7 @@ class ZetaApp {
 
   async init() {
     await this.loadSettings();
+    await this.loadChatSnapshot();
     this.panel.setSettings(this.settings);
     this.panel.setOpen(!!this.settings.panelOpen);
     storageLocalSet({
@@ -249,12 +278,14 @@ class ZetaApp {
       activeChunkId: null,
     });
 
+    this.ensureTabGhostElement();
     this.refreshAdapters();
     this.activateInitialAdapter();
     this.attachGlobalListeners();
 
     if (this.activeAdapter) {
       this.scheduleAnalysis("init", true);
+      this.scheduleAutocomplete("init", true);
     } else {
       this.panel.setStatus("idle", "Focus a text editor to start.");
       this.panel.setGlobalState("offline", "global · no editor");
@@ -288,7 +319,10 @@ class ZetaApp {
     merged.theme = "light";
     merged.requestTimeoutMs = clamp(Number(merged.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs, 2000, 120000);
     merged.retries = clamp(Number(merged.retries) || 0, 0, 4);
-    merged.backendUrl = merged.backendUrl || DEFAULT_SETTINGS.backendUrl;
+    merged.autocompleteEnabled = merged.autocompleteEnabled !== false;
+    merged.autocompleteShowTopK = merged.autocompleteShowTopK === true;
+    merged.autocompleteManualTrigger = merged.autocompleteManualTrigger === true;
+    merged.backendUrl = HARDCODED_ANALYZE_URL;
     merged.notationStrictness = ["relaxed", "balanced", "strict"].includes(merged.notationStrictness)
       ? merged.notationStrictness
       : "balanced";
@@ -297,6 +331,95 @@ class ZetaApp {
 
     this.settings = merged;
     this.ignoredKeys = new Set(ensureArray(localValues[IGNORED_KEY]).filter(Boolean));
+  }
+
+  async loadChatSnapshot() {
+    const localValues = await storageLocalGet({
+      [CHAT_SNAPSHOT_KEY]: null,
+    });
+    const snapshot = localValues[CHAT_SNAPSHOT_KEY];
+    if (!snapshot || typeof snapshot !== "object") {
+      this.chatThreads = [];
+      this.chatById = new Map();
+      this.activeChatThreadId = null;
+      this.persistChatSnapshot();
+      return;
+    }
+
+    let parsedThreads = [];
+    const rawThreads = Array.isArray(snapshot.threads) ? snapshot.threads : [];
+    for (const rawThread of rawThreads) {
+      if (!rawThread || typeof rawThread !== "object") {
+        continue;
+      }
+      const id = String(rawThread.id || "").trim();
+      if (!id) {
+        continue;
+      }
+      const messages = [];
+      const rawMessages = Array.isArray(rawThread.messages) ? rawThread.messages : [];
+      for (const rawMessage of rawMessages) {
+        if (!rawMessage || typeof rawMessage !== "object") {
+          continue;
+        }
+        const text = String(rawMessage.text || "").trim();
+        if (!text) {
+          continue;
+        }
+        messages.push({
+          id: String(rawMessage.id || `msg-${Date.now()}`),
+          role: rawMessage.role === "assistant" ? "assistant" : "user",
+          text,
+          createdAt: Number(rawMessage.createdAt) || Date.now(),
+          error: !!rawMessage.error,
+        });
+      }
+
+      parsedThreads.push({
+        id,
+        title: String(rawThread.title || "Issue thread"),
+        issueKey: String(rawThread.issueKey || ""),
+        category: String(rawThread.category || "issue"),
+        severity: String(rawThread.severity || "unknown"),
+        issueMessage: String(rawThread.issueMessage || ""),
+        targetText: String(rawThread.targetText || ""),
+        replacement: String(rawThread.replacement || ""),
+        line: Number.isInteger(rawThread.line) ? rawThread.line : null,
+        column: Number.isInteger(rawThread.column) ? rawThread.column : null,
+        source: String(rawThread.source || ""),
+        sentenceText: String(rawThread.sentenceText || ""),
+        chunkId: String(rawThread.chunkId || ""),
+        compileSuccess: typeof rawThread.compileSuccess === "boolean" ? rawThread.compileSuccess : null,
+        diagnostics: Array.isArray(rawThread.diagnostics) ? rawThread.diagnostics : [],
+        semanticReasons: Array.isArray(rawThread.semanticReasons) ? rawThread.semanticReasons : [],
+        leanCode: String(rawThread.leanCode || ""),
+        requestUrl: String(rawThread.requestUrl || ""),
+        issueSignature: String(rawThread.issueSignature || ""),
+        status: String(rawThread.status || "idle"),
+        lastSource: String(rawThread.lastSource || ""),
+        lastLatencyMs: Number(rawThread.lastLatencyMs) || 0,
+        lastError: String(rawThread.lastError || ""),
+        isActiveIssue: rawThread.isActiveIssue !== false,
+        updatedAt: Number(rawThread.updatedAt) || Date.now(),
+        createdAt: Number(rawThread.createdAt) || Date.now(),
+        messages,
+      });
+    }
+
+    parsedThreads.sort((a, b) => b.updatedAt - a.updatedAt);
+    const existingGeneralThread = parsedThreads.find((thread) => thread.id === "general") || null;
+    const normalizedGeneralThread = this.buildGeneralChatThread(existingGeneralThread, 0);
+    parsedThreads = [
+      normalizedGeneralThread,
+      ...parsedThreads.filter((thread) => thread.id !== "general"),
+    ];
+    this.chatThreads = parsedThreads.slice(0, 30);
+    this.chatById = new Map(this.chatThreads.map((thread) => [thread.id, thread]));
+    const activeThreadId = String(snapshot.activeThreadId || "");
+    this.activeChatThreadId = this.chatById.has(activeThreadId)
+      ? activeThreadId
+      : (this.chatThreads[0]?.id || null);
+    this.persistChatSnapshot();
   }
 
   attachGlobalListeners() {
@@ -346,6 +469,31 @@ class ZetaApp {
       return true;
     }
 
+    if (message && message.type === "zeta-chat-open-thread") {
+      const threadId = String(message.threadId || "");
+      const ok = this.setActiveChatThread(threadId);
+      sendResponse?.({
+        ok,
+        threadId,
+      });
+      return true;
+    }
+
+    if (message && message.type === "zeta-chat-send") {
+      const threadId = String(message.threadId || "");
+      const userMessage = String(message.message || "");
+      this.sendChatForThread(threadId, userMessage)
+        .then((result) => sendResponse?.({
+          ok: true,
+          ...result,
+        }))
+        .catch((error) => sendResponse?.({
+          ok: false,
+          error: String(error?.message || error || "Assistant request failed."),
+        }));
+      return true;
+    }
+
     if (!message || message.type !== "zeta-popup-action") {
       return false;
     }
@@ -360,6 +508,11 @@ class ZetaApp {
       if (action === "refresh-checker") {
         this.runAnalysis("popup-macro", true);
         this.addActivity("Macro: refresh checker.", "info");
+        return;
+      }
+      if (action === "manual-autocomplete") {
+        this.markShortcutTriggered("Alt+Shift+M");
+        this.triggerManualAutocomplete("popup-macro");
         return;
       }
       if (action === "undo-last") {
@@ -427,8 +580,15 @@ class ZetaApp {
       nextSettings.mode = normalizeMode(nextSettings.mode);
       nextSettings.scope = normalizeScope(nextSettings.scope);
       nextSettings.theme = "light";
+      nextSettings.autocompleteEnabled = nextSettings.autocompleteEnabled !== false;
+      nextSettings.autocompleteShowTopK = nextSettings.autocompleteShowTopK === true;
+      nextSettings.autocompleteManualTrigger = nextSettings.autocompleteManualTrigger === true;
+      nextSettings.backendUrl = HARDCODED_ANALYZE_URL;
       nextSettings.panelOpen = this.settings.panelOpen;
       this.settings = nextSettings;
+      if (this.settings.autocompleteManualTrigger) {
+        this.clearAutocompleteSuggestion();
+      }
       changed = true;
     }
 
@@ -436,6 +596,7 @@ class ZetaApp {
       this.panel.setSettings(this.settings);
       this.panel.setOpen(!!this.settings.panelOpen);
       this.scheduleAnalysis("storage-change", true);
+      this.scheduleAutocomplete("storage-change", true);
     }
   }
 
@@ -490,10 +651,14 @@ class ZetaApp {
       adapter.setupObservers(
         () => {
           if (adapter === this.activeAdapter) {
+            if (this.activeAutocomplete) {
+              this.clearAutocompleteSuggestion();
+            }
             this.scheduleChunkSnapshotSync("typing");
             if (this.settings.checkOnType) {
               this.scheduleAnalysis("typing");
             }
+            this.scheduleAutocomplete("typing");
             this.scheduleRender();
           }
         },
@@ -510,6 +675,7 @@ class ZetaApp {
     if (!this.activeAdapter) {
       this.activateInitialAdapter();
       if (!this.activeAdapter) {
+        this.clearAutocompleteSuggestion();
         this.panel.setGlobalState("offline", "global · no editor");
       }
     }
@@ -566,10 +732,13 @@ class ZetaApp {
       return;
     }
     this.activeAdapter = adapter;
+    this.autocompleteAwaitingUserInput = false;
+    this.clearAutocompleteSuggestion();
     this.panel.setStatus("idle", `Ready on ${adapter.constructor.name}`);
     this.panel.setGlobalState("ready", "global · editor connected");
     this.scheduleChunkSnapshotSync("adapter-switch");
     this.scheduleAnalysis("adapter-switch", true);
+    this.scheduleAutocomplete("adapter-switch", true);
   }
 
   handleFocusIn(event) {
@@ -581,14 +750,56 @@ class ZetaApp {
     const adapter = this.adapters.find((item) => item.containsNode(target));
     if (adapter) {
       this.setActiveAdapter(adapter);
+      this.scheduleAutocomplete("focus", true);
     }
   }
 
   handleSelectionChange() {
-    if (!this.activeAdapter || !this.lastRun) {
+    if (!this.activeAdapter) {
+      this.clearAutocompleteSuggestion();
       return;
     }
-    this.syncPopoverWithCaret();
+    if (this.lastRun) {
+      this.syncPopoverWithCaret();
+    }
+    this.scheduleAutocomplete("selection");
+  }
+
+  shouldClearAutocompleteOnKeydown(event) {
+    if (!event) {
+      return false;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+      return false;
+    }
+    const key = String(event.key || "");
+    if (!key) {
+      return false;
+    }
+    if (key === "Backspace" || key === "Delete" || key === "Enter" || key === " ") {
+      return true;
+    }
+    return key.length === 1;
+  }
+
+  shouldResumeAutocompleteOnUserInput(event) {
+    if (!event) {
+      return false;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+      return false;
+    }
+    const key = String(event.key || "");
+    if (!key) {
+      return false;
+    }
+    if (key === "Tab" || key === "Shift" || key === "Meta" || key === "Control" || key === "Alt") {
+      return false;
+    }
+    if (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown") {
+      return false;
+    }
+    return this.shouldClearAutocompleteOnKeydown(event);
   }
 
   handleKeyDown(event) {
@@ -599,6 +810,18 @@ class ZetaApp {
     const altHeld = event.altKey || event.getModifierState?.("Alt");
     const shiftHeld = event.shiftKey || event.getModifierState?.("Shift");
     const ts = new Date().toISOString();
+
+    if (this.tryAcceptTabCompletion(event)) {
+      return;
+    }
+
+    if (this.autocompleteAwaitingUserInput && this.shouldResumeAutocompleteOnUserInput(event)) {
+      this.autocompleteAwaitingUserInput = false;
+    }
+
+    if (this.activeAutocomplete && this.shouldClearAutocompleteOnKeydown(event)) {
+      this.clearAutocompleteSuggestion();
+    }
 
     console.info("[zeta:content] keydown", {
       ts,
@@ -655,6 +878,18 @@ class ZetaApp {
       return;
     }
 
+    if (altHeld && shiftHeld && (key === "m" || code === "KeyM")) {
+      event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+M",
+        action: "manual-autocomplete",
+      });
+      this.markShortcutTriggered("Alt+Shift+M");
+      this.triggerManualAutocomplete("shortcut");
+      return;
+    }
+
     if (altHeld && shiftHeld && (key === "r" || code === "KeyR")) {
       event.preventDefault();
       console.info("[zeta:content] shortcut_match", {
@@ -700,6 +935,761 @@ class ZetaApp {
     });
   }
 
+  triggerManualAutocomplete(source = "manual") {
+    if (this.settings.autocompleteEnabled === false) {
+      this.addActivity("Manual autocomplete ignored because autocomplete is disabled.", "info");
+      return;
+    }
+    this.autocompleteAwaitingUserInput = false;
+    this.scheduleAutocomplete("manual", true);
+    this.addActivity(`Manual autocomplete requested (${source}).`, "info");
+  }
+
+  ensureTabGhostElement() {
+    if (this.tabGhostElement && this.tabGhostElement.isConnected) {
+      return;
+    }
+    const element = document.createElement("div");
+    element.className = "zeta-tab-ghost is-hidden";
+    element.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    element.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const item = target.closest(".zeta-tab-ghost-item");
+      if (!item) {
+        return;
+      }
+      const index = Number(item.getAttribute("data-autocomplete-index"));
+      if (!Number.isFinite(index) || !this.activeAutocomplete) {
+        return;
+      }
+      const maxIndex = Math.max(0, ensureArray(this.activeAutocomplete.candidates).length - 1);
+      this.activeAutocomplete.selectedIndex = clamp(Math.round(index), 0, maxIndex);
+      this.renderTabGhost();
+    });
+    document.documentElement.appendChild(element);
+    this.tabGhostElement = element;
+  }
+
+  clearAutocompleteSuggestion() {
+    this.activeAutocomplete = null;
+    this.renderTabGhost();
+  }
+
+  reportAutocompleteErrorOnce(key, message) {
+    const dedupeKey = String(key || "").trim();
+    if (!dedupeKey || !message) {
+      return;
+    }
+    const now = Date.now();
+    if (this.autocompleteLastErrorKey === dedupeKey && now - this.autocompleteLastErrorAt < 45_000) {
+      return;
+    }
+    this.autocompleteLastErrorKey = dedupeKey;
+    this.autocompleteLastErrorAt = now;
+    this.addActivity(String(message), "error");
+  }
+
+  normalizeAutocompleteSuffix(prefixText, candidateText) {
+    const prefix = String(prefixText || "");
+    const candidateRaw = String(candidateText || "")
+      .replace(/\r/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^['"]|['"]$/g, "");
+    if (!candidateRaw) {
+      return "";
+    }
+
+    const normalizeForOverlap = (text) => {
+      const value = String(text || "");
+      const chars = [];
+      const cuts = [0];
+      for (let index = 0; index < value.length; index += 1) {
+        const char = value[index];
+        if (/[\s$]/.test(char)) {
+          continue;
+        }
+        chars.push(char.toLowerCase());
+        cuts.push(index + 1);
+      }
+      return {
+        normalized: chars.join(""),
+        cuts,
+      };
+    };
+
+    const prefixNorm = normalizeForOverlap(prefix).normalized;
+    const withLeadingSpace = candidateRaw.startsWith(" ") ? candidateRaw : ` ${candidateRaw}`;
+    const variants = [withLeadingSpace, candidateRaw];
+
+    for (const variant of variants) {
+      const candidateNorm = normalizeForOverlap(variant);
+      if (!candidateNorm.normalized) {
+        continue;
+      }
+
+      let overlapLen = 0;
+      const maxOverlap = Math.min(prefixNorm.length, candidateNorm.normalized.length);
+      for (let size = maxOverlap; size >= 1; size -= 1) {
+        if (prefixNorm.slice(-size) === candidateNorm.normalized.slice(0, size)) {
+          overlapLen = size;
+          break;
+        }
+      }
+
+      const cutIndex = candidateNorm.cuts[overlapLen] ?? 0;
+      const suffix = variant.slice(cutIndex).replace(/^\s+/, " ").trimEnd();
+      if (suffix.trim()) {
+        return suffix;
+      }
+    }
+
+    return "";
+  }
+
+  normalizeAutocompleteInsertion(prefixText, completionText, suffixText = "") {
+    const prefix = String(prefixText || "");
+    const suffix = String(suffixText || "");
+    let value = String(completionText || "").replace(/\r/g, "");
+    if (!value) {
+      return "";
+    }
+
+    const prefixTrimRight = prefix.replace(/\s+$/, "");
+    const suffixTrimLeft = suffix.replace(/^\s+/, "");
+    const prefixEndsWhitespace = /\s$/.test(prefix);
+    const suffixStartsWhitespace = /^\s/.test(suffix);
+
+    const removeLeadingToken = (token) => {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      value = value.replace(new RegExp(`^\\s*${escaped}`), "");
+    };
+    const removeTrailingToken = (token) => {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      value = value.replace(new RegExp(`${escaped}\\s*$`), "");
+    };
+    const normalizedLeading = () => value.trimStart();
+    const normalizedTrailing = () => value.trimEnd();
+
+    for (const token of ["$$", "$", "\\(", "\\["]) {
+      if (prefixTrimRight.endsWith(token) && normalizedLeading().startsWith(token)) {
+        removeLeadingToken(token);
+      }
+    }
+    for (const token of ["$$", "$", "\\)", "\\]"]) {
+      if (suffixTrimLeft.startsWith(token) && normalizedTrailing().endsWith(token)) {
+        removeTrailingToken(token);
+      }
+    }
+
+    if (prefixEndsWhitespace) {
+      value = value.replace(/^\s+/, "");
+    } else {
+      const startsWhitespace = /^\s/.test(value);
+      const startsClosingPunctuation = /^[,.;:!?)}\]]/.test(value);
+      if (startsWhitespace) {
+        value = value.replace(/^\s+/, " ");
+      } else if (prefixTrimRight && /[A-Za-z0-9)\]}]$/.test(prefixTrimRight) && !startsClosingPunctuation) {
+        value = ` ${value}`;
+      }
+    }
+
+    if (/[\\$]$/.test(prefixTrimRight) || /\\\($|\\\[$/.test(prefixTrimRight)) {
+      value = value.replace(/^\s+/, "");
+    }
+
+    if (suffixTrimLeft && /^[,.;:!?)}\]]/.test(suffixTrimLeft)) {
+      value = value.replace(/\s+$/, "");
+    }
+    if (suffixStartsWhitespace) {
+      value = value.replace(/\s+$/, "");
+    }
+
+    value = value.replace(/\s+\n/g, "\n");
+    value = value.replace(/\n\s+/g, "\n");
+    return value.trim() ? value : "";
+  }
+
+  isOverleafSourceAdapter(adapter) {
+    if (!adapter?.root || !(adapter.root instanceof Element)) {
+      return false;
+    }
+    if (!location.hostname.endsWith("overleaf.com")) {
+      return false;
+    }
+    if (!adapter.root.matches(".cm-editor, .ace_editor")) {
+      return false;
+    }
+    if (adapter.root.closest(".pdfjs, .pdf-viewer, .pdf-preview, .preview, .ol-preview")) {
+      return false;
+    }
+    return true;
+  }
+
+  resolveAutocompleteEndpoint() {
+    return HARDCODED_COMPLETE_URL;
+  }
+
+  collectAutocompleteContext() {
+    const adapter = this.activeAdapter;
+    if (!adapter || !adapter.isConnected() || !this.isOverleafSourceAdapter(adapter)) {
+      return null;
+    }
+
+    const snapshot = adapter.getScopeSnapshot("document");
+    const sourceText = String(snapshot.sourceText || snapshot.context || snapshot.text || "");
+    if (!sourceText.trim()) {
+      return null;
+    }
+
+    const caretOffsetRaw = this.resolveCaretOffsetInScope(snapshot, adapter);
+    if (!Number.isInteger(caretOffsetRaw)) {
+      return null;
+    }
+    const caretOffset = clamp(caretOffsetRaw, 0, sourceText.length);
+    const prefixText = sourceText.slice(0, caretOffset);
+    const sentenceBoundary = Math.max(
+      prefixText.lastIndexOf("\n"),
+      prefixText.lastIndexOf("."),
+      prefixText.lastIndexOf("!"),
+      prefixText.lastIndexOf("?"),
+      prefixText.lastIndexOf(";"),
+      prefixText.lastIndexOf(":")
+    );
+    const fragment = prefixText.slice(sentenceBoundary + 1).replace(/^\s+/, "");
+    if (fragment.length < AUTOCOMPLETE_MIN_FRAGMENT_CHARS) {
+      return null;
+    }
+    const words = fragment.split(/\s+/).filter(Boolean);
+    if (words.length < AUTOCOMPLETE_MIN_FRAGMENT_WORDS) {
+      return null;
+    }
+    if (/\\[A-Za-z]*$/.test(fragment)) {
+      return null;
+    }
+
+    const textStart = Math.max(0, caretOffset - AUTOCOMPLETE_MAX_TEXT_WINDOW);
+    const textEnd = Math.min(sourceText.length, caretOffset + 120);
+    const textWindow = sourceText.slice(textStart, textEnd);
+    const localCursorOffset = caretOffset - textStart;
+
+    const contextStart = Math.max(0, caretOffset - AUTOCOMPLETE_MAX_CONTEXT_WINDOW);
+    const contextEnd = Math.min(sourceText.length, caretOffset + 320);
+    const contextWindow = sourceText.slice(contextStart, contextEnd);
+
+    const signature = shortHash(
+      JSON.stringify({
+        endpoint: this.resolveAutocompleteEndpoint(),
+        mode: this.settings.mode,
+        caretOffset,
+        fragmentTail: fragment.slice(-240),
+      })
+    );
+
+    return {
+      snapshot,
+      sourceText,
+      caretOffset,
+      prefixText,
+      suffixText: sourceText.slice(caretOffset),
+      fragment,
+      textWindow,
+      localCursorOffset,
+      contextWindow,
+      signature,
+    };
+  }
+
+  async requestAutocomplete(endpointUrl, context, reason) {
+    const requestBody = {
+      text: context.textWindow,
+      cursor_offset: context.localCursorOffset,
+      context: context.contextWindow,
+      imports: ["Std"],
+      max_candidates: 3,
+      max_new_tokens: this.settings.mode === "accurate" ? 24 : 16,
+      temperature: this.settings.mode === "accurate" ? 0.2 : 0.35,
+      include_debug: false,
+      zeta_meta: {
+        reason,
+        scope: "document",
+      },
+    };
+    const cacheKey = shortHash(`${endpointUrl}:${JSON.stringify(requestBody)}`);
+    const now = Date.now();
+    const cached = this.autocompleteCache.get(cacheKey);
+    if (cached && now - cached.timestamp <= AUTOCOMPLETE_CACHE_TTL_MS) {
+      return {
+        payload: cached.payload,
+        cacheHit: true,
+      };
+    }
+
+    const response = await this.sendHttpMessage({
+      url: endpointUrl,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(requestBody),
+      timeoutMs: Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000)),
+    });
+
+    if (!response.ok) {
+      const detail = String(response.text || response.error || response.statusText || "request failed");
+      const error = new Error(`HTTP error ${response.status || "unknown"}${detail ? `: ${detail}` : ""}`);
+      error.status = Number(response.status) || 0; // eslint-disable-line no-param-reassign
+      error.endpointUrl = endpointUrl; // eslint-disable-line no-param-reassign
+      throw error;
+    }
+    if (!response.json || typeof response.json !== "object") {
+      throw new Error("Autocomplete endpoint returned non-JSON response.");
+    }
+
+    this.autocompleteCache.set(cacheKey, {
+      timestamp: now,
+      payload: response.json,
+    });
+    for (const [key, value] of this.autocompleteCache.entries()) {
+      if (!value || now - Number(value.timestamp || 0) > AUTOCOMPLETE_CACHE_TTL_MS) {
+        this.autocompleteCache.delete(key);
+      }
+    }
+
+    return {
+      payload: response.json,
+      cacheHit: false,
+    };
+  }
+
+  extractAutocompleteCandidates(payload, context) {
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+    const rawCandidates = [];
+    const selected = typeof payload.selected_completion === "string"
+      ? payload.selected_completion
+      : "";
+    if (selected.trim()) {
+      rawCandidates.push(selected);
+    }
+    const candidates = ensureArray(payload.candidates);
+    for (const item of candidates) {
+      if (typeof item === "string" && item.trim()) {
+        rawCandidates.push(item);
+        continue;
+      }
+      if (item && typeof item.completion === "string" && item.completion.trim()) {
+        rawCandidates.push(item.completion);
+      }
+    }
+
+    const normalized = [];
+    const seen = new Set();
+    for (const rawCandidate of rawCandidates) {
+      const suffix = this.normalizeAutocompleteSuffix(context.prefixText, rawCandidate);
+      if (!suffix.trim()) {
+        continue;
+      }
+      const insertion = this.normalizeAutocompleteInsertion(
+        context.prefixText,
+        suffix,
+        context.suffixText
+      );
+      if (!insertion.trim()) {
+        continue;
+      }
+      const key = insertion.trim().toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      normalized.push(insertion);
+      if (normalized.length >= 3) {
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  scheduleAutocomplete(reason, immediate = false) {
+    if (this.autocompleteTimer) {
+      clearTimeout(this.autocompleteTimer);
+      this.autocompleteTimer = null;
+    }
+    if (this.settings.autocompleteEnabled === false) {
+      this.clearAutocompleteSuggestion();
+      return;
+    }
+    if (!this.activeAdapter || !this.activeAdapter.isConnected()) {
+      this.clearAutocompleteSuggestion();
+      return;
+    }
+    const reasonLabel = String(reason || "typing");
+    if (this.settings.autocompleteManualTrigger && reasonLabel !== "manual") {
+      if (reasonLabel === "typing" || reasonLabel === "selection" || reasonLabel === "focus") {
+        this.clearAutocompleteSuggestion();
+      }
+      return;
+    }
+    if (this.autocompleteAwaitingUserInput && reasonLabel === "typing") {
+      return;
+    }
+    const delay = immediate ? 0 : AUTOCOMPLETE_DEBOUNCE_MS;
+    this.autocompleteTimer = window.setTimeout(() => {
+      this.autocompleteTimer = null;
+      this.runAutocomplete(reasonLabel);
+    }, delay);
+  }
+
+  async runAutocomplete(reason = "typing") {
+    const reasonLabel = String(reason || "typing");
+    if (this.settings.autocompleteEnabled === false) {
+      this.clearAutocompleteSuggestion();
+      return;
+    }
+    if (this.settings.autocompleteManualTrigger && reasonLabel !== "manual") {
+      return;
+    }
+    if (this.autocompleteInFlight) {
+      this.autocompleteQueuedReason = reasonLabel;
+      return;
+    }
+    if (Date.now() < this.autocompleteBackoffUntil) {
+      return;
+    }
+    const endpointUrl = this.resolveAutocompleteEndpoint();
+    if (!endpointUrl) {
+      this.clearAutocompleteSuggestion();
+      return;
+    }
+
+    const context = this.collectAutocompleteContext();
+    if (!context) {
+      this.clearAutocompleteSuggestion();
+      return;
+    }
+
+    const requestId = ++this.autocompleteRequestSeq;
+    this.autocompleteInFlight = true;
+    this.autocompletePendingSince = Date.now();
+    this.autocompleteQueuedReason = "";
+    this.activeAutocomplete = null;
+    this.renderTabGhost();
+    try {
+      const result = await this.requestAutocomplete(endpointUrl, context, reasonLabel);
+      if (requestId !== this.autocompleteRequestSeq) {
+        return;
+      }
+      if (this.settings.autocompleteEnabled === false) {
+        this.clearAutocompleteSuggestion();
+        return;
+      }
+      const suggestions = this.extractAutocompleteCandidates(result.payload, context);
+      if (suggestions.length === 0) {
+        this.autocompleteBackoffUntil = 0;
+        this.clearAutocompleteSuggestion();
+        return;
+      }
+      this.activeAutocomplete = {
+        candidates: suggestions,
+        selectedIndex: 0,
+        signature: context.signature,
+        payload: result.payload,
+        cacheHit: !!result.cacheHit,
+        updatedAt: Date.now(),
+      };
+      this.autocompleteBackoffUntil = 0;
+      this.renderTabGhost();
+    } catch (error) {
+      if (requestId !== this.autocompleteRequestSeq) {
+        return;
+      }
+      this.clearAutocompleteSuggestion();
+      const rawMessage = String(error?.message || error);
+      let status = Number(error?.status) || 0;
+      if (!status) {
+        const messageMatch = rawMessage.match(/HTTP error\s+(\d{3})/i);
+        if (messageMatch) {
+          status = Number(messageMatch[1]) || 0;
+        }
+      }
+      const endpointForLog = String(error?.endpointUrl || endpointUrl || "");
+      if (status === 404) {
+        this.autocompleteBackoffUntil = Date.now() + 60_000;
+        this.reportAutocompleteErrorOnce(
+          `autocomplete_404:${endpointForLog}`,
+          "Autocomplete endpoint returned 404. Confirm the deployed Modal app exposes `/v1/complete`."
+        );
+      } else {
+        this.autocompleteBackoffUntil = Date.now() + 5000;
+      }
+      logTrace("autocomplete_error", {
+        reason: reasonLabel,
+        status,
+        endpointUrl: endpointForLog,
+        message: rawMessage,
+      });
+    } finally {
+      this.autocompleteInFlight = false;
+      this.autocompletePendingSince = 0;
+      const queuedReason = String(this.autocompleteQueuedReason || "");
+      this.autocompleteQueuedReason = "";
+      if (queuedReason && Date.now() >= this.autocompleteBackoffUntil) {
+        this.scheduleAutocomplete(queuedReason);
+      }
+    }
+  }
+
+  renderTabGhost() {
+    this.ensureTabGhostElement();
+    const element = this.tabGhostElement;
+    if (!element) {
+      return;
+    }
+    const hasSuggestion = !!this.activeAutocomplete;
+    const showThinking = !hasSuggestion && this.autocompleteInFlight && this.autocompletePendingSince > 0;
+    if ((!hasSuggestion && !showThinking) || !this.activeAdapter || !this.isOverleafSourceAdapter(this.activeAdapter)) {
+      element.classList.add("is-hidden");
+      element.textContent = "";
+      return;
+    }
+
+    const snapshot = this.activeAdapter.getVisibleTextSnapshot();
+    const rect = this.activeAdapter.getCaretClientRect(snapshot);
+    if (!rect) {
+      element.classList.add("is-hidden");
+      return;
+    }
+
+    if (showThinking) {
+      element.classList.remove("is-inline-mode", "is-topk-mode");
+      element.classList.add("is-thinking-mode");
+      element.style.pointerEvents = "none";
+      element.replaceChildren();
+
+      const thinking = document.createElement("div");
+      thinking.className = "zeta-tab-thinking";
+      const label = document.createElement("span");
+      label.className = "zeta-tab-thinking-label";
+      label.textContent = "zeta thinking";
+      const dots = document.createElement("span");
+      dots.className = "zeta-tab-thinking-dots";
+      for (let i = 0; i < 3; i += 1) {
+        const dot = document.createElement("span");
+        dot.className = "zeta-tab-thinking-dot";
+        dots.appendChild(dot);
+      }
+      thinking.append(label, dots);
+      element.appendChild(thinking);
+
+      const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+      const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+      let left = Math.round(rect.right + 8);
+      let top = Math.round(rect.top - 18);
+      if (top < 8) {
+        top = Math.round(rect.bottom + 4);
+      }
+      if (left > viewportWidth - 132) {
+        left = Math.max(8, viewportWidth - 132);
+      }
+      if (top > viewportHeight - 30) {
+        top = Math.max(8, viewportHeight - 30);
+      }
+      element.style.left = `${left}px`;
+      element.style.top = `${top}px`;
+      element.classList.remove("is-hidden");
+      return;
+    }
+
+    const candidates = ensureArray(this.activeAutocomplete.candidates).filter((item) => String(item || "").trim());
+    if (candidates.length === 0) {
+      element.classList.add("is-hidden");
+      return;
+    }
+
+    const selectedIndex = clamp(
+      Number(this.activeAutocomplete.selectedIndex) || 0,
+      0,
+      Math.max(0, candidates.length - 1)
+    );
+    this.activeAutocomplete.selectedIndex = selectedIndex;
+    const showTopK = !!this.settings.autocompleteShowTopK;
+    element.classList.remove("is-thinking-mode");
+    element.classList.toggle("is-inline-mode", !showTopK);
+    element.classList.toggle("is-topk-mode", showTopK);
+    element.style.pointerEvents = showTopK ? "auto" : "none";
+
+    element.replaceChildren();
+
+    const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+    let left = 0;
+    let top = 0;
+
+    if (showTopK) {
+      const header = document.createElement("div");
+      header.className = "zeta-tab-ghost-header";
+      header.textContent = "Suggested by zeta";
+      element.appendChild(header);
+
+      const preview = document.createElement("div");
+      preview.className = "zeta-tab-ghost-preview";
+      preview.textContent = String(candidates[selectedIndex] || "").trimStart();
+      element.appendChild(preview);
+
+      const list = document.createElement("div");
+      list.className = "zeta-tab-ghost-list";
+      for (let index = 0; index < candidates.length; index += 1) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "zeta-tab-ghost-item";
+        item.setAttribute("data-autocomplete-index", String(index));
+        if (index === selectedIndex) {
+          item.classList.add("is-active");
+        }
+        const text = document.createElement("span");
+        text.className = "zeta-tab-ghost-text";
+        text.textContent = String(candidates[index] || "").trimStart();
+        const hint = document.createElement("span");
+        hint.className = "zeta-tab-ghost-hint";
+        hint.textContent = index === 0 ? "Tab" : "Click to select";
+        item.append(text, hint);
+        list.appendChild(item);
+      }
+      element.appendChild(list);
+
+      left = Math.round(rect.left + 8);
+      top = Math.round(rect.top - 92);
+      if (top < 8) {
+        top = Math.round(rect.bottom + 6);
+      }
+      if (left > viewportWidth - 320) {
+        left = Math.max(8, viewportWidth - 320);
+      }
+      if (top > viewportHeight - 120) {
+        top = Math.max(8, viewportHeight - 120);
+      }
+    } else {
+      const inline = document.createElement("span");
+      inline.className = "zeta-tab-ghost-inline";
+      inline.textContent = String(candidates[selectedIndex] || "").replace(/^\s+/, "");
+      element.appendChild(inline);
+
+      left = Math.round(rect.right + 1);
+      top = Math.round(rect.top + Math.max(0, rect.height * 0.05));
+      if (left > viewportWidth - 48) {
+        left = Math.max(8, viewportWidth - 48);
+      }
+      if (top > viewportHeight - 28) {
+        top = Math.max(8, viewportHeight - 28);
+      }
+    }
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    element.classList.remove("is-hidden");
+  }
+
+  getActiveAutocompleteCandidate() {
+    if (!this.activeAutocomplete) {
+      return "";
+    }
+    const candidates = ensureArray(this.activeAutocomplete.candidates).filter((item) => String(item || "").trim());
+    if (candidates.length === 0) {
+      return "";
+    }
+    const selectedIndex = clamp(
+      Number(this.activeAutocomplete.selectedIndex) || 0,
+      0,
+      Math.max(0, candidates.length - 1)
+    );
+    this.activeAutocomplete.selectedIndex = selectedIndex;
+    return String(candidates[selectedIndex] || "");
+  }
+
+  acceptActiveAutocomplete(trigger = "tab") {
+    if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
+      return false;
+    }
+    if (!this.isOverleafSourceAdapter(this.activeAdapter)) {
+      return false;
+    }
+
+    const context = this.collectAutocompleteContext();
+    if (!context || context.signature !== this.activeAutocomplete.signature) {
+      this.clearAutocompleteSuggestion();
+      return false;
+    }
+
+    const completion = this.getActiveAutocompleteCandidate();
+    if (!completion) {
+      this.clearAutocompleteSuggestion();
+      return false;
+    }
+
+    const insertion = this.normalizeAutocompleteInsertion(
+      context.prefixText,
+      completion,
+      context.suffixText
+    );
+    if (!insertion) {
+      this.clearAutocompleteSuggestion();
+      return false;
+    }
+
+    const inserted = this.activeAdapter.insertAtCaret(insertion);
+    if (!inserted) {
+      return false;
+    }
+
+    this.addActivity(
+      `${trigger === "click" ? "Applied" : "Accepted"} autocomplete: ${insertion.trim().slice(0, 120)}`,
+      "success"
+    );
+    this.autocompleteAwaitingUserInput = true;
+    this.clearAutocompleteSuggestion();
+    this.scheduleChunkSnapshotSync("typing");
+    if (this.settings.checkOnType) {
+      this.scheduleAnalysis("typing");
+    }
+    return true;
+  }
+
+  tryAcceptTabCompletion(event) {
+    if (!event || String(event.key || "").toLowerCase() !== "tab") {
+      return false;
+    }
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+      return false;
+    }
+    if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
+      return false;
+    }
+    if (!this.isOverleafSourceAdapter(this.activeAdapter)) {
+      return false;
+    }
+
+    const target = event.target;
+    if (target instanceof Element) {
+      if (target.closest(".zeta-shell, .zeta-popup-mirror, .zeta-suggestion-popover")) {
+        return false;
+      }
+      if (!this.activeAdapter.containsNode(target)) {
+        return false;
+      }
+    }
+    const accepted = this.acceptActiveAutocomplete("tab");
+    if (!accepted) {
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
   async updateSettings(nextPartial, rerun) {
     const next = {
       ...this.settings,
@@ -708,6 +1698,9 @@ class ZetaApp {
     next.mode = normalizeMode(next.mode);
     next.scope = normalizeScope(next.scope);
     next.theme = "light";
+    next.autocompleteEnabled = next.autocompleteEnabled !== false;
+    next.autocompleteManualTrigger = next.autocompleteManualTrigger === true;
+    next.backendUrl = HARDCODED_ANALYZE_URL;
 
     await storageSyncSet({
       [SETTINGS_KEY]: next,
@@ -716,19 +1709,30 @@ class ZetaApp {
 
     this.settings = next;
     this.panel.setSettings(this.settings);
+    if (!this.settings.autocompleteEnabled) {
+      this.autocompleteRequestSeq += 1;
+      this.autocompleteInFlight = false;
+      this.autocompletePendingSince = 0;
+      this.clearAutocompleteSuggestion();
+    } else if (this.settings.autocompleteManualTrigger) {
+      this.clearAutocompleteSuggestion();
+    }
 
     if (rerun) {
       this.scheduleAnalysis("settings", true);
+      this.scheduleAutocomplete("settings", true);
     }
   }
 
   async saveSettingsFromPanel(nextValues) {
     const merged = {
       ...this.settings,
-      backendUrl: nextValues.backendUrl || this.settings.backendUrl,
       requestTimeoutMs: clamp(Number(nextValues.requestTimeoutMs) || this.settings.requestTimeoutMs, 2000, 120000),
       retries: clamp(Number(nextValues.retries) || 0, 0, 4),
+      autocompleteEnabled: nextValues.autocompleteEnabled !== false,
       checkOnType: !!nextValues.checkOnType,
+      autocompleteShowTopK: !!nextValues.autocompleteShowTopK,
+      autocompleteManualTrigger: !!nextValues.autocompleteManualTrigger,
       notationStrictness: ["relaxed", "balanced", "strict"].includes(nextValues.notationStrictness)
         ? nextValues.notationStrictness
         : "balanced",
@@ -738,6 +1742,7 @@ class ZetaApp {
     this.panel.setStatus("idle", "Settings saved.");
     this.addActivity("Saved panel settings.", "info");
     this.scheduleAnalysis("settings-save", true);
+    this.scheduleAutocomplete("settings-save", true);
   }
 
   async togglePanel(forceOpen) {
@@ -857,6 +1862,441 @@ class ZetaApp {
     storageLocalSet({
       [PANEL_SNAPSHOT_KEY]: next,
     });
+  }
+
+  serializeChatThread(thread) {
+    const diagnostics = ensureArray(thread.diagnostics).slice(0, 8).map((diag) => ({
+      severity: String(diag?.severity || "unknown"),
+      message: String(diag?.message || ""),
+      line: Number.isInteger(diag?.line) ? diag.line : null,
+      column: Number.isInteger(diag?.column) ? diag.column : null,
+      file: String(diag?.file || ""),
+      raw: String(diag?.raw || ""),
+    }));
+    const semanticReasons = ensureArray(thread.semanticReasons)
+      .map((reason) => String(reason || "").trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    const messages = ensureArray(thread.messages)
+      .slice(-20)
+      .map((message) => ({
+        id: String(message.id || ""),
+        role: message.role === "assistant" ? "assistant" : "user",
+        text: String(message.text || ""),
+        createdAt: Number(message.createdAt) || Date.now(),
+        error: !!message.error,
+      }));
+    return {
+      id: String(thread.id || ""),
+      title: String(thread.title || "Issue thread"),
+      issueKey: String(thread.issueKey || ""),
+      category: String(thread.category || "issue"),
+      severity: String(thread.severity || "unknown"),
+      issueMessage: String(thread.issueMessage || ""),
+      targetText: String(thread.targetText || ""),
+      replacement: String(thread.replacement || ""),
+      line: Number.isInteger(thread.line) ? thread.line : null,
+      column: Number.isInteger(thread.column) ? thread.column : null,
+      source: String(thread.source || ""),
+      sentenceText: String(thread.sentenceText || ""),
+      chunkId: String(thread.chunkId || ""),
+      compileSuccess: typeof thread.compileSuccess === "boolean" ? thread.compileSuccess : null,
+      diagnostics,
+      semanticReasons,
+      leanCode: this.truncateActivityText(thread.leanCode, 3000),
+      requestUrl: String(thread.requestUrl || ""),
+      issueSignature: String(thread.issueSignature || ""),
+      status: String(thread.status || "idle"),
+      lastSource: String(thread.lastSource || ""),
+      lastLatencyMs: Number(thread.lastLatencyMs) || 0,
+      lastError: String(thread.lastError || ""),
+      isActiveIssue: thread.isActiveIssue !== false,
+      updatedAt: Number(thread.updatedAt) || Date.now(),
+      createdAt: Number(thread.createdAt) || Date.now(),
+      messages,
+    };
+  }
+
+  persistChatSnapshot() {
+    const normalizedThreads = this.chatThreads
+      .map((thread) => this.serializeChatThread(thread))
+      .filter((thread) => thread.id)
+      .slice(0, 30);
+    this.chatThreads = normalizedThreads;
+    this.chatById = new Map(this.chatThreads.map((thread) => [thread.id, thread]));
+    if (!this.activeChatThreadId || !this.chatById.has(this.activeChatThreadId)) {
+      this.activeChatThreadId = this.chatThreads[0]?.id || null;
+    }
+
+    const payload = {
+      threads: this.chatThreads,
+      activeThreadId: this.activeChatThreadId,
+      updatedAt: Date.now(),
+    };
+    const signature = shortHash(
+      JSON.stringify({
+        active: payload.activeThreadId,
+        threads: payload.threads.map((thread) => (
+          `${thread.id}|${thread.status}|${thread.updatedAt}|${thread.lastSource}|` +
+          `${thread.lastError}|${thread.messages.map((msg) => `${msg.role}:${shortHash(msg.text || "")}`).join(",")}`
+        )),
+      })
+    );
+    if (signature === this.lastChatSnapshotSignature) {
+      return;
+    }
+    this.lastChatSnapshotSignature = signature;
+    storageLocalSet({
+      [CHAT_SNAPSHOT_KEY]: payload,
+    });
+  }
+
+  buildChatThreadTitle(issue) {
+    const base = String(issue?.message || issue?.category || "Issue").replace(/\s+/g, " ").trim();
+    if (!base) {
+      return "Issue";
+    }
+    if (base.length <= 78) {
+      return base;
+    }
+    return `${base.slice(0, 75)}...`;
+  }
+
+  buildChatPrimerMessage(issue) {
+    const target = String(issue?.targetText || "").trim();
+    const subject = target ? `for "${target}"` : "for this issue";
+    return `I can explain why Lean flagged this ${subject}. Ask for a simpler rewrite if needed.`;
+  }
+
+  buildGeneralChatPrimerMessage(issueCount = 0) {
+    if (issueCount > 0) {
+      return `Ask me anything about your ${issueCount} active checker issue${issueCount === 1 ? "" : "s"}, or about the current paragraph.`;
+    }
+    return "Ask me anything about the current math paragraph. I can still explain expected Lean issues once they appear.";
+  }
+
+  buildGeneralChatThread(existingThread, issueCount = 0) {
+    const now = Date.now();
+    const messages = existingThread && Array.isArray(existingThread.messages) && existingThread.messages.length > 0
+      ? existingThread.messages
+      : [{
+        id: "msg-general-intro",
+        role: "assistant",
+        text: this.buildGeneralChatPrimerMessage(issueCount),
+        createdAt: now,
+        error: false,
+      }];
+    const signature = `general:${issueCount > 0 ? "issues" : "empty"}`;
+    const metadataChanged = String(existingThread?.issueSignature || "") !== signature;
+    return {
+      id: "general",
+      title: "General Assistant",
+      issueKey: "",
+      category: "general",
+      severity: "info",
+      issueMessage: issueCount > 0
+        ? `There are ${issueCount} active issue thread${issueCount === 1 ? "" : "s"} in this document.`
+        : "No active issues yet. Ask a general question.",
+      targetText: "",
+      replacement: "",
+      line: null,
+      column: null,
+      source: "assistant",
+      sentenceText: "",
+      chunkId: "",
+      compileSuccess: null,
+      diagnostics: [],
+      semanticReasons: [],
+      leanCode: "",
+      requestUrl: "",
+      issueSignature: signature,
+      status: existingThread?.status === "thinking"
+        ? "thinking"
+        : (existingThread?.status === "error" && !metadataChanged ? "error" : "ready"),
+      lastSource: String(existingThread?.lastSource || ""),
+      lastLatencyMs: Number(existingThread?.lastLatencyMs) || 0,
+      lastError: metadataChanged ? "" : String(existingThread?.lastError || ""),
+      isActiveIssue: true,
+      updatedAt: metadataChanged ? now : (Number(existingThread?.updatedAt) || now),
+      createdAt: Number(existingThread?.createdAt) || now,
+      messages,
+    };
+  }
+
+  syncChatThreadsFromIssues(issues) {
+    const issueList = ensureArray(issues);
+    const existingById = new Map(this.chatThreads.map((thread) => [thread.id, thread]));
+    const nextThreads = [];
+    const now = Date.now();
+    const existingGeneralThread = existingById.get("general") || null;
+    nextThreads.push(this.buildGeneralChatThread(existingGeneralThread, issueList.length));
+    existingById.delete("general");
+
+    for (const issue of issueList) {
+      const issueKey = String(issue?.key || "").trim();
+      if (!issueKey) {
+        continue;
+      }
+      const threadId = `issue-${issueKey}`;
+      const existing = existingById.get(threadId);
+      const title = this.buildChatThreadTitle(issue);
+      const issueSignature = shortHash(
+        JSON.stringify({
+          category: issue?.category || "",
+          severity: issue?.severity || "",
+          message: issue?.message || "",
+          targetText: issue?.targetText || "",
+          replacement: issue?.replacement || "",
+          line: Number.isInteger(issue?.line) ? issue.line : null,
+          column: Number.isInteger(issue?.column) ? issue.column : null,
+          source: issue?.source || "",
+          sentenceText: issue?.sentenceText || "",
+          chunkId: issue?.chunkId || "",
+          compileSuccess: issue?.compile?.success,
+          diagnostics: ensureArray(issue?.diagnostics).map((diag) => (
+            `${diag?.severity || "unknown"}|${diag?.message || ""}|${diag?.line || ""}|${diag?.column || ""}`
+          )),
+          semantic: ensureArray(issue?.pipeline?.semantic?.reasons),
+          leanCodeHash: shortHash(String(issue?.leanCode || "")),
+          requestUrl: String(issue?.backendRequestUrl || ""),
+        })
+      );
+      const metadataChanged = String(existing?.issueSignature || "") !== issueSignature;
+      const diagnostics = ensureArray(issue?.diagnostics).slice(0, 8).map((diag) => ({
+        severity: String(diag?.severity || "unknown"),
+        message: String(diag?.message || ""),
+        line: Number.isInteger(diag?.line) ? diag.line : null,
+        column: Number.isInteger(diag?.column) ? diag.column : null,
+        file: String(diag?.file || ""),
+        raw: String(diag?.raw || ""),
+      }));
+      const semanticReasons = ensureArray(issue?.pipeline?.semantic?.reasons)
+        .map((reason) => String(reason || "").trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      const messages = existing && Array.isArray(existing.messages) && existing.messages.length > 0
+        ? existing.messages
+        : [{
+          id: `msg-${threadId}-intro`,
+          role: "assistant",
+          text: this.buildChatPrimerMessage(issue),
+          createdAt: now,
+          error: false,
+        }];
+      const status = existing?.status === "thinking"
+        ? "thinking"
+        : (existing?.status === "error" && !metadataChanged ? "error" : "ready");
+      nextThreads.push({
+        id: threadId,
+        title,
+        issueKey,
+        category: String(issue?.category || "issue"),
+        severity: String(issue?.severity || "unknown"),
+        issueMessage: String(issue?.message || ""),
+        targetText: String(issue?.targetText || ""),
+        replacement: String(issue?.replacement || ""),
+        line: Number.isInteger(issue?.line) ? issue.line : null,
+        column: Number.isInteger(issue?.column) ? issue.column : null,
+        source: String(issue?.source || ""),
+        sentenceText: String(issue?.sentenceText || ""),
+        chunkId: String(issue?.chunkId || ""),
+        compileSuccess: typeof issue?.compile?.success === "boolean" ? issue.compile.success : null,
+        diagnostics,
+        semanticReasons,
+        leanCode: String(issue?.leanCode || ""),
+        requestUrl: String(issue?.backendRequestUrl || ""),
+        issueSignature,
+        status,
+        lastSource: String(existing?.lastSource || ""),
+        lastLatencyMs: Number(existing?.lastLatencyMs) || 0,
+        lastError: metadataChanged ? "" : String(existing?.lastError || ""),
+        isActiveIssue: true,
+        updatedAt: metadataChanged ? now : (Number(existing?.updatedAt) || now),
+        createdAt: Number(existing?.createdAt) || now,
+        messages,
+      });
+      existingById.delete(threadId);
+    }
+
+    const staleThreads = Array.from(existingById.values())
+      .map((thread) => ({
+        ...thread,
+        isActiveIssue: false,
+      }))
+      .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))
+      .slice(0, 10);
+
+    this.chatThreads = [...nextThreads, ...staleThreads];
+    if (!this.activeChatThreadId || !this.chatThreads.some((thread) => thread.id === this.activeChatThreadId)) {
+      this.activeChatThreadId = this.chatThreads[0]?.id || null;
+    }
+    this.persistChatSnapshot();
+  }
+
+  setActiveChatThread(threadId) {
+    const id = String(threadId || "").trim();
+    if (!id) {
+      return false;
+    }
+    if (!this.chatById.has(id)) {
+      return false;
+    }
+    this.activeChatThreadId = id;
+    this.persistChatSnapshot();
+    return true;
+  }
+
+  resolveChatEndpoint() {
+    const fallback = "http://13.57.35.202:8000/v1/chat/explain";
+    const raw = HARDCODED_ANALYZE_URL;
+    if (!raw) {
+      return fallback;
+    }
+
+    try {
+      const parsed = new URL(raw);
+      if (/\/v1\/lean\/solve\/?$/.test(parsed.pathname)) {
+        parsed.pathname = parsed.pathname.replace(/\/v1\/lean\/solve\/?$/, "/v1/chat/explain");
+      } else if (/\/v1\/analyze\/?$/.test(parsed.pathname)) {
+        parsed.pathname = parsed.pathname.replace(/\/v1\/analyze\/?$/, "/v1/chat/explain");
+      } else if (/\/v1\/query\/?$/.test(parsed.pathname)) {
+        parsed.pathname = parsed.pathname.replace(/\/v1\/query\/?$/, "/v1/chat/explain");
+      } else {
+        parsed.pathname = "/v1/chat/explain";
+      }
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    } catch (_error) {
+      return fallback;
+    }
+  }
+
+  buildChatRequestPayload(thread, question) {
+    const history = ensureArray(thread.messages)
+      .slice(-8)
+      .map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: this.truncateActivityText(message.text, 1600),
+      }));
+    return {
+      question: this.truncateActivityText(question, 3000),
+      mode: this.settings.mode,
+      issue: {
+        key: thread.issueKey || null,
+        category: thread.category || null,
+        severity: normalizeSeverity(thread.severity),
+        message: thread.issueMessage || null,
+        target_text: thread.targetText || null,
+        replacement: thread.replacement || null,
+        line: Number.isInteger(thread.line) ? thread.line : null,
+        column: Number.isInteger(thread.column) ? thread.column : null,
+        source: thread.source || null,
+        sentence: thread.sentenceText || null,
+        chunk_id: thread.chunkId || null,
+        compile_success: typeof thread.compileSuccess === "boolean" ? thread.compileSuccess : null,
+        diagnostics: ensureArray(thread.diagnostics).slice(0, 8),
+        semantic_reasons: ensureArray(thread.semanticReasons).slice(0, 8),
+        lean_code: this.truncateActivityText(thread.leanCode, 3000),
+        request_url: thread.requestUrl || null,
+      },
+      history,
+    };
+  }
+
+  async sendChatForThread(threadId, message) {
+    const id = String(threadId || "").trim();
+    const question = String(message || "").trim();
+    if (!id) {
+      throw new Error("Missing chat thread id.");
+    }
+    if (!question) {
+      throw new Error("Message cannot be empty.");
+    }
+    const thread = this.chatById.get(id);
+    if (!thread) {
+      throw new Error("Chat thread not found.");
+    }
+
+    const userMessage = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: "user",
+      text: question,
+      createdAt: Date.now(),
+      error: false,
+    };
+    thread.messages.push(userMessage);
+    thread.status = "thinking";
+    thread.lastError = "";
+    thread.updatedAt = Date.now();
+    this.activeChatThreadId = thread.id;
+    this.persistChatSnapshot();
+
+    const requestUrl = this.resolveChatEndpoint();
+    const requestBody = this.buildChatRequestPayload(thread, question);
+    logTrace("chat_request_send", {
+      threadId: thread.id,
+      url: requestUrl,
+      chars: question.length,
+    });
+    const startedAt = performance.now();
+    try {
+      const response = await this.sendBackendRequest({
+        requestUrl,
+        requestBody,
+      });
+      const answer = String(response?.answer || "").trim() || "No explanation returned.";
+      const source = String(response?.source || "deterministic");
+      const latencyMs = Number(response?.latency_ms);
+      thread.messages.push({
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        role: "assistant",
+        text: answer,
+        createdAt: Date.now(),
+        error: false,
+      });
+      thread.status = "ready";
+      thread.lastSource = source;
+      thread.lastLatencyMs = Number.isFinite(latencyMs)
+        ? latencyMs
+        : performance.now() - startedAt;
+      thread.lastError = "";
+      thread.updatedAt = Date.now();
+      this.persistChatSnapshot();
+      this.addActivity(
+        `Assistant explained issue: ${thread.title}`,
+        "info",
+        null,
+        this.truncateActivityText(answer, 2800)
+      );
+      return {
+        ok: true,
+        threadId: thread.id,
+        source,
+      };
+    } catch (error) {
+      const errorText = String(error?.message || error || "Assistant request failed.");
+      thread.messages.push({
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        role: "assistant",
+        text: `I could not explain this issue yet: ${errorText}`,
+        createdAt: Date.now(),
+        error: true,
+      });
+      thread.status = "error";
+      thread.lastError = errorText;
+      thread.lastSource = "deterministic";
+      thread.lastLatencyMs = performance.now() - startedAt;
+      thread.updatedAt = Date.now();
+      this.persistChatSnapshot();
+      this.addActivity(
+        `Assistant failed for issue: ${thread.title}`,
+        "error",
+        null,
+        this.truncateActivityText(errorText, 1200)
+      );
+      throw error;
+    }
   }
 
   serializeChunkTree(chunkTree) {
@@ -999,6 +2439,7 @@ class ZetaApp {
   async runAnalysis(reason, force = false) {
     const adapter = this.activeAdapter;
     if (!adapter || !adapter.isConnected()) {
+      this.clearAutocompleteSuggestion();
       this.panel.setStatus("error", "No active editor.");
       this.panel.setGlobalState("offline", "global · no editor");
       this.persistTelemetry({
@@ -1020,6 +2461,7 @@ class ZetaApp {
       chars: scopeText.length,
     });
     if (!scopeText.trim()) {
+      this.clearAutocompleteSuggestion();
       this.lastRun = {
         snapshot,
         diagnostics: [],
@@ -1045,6 +2487,7 @@ class ZetaApp {
         chunkTree: null,
         activeChunkId: null,
       });
+      this.syncChatThreadsFromIssues([]);
       this.overlay.clear();
       this.popover.close();
       return;
@@ -1059,19 +2502,17 @@ class ZetaApp {
       chunkWindow.baseOffset
     );
     this.activeChunkId = this.chunkTree?.activeChunkId || null;
-    const localIssues = this.detectLocalMathTypos(scopeText, proseSpans);
     const sentencePlan = this.buildSentencePlan(snapshot, force, proseSpans);
     logTrace("analysis_plan", {
       cachedSentences: sentencePlan.cachedCount,
       pendingSentences: sentencePlan.pending.length,
-      localIssues: localIssues.length,
     });
     const signature = shortHash(
       JSON.stringify({
         scope: snapshot.scope,
         mode: this.settings.mode,
         notationStrictness: this.settings.notationStrictness,
-        backendUrl: this.settings.backendUrl,
+        backendUrl: HARDCODED_ANALYZE_URL,
         signatures: sentencePlan.activeSignatures,
       })
     );
@@ -1082,7 +2523,7 @@ class ZetaApp {
 
     const rerenderFromCache = () => {
       const cachedSentenceIssues = this.collectSentenceIssues(sentencePlan.activeKeys);
-      const mergedIssues = this.mergeIssues(localIssues, cachedSentenceIssues)
+      const mergedIssues = this.mergeIssues(cachedSentenceIssues)
         .filter((issue) => !this.ignoredKeys.has(issue.key));
 
       this.lastRun = {
@@ -1229,7 +2670,7 @@ class ZetaApp {
           text: sentenceText,
           mode: this.settings.mode,
           notationStrictness: this.settings.notationStrictness,
-          backendUrl: this.settings.backendUrl,
+          backendUrl: HARDCODED_ANALYZE_URL,
           shouldAnalyze,
         })
       );
@@ -1249,6 +2690,9 @@ class ZetaApp {
           diagnostics: [],
           hasError: false,
           inferenceMs: null,
+          lastRequest: null,
+          lastResponse: null,
+          lastCacheHit: false,
           updatedAt: 0,
           lastSeenAt: now,
         };
@@ -2300,6 +3744,18 @@ class ZetaApp {
         const endOffset = Number.isInteger(issue.end)
           ? sentenceEntry.start + issue.end
           : null;
+        const backendResponse = sentenceEntry.lastResponse || {};
+        const compile = backendResponse.compile && typeof backendResponse.compile === "object"
+          ? backendResponse.compile
+          : null;
+        const diagnostics = ensureArray(sentenceEntry.diagnostics || compile?.diagnostics).map((diag) => ({
+          severity: String(diag?.severity || "unknown"),
+          message: String(diag?.message || ""),
+          line: Number.isInteger(diag?.line) ? diag.line : null,
+          column: Number.isInteger(diag?.column) ? diag.column : null,
+          file: String(diag?.file || ""),
+          raw: String(diag?.raw || ""),
+        }));
 
         issues.push({
           ...issue,
@@ -2308,6 +3764,13 @@ class ZetaApp {
           key: `${sentenceEntry.key}:${issue.key || i}:${startOffset ?? "na"}`,
           sentenceKey: sentenceEntry.key,
           sentenceInferenceMs: sentenceEntry.inferenceMs,
+          sentenceText: sentenceEntry.text,
+          chunkId: sentenceEntry.chunkId || null,
+          compile,
+          diagnostics,
+          leanCode: String(backendResponse.lean_code || ""),
+          pipeline: backendResponse.pipeline || null,
+          backendRequestUrl: String(sentenceEntry.lastRequest?.requestUrl || HARDCODED_ANALYZE_URL),
         });
       }
     }
@@ -2336,6 +3799,9 @@ class ZetaApp {
       sentenceEntry.hasError = !!normalized.hasError;
       sentenceEntry.status = "ready";
       sentenceEntry.inferenceMs = performance.now() - startedAt;
+      sentenceEntry.lastRequest = requestResult.request || null;
+      sentenceEntry.lastResponse = responsePayload || null;
+      sentenceEntry.lastCacheHit = !!requestResult.cacheHit;
       sentenceEntry.activityLog = this.buildSentenceActivityLog(
         sentenceEntry,
         responsePayload,
@@ -2366,6 +3832,9 @@ class ZetaApp {
           source: "backend",
         },
       ];
+      sentenceEntry.lastRequest = null;
+      sentenceEntry.lastResponse = null;
+      sentenceEntry.lastCacheHit = false;
       sentenceEntry.activityLog = this.buildSentenceActivityLog(
         sentenceEntry,
         null,
@@ -2415,41 +3884,22 @@ class ZetaApp {
   }
 
   buildBackendPayload(snapshot, reason) {
-    const url = this.settings.backendUrl;
-    const isAnalyzeEndpoint =
-      /\/v1\/(analyze|query|generate)/.test(url) || /modal\.run/.test(url);
-
-    if (isAnalyzeEndpoint) {
-      return {
-        requestUrl: url,
-        requestBody: {
-          text: snapshot.text,
-          context: snapshot.context.slice(0, 6000),
-          theorem_name: "zeta_candidate",
-          imports: ["Std"],
-          temperature: this.settings.mode === "accurate" ? 0.1 : 0.0,
-          max_new_tokens: this.settings.mode === "accurate" ? 220 : 140,
-          skip_lean_check: false,
-          include_raw_model_output: false,
-          zeta_meta: {
-            reason,
-            scope: snapshot.scope,
-            notation: this.settings.notationStrictness,
-          },
-        },
-      };
-    }
-
     return {
-      requestUrl: url,
+      requestUrl: HARDCODED_ANALYZE_URL,
       requestBody: {
-        nl_input: snapshot.text,
-        context: {
-          source_scope: snapshot.scope,
-          notation_strictness: this.settings.notationStrictness,
-          original_context: snapshot.context.slice(0, 7000),
+        text: snapshot.text,
+        context: snapshot.context.slice(0, 6000),
+        theorem_name: "zeta_candidate",
+        imports: ["Std"],
+        temperature: this.settings.mode === "accurate" ? 0.1 : 0.0,
+        max_new_tokens: this.settings.mode === "accurate" ? 220 : 140,
+        skip_lean_check: false,
+        include_raw_model_output: false,
+        zeta_meta: {
+          reason,
+          scope: snapshot.scope,
+          notation: this.settings.notationStrictness,
         },
-        max_iters: this.settings.mode === "accurate" ? 2 : 1,
       },
     };
   }
@@ -2478,6 +3928,7 @@ class ZetaApp {
 
   async sendBackendRequest(request) {
     const attempts = Math.max(0, Number(this.settings.retries) || 0) + 1;
+    const effectiveTimeoutMs = this.resolveEffectiveTimeoutMs(request.requestUrl);
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -2485,7 +3936,7 @@ class ZetaApp {
         attempt,
         attempts,
         url: request.requestUrl,
-        timeoutMs: this.settings.requestTimeoutMs,
+        timeoutMs: effectiveTimeoutMs,
         requestKeys: Object.keys(request.requestBody || {}),
       });
       try {
@@ -2495,7 +3946,7 @@ class ZetaApp {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(request.requestBody),
-          timeoutMs: this.settings.requestTimeoutMs,
+          timeoutMs: effectiveTimeoutMs,
         });
         logTrace("backend_response_received", {
           attempt,
@@ -2538,6 +3989,21 @@ class ZetaApp {
     throw lastError || new Error("Unknown backend error");
   }
 
+  resolveEffectiveTimeoutMs(requestUrl) {
+    const configured = clamp(
+      Number(this.settings.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs,
+      2000,
+      180000
+    );
+    const url = String(requestUrl || "");
+    const isLeanSolve = /\/v1\/lean\/solve(?:\/)?$/.test(url);
+    const minSolveTimeoutMs = this.settings.mode === "accurate" ? 90000 : 70000;
+    if (isLeanSolve && configured < minSolveTimeoutMs) {
+      return minSolveTimeoutMs;
+    }
+    return configured;
+  }
+
   sendHttpMessage(payload) {
     return new Promise((resolve, reject) => {
       if (!chrome?.runtime?.sendMessage) {
@@ -2563,123 +4029,13 @@ class ZetaApp {
             resolve(response);
             return;
           }
-          reject(new Error(response.error || `HTTP error ${response.status || "unknown"}`));
+          const error = new Error(response.error || `HTTP error ${response.status || "unknown"}`);
+          error.status = Number(response.status) || 0; // eslint-disable-line no-param-reassign
+          error.endpointUrl = String(payload?.url || ""); // eslint-disable-line no-param-reassign
+          reject(error);
         }
       );
     });
-  }
-
-  detectLocalMathTypos(scopeText, proseSpans) {
-    const source = String(scopeText || "");
-    const spans = Array.isArray(proseSpans) ? proseSpans : this.extractProseSpans(source);
-    const issues = [];
-
-    const pushIssue = (start, end, message, replacement, category = "math-typo", severity = "warning") => {
-      const safeStart = clamp(Number(start) || 0, 0, source.length);
-      const safeEnd = clamp(Number(end) || safeStart, safeStart, source.length);
-      const targetText = source.slice(safeStart, safeEnd);
-      issues.push({
-        id: `local-${issues.length + 1}`,
-        key: this.buildIssueKey({
-          category,
-          message,
-          targetText,
-          replacement,
-        }),
-        category,
-        severity,
-        message,
-        start: safeStart,
-        end: safeEnd,
-        targetText,
-        replacement: replacement || null,
-        source: "local",
-      });
-    };
-
-    const patternRules = [
-      { regex: /==/g, replacement: "=", message: "Use '=' for Lean equality." },
-      { regex: /\+\+/g, replacement: "+", message: "Duplicate '+' looks like a typo." },
-      { regex: /--+/g, replacement: "-", message: "Repeated '-' may be a math typo." },
-      { regex: /<=</g, replacement: "<=", message: "Malformed relation '<=<'." },
-      { regex: />=>/g, replacement: ">=", message: "Malformed relation '>=>'." },
-      { regex: /\^\^/g, replacement: "^", message: "Duplicate exponent marker '^' detected." },
-    ];
-
-    const scanChunk = (chunkText, baseOffset) => {
-      for (const rule of patternRules) {
-        rule.regex.lastIndex = 0;
-        let match;
-        while ((match = rule.regex.exec(chunkText)) !== null) {
-          const start = baseOffset + match.index;
-          const end = start + match[0].length;
-          pushIssue(start, end, rule.message, rule.replacement);
-        }
-      }
-
-      const stack = [];
-      const openers = {
-        "(": ")",
-        "[": "]",
-        "{": "}",
-      };
-      const closers = {
-        ")": "(",
-        "]": "[",
-        "}": "{",
-      };
-
-      for (let i = 0; i < chunkText.length; i += 1) {
-        const ch = chunkText[i];
-        if (openers[ch]) {
-          stack.push({ ch, index: i });
-        } else if (closers[ch]) {
-          const top = stack[stack.length - 1];
-          if (!top || top.ch !== closers[ch]) {
-            pushIssue(baseOffset + i, baseOffset + i + 1, `Unbalanced '${ch}' bracket.`, null, "math-typo", "error");
-          } else {
-            stack.pop();
-          }
-        }
-      }
-
-      for (const unclosed of stack) {
-        pushIssue(
-          baseOffset + unclosed.index,
-          baseOffset + unclosed.index + 1,
-          `Unclosed '${unclosed.ch}' bracket.`,
-          null,
-          "math-typo",
-          "error"
-        );
-      }
-
-      const dollarCount = (chunkText.match(/\$/g) || []).length;
-      if (dollarCount % 2 !== 0) {
-        const idx = chunkText.lastIndexOf("$");
-        pushIssue(
-          idx === -1 ? baseOffset : baseOffset + idx,
-          idx === -1 ? baseOffset + 1 : baseOffset + idx + 1,
-          "Unpaired '$' math delimiter.",
-          null,
-          "math-typo",
-          "error"
-        );
-      }
-    };
-
-    for (const span of spans) {
-      if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end) || span.end <= span.start) {
-        continue;
-      }
-      const chunkText = source.slice(span.start, span.end);
-      if (!chunkText.trim()) {
-        continue;
-      }
-      scanChunk(chunkText, span.start);
-    }
-
-    return issues;
   }
 
   normalizeBackendResponse(response, scopeText) {
@@ -2830,10 +4186,10 @@ class ZetaApp {
     };
   }
 
-  mergeIssues(localIssues, backendIssues) {
+  mergeIssues(issues) {
     const merged = [];
     const seen = new Set();
-    for (const issue of [...localIssues, ...backendIssues]) {
+    for (const issue of issues) {
       if (!issue || !issue.key) {
         continue;
       }
@@ -2874,10 +4230,53 @@ class ZetaApp {
     return `${compact.slice(0, 89)}...`;
   }
 
+  summarizePipelineDetails(details, maxLength = 520) {
+    if (!details || typeof details !== "object") {
+      return "";
+    }
+    const parts = [];
+    const keys = Object.keys(details).sort();
+    for (const key of keys) {
+      const value = details[key];
+      if (value === null || typeof value === "undefined" || value === "") {
+        continue;
+      }
+      if (typeof value === "object") {
+        parts.push(`${key}=${JSON.stringify(value)}`);
+      } else {
+        parts.push(`${key}=${String(value)}`);
+      }
+    }
+    return this.truncateActivityText(parts.join(", "), maxLength).replace(/\n/g, " ");
+  }
+
+  summarizePipelineOutcome(stage) {
+    const attempted = stage?.attempted !== false;
+    const success = stage?.success;
+    if (!attempted) {
+      return "skipped";
+    }
+    if (success === true) {
+      return "ok";
+    }
+    if (success === false) {
+      return "failed";
+    }
+    return "unknown";
+  }
+
   buildSentenceActivityLog(sentenceEntry, responsePayload, normalized, request, cacheHit, errorMessage = null) {
     const compile = responsePayload?.compile || {};
+    const pipeline = responsePayload?.pipeline && typeof responsePayload.pipeline === "object"
+      ? responsePayload.pipeline
+      : null;
+    const stages = ensureArray(pipeline?.stages);
+    const semantic = pipeline?.semantic && typeof pipeline.semantic === "object"
+      ? pipeline.semantic
+      : null;
     const diagnostics = ensureArray(normalized?.diagnostics);
     const compileSuccess = compile?.success === true;
+    const semanticFailed = semantic?.success === false;
     const level = errorMessage || normalized?.hasError ? "error" : "success";
     const sentenceLabel = this.formatSentenceLabel(sentenceEntry.text);
     const sourceLabel = cacheHit ? "cache" : "aws";
@@ -2893,9 +4292,14 @@ class ZetaApp {
       String(sentenceEntry.chunkId || this.activeChunkId || "innermost"),
       "",
       `Pipeline`,
-      `url: ${String(request?.requestUrl || this.settings.backendUrl)}`,
+      `url: ${String(request?.requestUrl || HARDCODED_ANALYZE_URL)}`,
       `cache_hit: ${cacheHit ? "true" : "false"}`,
       `inference_ms: ${Number.isFinite(sentenceEntry.inferenceMs) ? Math.round(sentenceEntry.inferenceMs) : "--"}`,
+      "",
+      "Result",
+      `overall_failed: ${level === "error" ? "true" : "false"}`,
+      `compile_failed: ${compileSuccess ? "false" : "true"}`,
+      `semantic_failed: ${semanticFailed ? "true" : "false"}`,
     ];
 
     if (errorMessage) {
@@ -2913,6 +4317,53 @@ class ZetaApp {
       `success: ${compileSuccess ? "true" : "false"}`,
       `diagnostics: ${diagnostics.length}`
     );
+
+    if (pipeline) {
+      const totalDurationMs = Number(pipeline?.total_duration_ms);
+      detailLines.push(
+        "",
+        "Pipeline trace",
+        `total_duration_ms: ${Number.isFinite(totalDurationMs) ? Math.round(totalDurationMs) : "--"}`,
+        `stages: ${stages.length}`
+      );
+      for (let index = 0; index < stages.length; index += 1) {
+        const stage = stages[index] || {};
+        const stageName = String(stage?.stage || `stage_${index + 1}`);
+        const attempted = stage?.attempted !== false;
+        const durationMs = Number(stage?.duration_ms);
+        const outcome = this.summarizePipelineOutcome(stage);
+        detailLines.push(
+          `${index + 1}. ${stageName} · ${outcome} · attempted=${attempted ? "true" : "false"} · duration_ms=${
+            Number.isFinite(durationMs) ? Math.round(durationMs) : "--"
+          }`
+        );
+        const detailsText = this.summarizePipelineDetails(stage?.details, 520);
+        if (detailsText) {
+          detailLines.push(`   details: ${detailsText}`);
+        }
+      }
+    } else {
+      detailLines.push("", "Pipeline trace", "unavailable");
+    }
+
+    if (semantic) {
+      detailLines.push(
+        "",
+        "Semantic validation",
+        `success: ${semantic?.success === true ? "true" : "false"}`,
+        `collapsed_to_false: ${semantic?.collapsed_to_false === true ? "true" : "false"}`,
+        `declaration_name: ${String(semantic?.declaration_name || "--")}`
+      );
+      const reasons = ensureArray(semantic?.reasons)
+        .map((reason) => String(reason || "").trim())
+        .filter(Boolean);
+      if (reasons.length > 0) {
+        detailLines.push("reasons:");
+        for (let idx = 0; idx < Math.min(reasons.length, 6); idx += 1) {
+          detailLines.push(`- ${this.truncateActivityText(reasons[idx], 260)}`);
+        }
+      }
+    }
 
     const stdout = this.truncateActivityText(compile?.stdout, 1600);
     const stderr = this.truncateActivityText(compile?.stderr, 1600);
@@ -3036,6 +4487,7 @@ class ZetaApp {
     const score = breakdown.score;
     this.currentHealthScore = score;
     this.currentHealthBreakdown = breakdown;
+    this.syncChatThreadsFromIssues(issues);
     this.currentMacroList = this.extractMacroNames(
       state?.snapshot?.context || state?.snapshot?.text || ""
     );
@@ -3054,6 +4506,7 @@ class ZetaApp {
     } else {
       this.overlay.clear();
     }
+    this.renderTabGhost();
   }
 
   computeHealthBreakdown(issues) {
@@ -3118,15 +4571,18 @@ class ZetaApp {
   }
 
   scheduleRender() {
-    if (!this.lastRun) {
+    if (!this.lastRun && !this.activeAutocomplete && !this.autocompleteInFlight) {
       return;
     }
     window.requestAnimationFrame(() => {
-      if (!this.lastRun || !this.activeAdapter) {
+      if (!this.activeAdapter) {
         return;
       }
-      this.overlay.render(this.activeAdapter, this.lastRun.issues, this.lastRun.snapshot);
-      this.syncPopoverWithCaret();
+      if (this.lastRun) {
+        this.overlay.render(this.activeAdapter, this.lastRun.issues, this.lastRun.snapshot);
+        this.syncPopoverWithCaret();
+      }
+      this.renderTabGhost();
     });
   }
 
@@ -3309,6 +4765,9 @@ class ZetaApp {
     if (this.snapshotSyncTimer) {
       clearTimeout(this.snapshotSyncTimer);
     }
+    if (this.autocompleteTimer) {
+      clearTimeout(this.autocompleteTimer);
+    }
     storageLocalSet({
       [UI_SURFACE_KEY]: {
         surface: "none",
@@ -3320,6 +4779,10 @@ class ZetaApp {
     this.popover.close();
     this.overlay.remove();
     this.panel.remove();
+    if (this.tabGhostElement && this.tabGhostElement.isConnected) {
+      this.tabGhostElement.remove();
+    }
+    this.tabGhostElement = null;
 
     for (const adapter of this.adapters) {
       adapter.destroy();

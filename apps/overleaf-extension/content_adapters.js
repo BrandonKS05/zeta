@@ -72,6 +72,14 @@ class AdapterBase {
     return false;
   }
 
+  insertAtCaret(_text) {
+    return false;
+  }
+
+  getCaretClientRect(_snapshot) {
+    return null;
+  }
+
   setupObservers(onChange, onScroll) {
     const mutationObserver = new MutationObserver(onChange);
     mutationObserver.observe(this.root, {
@@ -191,6 +199,20 @@ class TextareaAdapter extends AdapterBase {
     }
 
     return false;
+  }
+
+  insertAtCaret(text) {
+    const value = String(text || "");
+    if (!value) {
+      return false;
+    }
+    const start = this.element.selectionStart || 0;
+    const end = this.element.selectionEnd || start;
+    this.element.focus();
+    this.element.setSelectionRange(start, end);
+    this.element.setRangeText(value, start, end, "end");
+    this.element.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    return true;
   }
 }
 
@@ -466,6 +488,83 @@ class DomLineAdapter extends AdapterBase {
     selection.removeAllRanges();
     this.content.dispatchEvent(new InputEvent("input", { bubbles: true }));
     return true;
+  }
+
+  insertAtCaret(text) {
+    const value = String(text || "");
+    if (!value) {
+      return false;
+    }
+
+    this.focus();
+    const selection = window.getSelection();
+    if (!selection) {
+      return false;
+    }
+
+    if (
+      selection.rangeCount === 0 ||
+      !selection.anchorNode ||
+      !this.content.contains(selection.anchorNode)
+    ) {
+      const current = this.getVisibleTextSnapshot();
+      const boundary = this.locateBoundary(current, current.text.length);
+      if (!boundary) {
+        return false;
+      }
+      const fallbackRange = document.createRange();
+      fallbackRange.setStart(boundary.node, boundary.offset);
+      fallbackRange.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(fallbackRange);
+    }
+
+    let inserted = false;
+    if (typeof document.execCommand === "function") {
+      inserted = document.execCommand("insertText", false, value);
+    }
+
+    if (!inserted) {
+      if (!selection.rangeCount) {
+        return false;
+      }
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(value);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    this.content.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    return true;
+  }
+
+  getCaretClientRect(snapshot) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return null;
+    }
+    const anchor = selection.anchorNode;
+    if (!anchor || !this.content.contains(anchor)) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0).cloneRange();
+    range.collapse(true);
+    const rects = range.getClientRects();
+    if (rects.length > 0) {
+      return rects[0];
+    }
+
+    const fallback = this.getClientRectsForRange(
+      this.getCaretOffset(snapshot) ?? 0,
+      (this.getCaretOffset(snapshot) ?? 0) + 1,
+      snapshot
+    );
+    return fallback[0] || null;
   }
 }
 

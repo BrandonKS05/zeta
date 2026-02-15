@@ -116,86 +116,143 @@ async def compile_lean(code: str, *, settings: Settings | None = None) -> Compil
         main_file = tmp_dir / "Main.lean"
         main_file.write_text(code, encoding="utf-8")
 
+        compile_attempts: list[tuple[list[str], str, str]] = []
         if project_dir_path:
-            command = [lake_command, "env", lean_command, str(main_file)]
-            cwd = project_dir_path.as_posix()
-        else:
-            command = [lean_command, str(main_file)]
-            cwd = tmp_dir_str
-
-        logger.info(
-            "lean_compile_started command=%s cwd=%s code_chars=%s",
-            " ".join(command),
-            cwd,
-            len(code),
-        )
-
-        try:
-            env = os.environ.copy()
-            if elan_home:
-                env["ELAN_HOME"] = str(elan_home)
-
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-        except FileNotFoundError:
-            message = (
-                f"Lean compiler command not found: '{command[0]}'. "
-                "Install Lean 4 (elan) or set LEAN_COMMAND/LAKE_COMMAND correctly."
-            )
-            diagnostic = Diagnostic(severity="error", message=message)
-            return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(), timeout=lean_timeout_seconds
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            timeout_message = (
-                f"Lean compile timed out after {lean_timeout_seconds:.1f}s"
-            )
-            diagnostic = Diagnostic(severity="error", message=timeout_message)
-            return CompileResult(
-                success=False,
-                stdout="",
-                stderr=timeout_message,
-                diagnostics=[diagnostic],
-            )
-
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
-
-        logger.info(
-            "lean_compile_finished return_code=%s stdout_len=%s stderr_len=%s",
-            process.returncode,
-            len(stdout),
-            len(stderr),
-        )
-        logger.debug("lean stdout full output: %s", stdout)
-        logger.debug("lean stderr full output: %s", stderr)
-
-        diagnostics = parse_lean_diagnostics(f"{stderr}\n{stdout}".strip())
-        if process.returncode != 0 and not any(d.severity == "error" for d in diagnostics):
-            fallback_message = (stderr or stdout or "Lean compile failed with unknown error").strip()
-            diagnostics.append(
-                Diagnostic(
-                    severity="error",
-                    message=truncate_text(fallback_message, 500),
-                    raw=truncate_text(fallback_message, 500),
+            compile_attempts.append(
+                (
+                    [lake_command, "env", lean_command, str(main_file)],
+                    project_dir_path.as_posix(),
+                    "lake",
                 )
             )
+            # If Lake bootstrap/network state is unhealthy, allow non-Mathlib snippets to
+            # fall back to plain `lean` so simple statements still compile.
+            if not uses_mathlib:
+                compile_attempts.append(
+                    (
+                        [lean_command, str(main_file)],
+                        tmp_dir_str,
+                        "standalone",
+                    )
+                )
+        else:
+            compile_attempts.append(([lean_command, str(main_file)], tmp_dir_str, "standalone"))
 
-        success = process.returncode == 0 and not any(d.severity == "error" for d in diagnostics)
+        env = os.environ.copy()
+        if elan_home:
+            env["ELAN_HOME"] = str(elan_home)
 
-        return CompileResult(
-            success=success,
-            stdout=truncate_text(stdout, compiler_output_max_chars),
-            stderr=truncate_text(stderr, compiler_output_max_chars),
-            diagnostics=diagnostics,
-        )
+        last_result: CompileResult | None = None
+        for attempt_index, (command, cwd, mode) in enumerate(compile_attempts, start=1):
+            logger.info(
+                "lean_compile_started attempt=%s/%s mode=%s command=%s cwd=%s code_chars=%s",
+                attempt_index,
+                len(compile_attempts),
+                mode,
+                " ".join(command),
+                cwd,
+                len(code),
+            )
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+            except FileNotFoundError:
+                if attempt_index < len(compile_attempts):
+                    logger.warning(
+                        "lean_compile_command_missing mode=%s command=%s; trying fallback",
+                        mode,
+                        command[0],
+                    )
+                    continue
+                message = (
+                    f"Lean compiler command not found: '{command[0]}'. "
+                    "Install Lean 4 (elan) or set LEAN_COMMAND/LAKE_COMMAND correctly."
+                )
+                diagnostic = Diagnostic(severity="error", message=message)
+                return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])
+
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=lean_timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.communicate()
+                if attempt_index < len(compile_attempts):
+                    logger.warning(
+                        "lean_compile_timeout mode=%s timeout=%ss; trying fallback",
+                        mode,
+                        lean_timeout_seconds,
+                    )
+                    continue
+                timeout_message = f"Lean compile timed out after {lean_timeout_seconds:.1f}s"
+                diagnostic = Diagnostic(severity="error", message=timeout_message)
+                return CompileResult(
+                    success=False,
+                    stdout="",
+                    stderr=timeout_message,
+                    diagnostics=[diagnostic],
+                )
+
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
+
+            logger.info(
+                "lean_compile_finished attempt=%s/%s mode=%s return_code=%s stdout_len=%s stderr_len=%s",
+                attempt_index,
+                len(compile_attempts),
+                mode,
+                process.returncode,
+                len(stdout),
+                len(stderr),
+            )
+            logger.debug("lean stdout full output: %s", stdout)
+            logger.debug("lean stderr full output: %s", stderr)
+
+            diagnostics = parse_lean_diagnostics(f"{stderr}\n{stdout}".strip())
+            if process.returncode != 0 and not any(d.severity == "error" for d in diagnostics):
+                fallback_message = (stderr or stdout or "Lean compile failed with unknown error").strip()
+                diagnostics.append(
+                    Diagnostic(
+                        severity="error",
+                        message=truncate_text(fallback_message, 500),
+                        raw=truncate_text(fallback_message, 500),
+                    )
+                )
+
+            success = process.returncode == 0 and not any(d.severity == "error" for d in diagnostics)
+            result = CompileResult(
+                success=success,
+                stdout=truncate_text(stdout, compiler_output_max_chars),
+                stderr=truncate_text(stderr, compiler_output_max_chars),
+                diagnostics=diagnostics,
+            )
+            if success:
+                if mode == "standalone" and attempt_index > 1:
+                    logger.warning(
+                        "lean_compile_fallback_succeeded primary_failed=true uses_mathlib=%s",
+                        uses_mathlib,
+                    )
+                return result
+
+            last_result = result
+            if attempt_index < len(compile_attempts):
+                logger.warning(
+                    "lean_compile_retrying_fallback previous_mode=%s return_code=%s uses_mathlib=%s",
+                    mode,
+                    process.returncode,
+                    uses_mathlib,
+                )
+
+        if last_result is not None:
+            return last_result
+
+        message = "Lean compile failed: no compile attempts were executed."
+        diagnostic = Diagnostic(severity="error", message=message)
+        return CompileResult(success=False, stdout="", stderr=message, diagnostics=[diagnostic])

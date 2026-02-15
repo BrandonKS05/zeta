@@ -105,7 +105,14 @@ def _poll_async_job(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True, help="Modal endpoint base URL")
+    parser.add_argument(
+        "--endpoint",
+        choices=["analyze", "generate", "complete"],
+        default="analyze",
+        help="Target API endpoint.",
+    )
     parser.add_argument("--text", required=True)
+    parser.add_argument("--cursor-offset", type=int, default=None)
     parser.add_argument("--context", default=None)
     parser.add_argument("--theorem-name", default=None)
     parser.add_argument(
@@ -134,6 +141,8 @@ def main() -> None:
         help="Include per-iteration attempt metadata in the response (thinking mode).",
     )
     parser.add_argument("--include-raw-model-output", action="store_true")
+    parser.add_argument("--max-candidates", type=int, default=3)
+    parser.add_argument("--include-debug", action="store_true")
     parser.add_argument("--api-key", default=None)
     parser.add_argument(
         "--async-jobs",
@@ -160,25 +169,42 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    payload = {
-        "text": args.text,
-        "context": args.context,
-        "theorem_name": args.theorem_name,
-        "imports": [item.strip() for item in args.imports.split(",") if item.strip()],
-        "max_new_tokens": args.max_new_tokens,
-        "temperature": args.temperature,
-        "lean_timeout_seconds": args.lean_timeout_seconds,
-        "mode": args.mode,
-        "max_iters": args.max_iters,
-        "include_iteration_history": args.include_iteration_history,
-        "include_raw_model_output": args.include_raw_model_output,
-    }
+    imports = [item.strip() for item in args.imports.split(",") if item.strip()]
+    payload: dict[str, object]
+    if args.endpoint == "complete":
+        payload = {
+            "text": args.text,
+            "cursor_offset": args.cursor_offset,
+            "context": args.context,
+            "imports": imports,
+            "max_candidates": args.max_candidates,
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "include_debug": args.include_debug,
+        }
+    else:
+        payload = {
+            "text": args.text,
+            "context": args.context,
+            "theorem_name": args.theorem_name,
+            "imports": imports,
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "lean_timeout_seconds": args.lean_timeout_seconds,
+            "mode": args.mode,
+            "max_iters": args.max_iters,
+            "include_iteration_history": args.include_iteration_history,
+            "include_raw_model_output": args.include_raw_model_output,
+        }
     headers = {}
     if args.api_key:
         headers["x-api-key"] = args.api_key
 
     base = args.base_url.rstrip("/")
     session = requests.Session()
+
+    if args.async_jobs and args.endpoint != "analyze":
+        raise RuntimeError("--async-jobs is only supported with --endpoint analyze")
 
     if args.async_jobs:
         submit = session.post(
@@ -220,8 +246,14 @@ def main() -> None:
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
+    endpoint_path = "/v1/analyze"
+    if args.endpoint == "generate":
+        endpoint_path = "/v1/generate"
+    elif args.endpoint == "complete":
+        endpoint_path = "/v1/complete"
+
     resp = session.post(
-        f"{base}/v1/analyze",
+        f"{base}{endpoint_path}",
         json=payload,
         headers=headers,
         timeout=args.request_timeout_seconds,
@@ -230,7 +262,7 @@ def main() -> None:
     if resp.status_code == 303:
         location = resp.headers.get("location")
         if not location:
-            raise RuntimeError("Received HTTP 303 from /v1/analyze without a Location header.")
+            raise RuntimeError(f"Received HTTP 303 from {endpoint_path} without a Location header.")
         result = _follow_modal_redirect(
             session=session,
             base_url=base,

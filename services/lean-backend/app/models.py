@@ -190,3 +190,42 @@ class SolveResponse(BaseModel):
     highlights: HighlightResolveResponse | None = None
     dashboard: DashboardAdvice | None = None
     pipeline: PipelineTrace | None = None
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=6000)
+
+
+class ChatIssueContext(BaseModel):
+    key: str | None = None
+    category: str | None = None
+    severity: Literal["error", "warning", "info", "unknown"] | None = None
+    message: str | None = None
+    target_text: str | None = None
+    replacement: str | None = None
+    line: int | None = None
+    column: int | None = None
+    source: str | None = None
+    sentence: str | None = None
+    chunk_id: str | None = None
+    compile_success: bool | None = None
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
+    semantic_reasons: list[str] = Field(default_factory=list)
+    lean_code: str | None = None
+    request_url: str | None = None
+
+
+class ChatExplainRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=6000)
+    mode: Literal["fast", "accurate", "auto"] | None = None
+    issue: ChatIssueContext = Field(default_factory=ChatIssueContext)
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ChatExplainResponse(BaseModel):
+    answer: str
+    source: Literal["deterministic", "llm"]
+    latency_ms: float | None = None
+    model: str | None = None
+    fallback_reason: str | None = None

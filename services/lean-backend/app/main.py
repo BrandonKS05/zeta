@@ -11,9 +11,11 @@ from fastapi import FastAPI, HTTPException, Request
 from .highlight_llm import resolve_highlights_with_llm
 from .highlight_locator import resolve_highlights
 from .lean_compile import compile_lean
-from .llm_client import interpret_errors
+from .llm_client import explain_issue_chat, interpret_errors
 from .modal_client import ModalClientError, generate_lean
 from .models import (
+    ChatExplainRequest,
+    ChatExplainResponse,
     DashboardAdvice,
     Diagnostic,
     HighlightChunk,
@@ -280,6 +282,61 @@ def build_dashboard_advice(
     )
 
 
+def build_deterministic_chat_answer(payload: ChatExplainRequest) -> str:
+    issue = payload.issue
+    diagnosis = issue.message or "Lean reported a mathematical/formalization issue."
+    severity = issue.severity or "unknown"
+    category = issue.category or "issue"
+    question = payload.question.strip()
+
+    lines: list[str] = []
+    lines.append(f"Diagnosis: {diagnosis}")
+    lines.append(f"This is classified as {severity} in category '{category}'.")
+
+    if issue.sentence:
+        lines.append(f"Sentence under review: {issue.sentence}")
+    if issue.target_text:
+        lines.append(f"Relevant text span: {issue.target_text}")
+
+    if issue.compile_success is False:
+        lines.append(
+            "Lean compilation for this sentence did not succeed, so the generated statement or proof term is inconsistent with Lean's rules."
+        )
+    elif issue.compile_success is True and severity == "error":
+        lines.append(
+            "Lean compiled but this is still marked as an error, usually due to semantic checks (for example, collapsing to False)."
+        )
+
+    diagnostics = issue.diagnostics[:3]
+    if diagnostics:
+        lines.append("Compiler diagnostics:")
+        for diag in diagnostics:
+            location = ""
+            if diag.line is not None and diag.column is not None:
+                location = f" (L{diag.line}:C{diag.column})"
+            lines.append(f"- {diag.message}{location}")
+
+    if issue.semantic_reasons:
+        lines.append("Semantic validation notes:")
+        for reason in issue.semantic_reasons[:3]:
+            if reason:
+                lines.append(f"- {reason}")
+
+    if issue.replacement:
+        lines.append(f"Suggested rewrite to try next: {issue.replacement}")
+    elif issue.target_text:
+        lines.append(
+            "Suggested next step: restate the marked span in stricter mathematical terms and re-run the checker."
+        )
+    else:
+        lines.append(
+            "Suggested next step: simplify the sentence into one claim with explicit quantifiers/types, then re-run."
+        )
+
+    lines.append(f"Answer to your question: {question}")
+    return "\n".join(lines)
+
+
 @app.post("/v1/lean/highlights", response_model=HighlightResolveResponse)
 async def resolve_highlights_endpoint(payload: HighlightResolveRequest) -> HighlightResolveResponse:
     logger.info(
@@ -298,6 +355,48 @@ async def resolve_highlights_endpoint(payload: HighlightResolveRequest) -> Highl
         len(response.unresolved_items),
     )
     return response
+
+
+@app.post("/v1/chat/explain", response_model=ChatExplainResponse)
+async def explain_chat_issue_endpoint(payload: ChatExplainRequest) -> ChatExplainResponse:
+    logger.info(
+        "received chat explain request severity=%s category=%s",
+        payload.issue.severity,
+        payload.issue.category,
+    )
+    started_at = time.perf_counter()
+    source: str = "deterministic"
+    answer: str
+    model: str | None = None
+    fallback_reason: str | None = None
+
+    llm_enabled = settings.enable_llm_interpretation and bool(settings.llm_model)
+    if llm_enabled:
+        try:
+            answer = await explain_issue_chat(payload, settings=settings)
+            source = "llm"
+            model = settings.llm_model
+        except Exception as exc:  # pragma: no cover - endpoint resilience
+            fallback_reason = str(exc)
+            logger.warning("chat llm explanation failed, using deterministic fallback: %s", exc)
+            answer = build_deterministic_chat_answer(payload)
+    else:
+        answer = build_deterministic_chat_answer(payload)
+
+    latency_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "chat explain complete source=%s latency_ms=%.2f fallback=%s",
+        source,
+        latency_ms,
+        bool(fallback_reason),
+    )
+    return ChatExplainResponse(
+        answer=answer,
+        source=source,
+        latency_ms=latency_ms,
+        model=model,
+        fallback_reason=fallback_reason,
+    )
 
 
 def run_semantic_validation(
