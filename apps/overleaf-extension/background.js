@@ -66,6 +66,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           durationMs,
         });
       }
+      if (!response.ok) {
+        const bodyPreview = typeof text === "string" ? text.slice(0, 800) : String(text);
+        console.warn(`${zetaLogPrefix("bg")} http_response_error (see what server returned)`, {
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          durationMs,
+          bodyPreview,
+          jsonKeys: json && typeof json === "object" ? Object.keys(json) : null,
+          jsonDetail: json?.detail,
+        });
+      }
       if (isComplete && json) {
         console.info(`${zetaLogPrefix("bg")} complete response`, {
           durationMs,

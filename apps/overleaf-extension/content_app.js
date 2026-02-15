@@ -5054,6 +5054,16 @@ class ZetaApp {
             resolve(response);
             return;
           }
+          console.warn(
+            "[zeta:content] Backend returned error (see what server actually returned):",
+            {
+              url: payload?.url,
+              status: response.status,
+              statusText: response.statusText,
+              bodyPreview: typeof response.text === "string" ? response.text.slice(0, 600) : response.text,
+              json: response.json,
+            }
+          );
           const error = new Error(response.error || `HTTP error ${response.status || "unknown"}`);
           error.status = Number(response.status) || 0; // eslint-disable-line no-param-reassign
           error.endpointUrl = String(payload?.url || ""); // eslint-disable-line no-param-reassign
@@ -5981,6 +5991,35 @@ class ZetaApp {
       );
     }
 
+    if (stages.length > 0) {
+      detailLines.push("", "Pipeline trace");
+      for (let index = 0; index < stages.length; index += 1) {
+        const stage = stages[index];
+        const outcome = this.summarizePipelineOutcome(stage);
+        const attempted = stage?.success !== undefined && stage?.success !== null;
+        const durationLabel = Number.isFinite(Number(stage?.duration_ms))
+          ? String(Math.max(0, Math.round(Number(stage.duration_ms))))
+          : "--";
+        detailLines.push(
+          `${index + 1}. ${String(stage?.stage || "stage")} · ${outcome} · attempted=${attempted} · duration_ms=${durationLabel}`
+        );
+      }
+    } else {
+      const liveTrace = ensureArray(sentenceEntry?.livePipelineTrace);
+      if (liveTrace.length > 0) {
+        detailLines.push("", "Pipeline trace");
+        for (let index = 0; index < liveTrace.length; index += 1) {
+          const stage = liveTrace[index];
+          const durationLabel = Number.isFinite(Number(stage?.durationMs))
+            ? String(Math.max(0, Math.round(Number(stage.durationMs))))
+            : "--";
+          detailLines.push(
+            `${index + 1}. ${String(stage?.label || "step")} · ${String(stage?.outcome || "unknown")} · attempted=true · duration_ms=${durationLabel}`
+          );
+        }
+      }
+    }
+
     const shouldIncludeDetail = level === "error";
     if (shouldIncludeDetail) {
       detailLines.push(
@@ -5992,10 +6031,13 @@ class ZetaApp {
       );
     }
 
+    const hasPipelineStages = stages.length > 0;
+    const hasLivePipelineTrace = ensureArray(sentenceEntry?.livePipelineTrace).length > 0;
+    const includeDetailForViewPipeline = hasPipelineStages || hasLivePipelineTrace || shouldIncludeDetail || detailLines.length >= 2;
     return {
       message,
       level,
-      detailText: shouldIncludeDetail ? detailLines.join("\n") : "",
+      detailText: includeDetailForViewPipeline ? detailLines.join("\n") : "",
     };
   }
 

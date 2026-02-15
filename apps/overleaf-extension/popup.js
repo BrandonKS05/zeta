@@ -778,7 +778,7 @@
     }
   }
 
-  function renderPipelineModal(entry, parsedTrace) {
+  function renderPipelineModal(entry, parsedTrace, detailText) {
     ensurePipelineModal();
     if (!pipelineModalRoot || !pipelineModalTitle || !pipelineModalMeta || !pipelineModalBody) {
       return;
@@ -823,6 +823,14 @@
       empty.className = "zeta-hint";
       empty.textContent = "No structured pipeline stages were found for this activity.";
       pipelineModalBody.appendChild(empty);
+      const rawDetail = typeof detailText === "string" ? detailText : String(entry?.detailText || "").trim();
+      if (rawDetail) {
+        const raw = document.createElement("pre");
+        raw.className = "zeta-activity-detail";
+        raw.style.marginTop = "8px";
+        raw.textContent = rawDetail;
+        pipelineModalBody.appendChild(raw);
+      }
       return;
     }
 
@@ -878,7 +886,7 @@
 
   function openPipelineModal(entry, detailText) {
     const parsedTrace = parseActivityPipelineTrace(detailText);
-    renderPipelineModal(entry, parsedTrace);
+    renderPipelineModal(entry, parsedTrace, detailText);
     if (!pipelineModalRoot || !pipelineModalCard) {
       return;
     }

@@ -150,7 +150,10 @@ def _build_modal_payload(
     if _uses_backend_payload_shape(endpoint_url):
         return {
             "nl_input": prompt,
-            "context": context_payload,
+            "context": _compact_dict({
+                "theorem_name": theorem_name,
+                "imports": imports,
+            }),
             "max_iters": max_iters,
         }
 
@@ -183,10 +186,10 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{target_suffix}"
         rewritten = True
     elif path == "" or path == "/":
-        path = target_suffix
-        rewritten = True
+        path = ""
+        rewritten = False
 
-    resolved = urlunsplit((parsed.scheme, parsed.netloc, path or "/", parsed.query, parsed.fragment))
+    resolved = urlunsplit((parsed.scheme, parsed.netloc, path if path else "/", parsed.query, parsed.fragment))
     if rewritten:
         logger.info(
             "modal_endpoint_normalized configured=%s resolved=%s use_generate=%s",
@@ -304,6 +307,19 @@ async def generate_lean(
                     f"Modal server error {response.status_code}: {response.text[:500]}"
                 )
             if response.status_code >= 400:
+                logger.warning(
+                    "modal_request_failed (request that got this response): url=%s method=POST status=%s response_preview=%s payload_keys=%s nl_input_len=%s",
+                    endpoint_url,
+                    response.status_code,
+                    (response.text or "")[:400],
+                    list(payload.keys()),
+                    len(str(payload.get("nl_input", payload.get("prompt", "")))),
+                )
+                logger.info(
+                    "modal_request_body_for_debug url=%s body=%s",
+                    endpoint_url,
+                    payload,
+                )
                 raise ModalClientError(
                     f"Modal returned HTTP {response.status_code}: {response.text[:500]}"
                 )
