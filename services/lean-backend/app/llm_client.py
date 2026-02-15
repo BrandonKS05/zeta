@@ -650,7 +650,10 @@ async def interpret_errors(
         ],
     }
     if _should_enforce_json_mode(endpoint):
-        payload["response_format"] = _interpret_json_response_format()
+        if _use_responses_api(settings):
+            payload["text"] = {"format": _interpret_json_response_format()}
+        else:
+            payload["response_format"] = _interpret_json_response_format()
     if settings.llm_max_completion_tokens > 0:
         payload["max_completion_tokens"] = settings.llm_max_completion_tokens
 
