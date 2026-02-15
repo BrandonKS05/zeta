@@ -1115,6 +1115,38 @@ class ZetaApp {
     return value.trim() ? value : "";
   }
 
+  normalizeAutocompleteBoundarySpacing(prefixText, insertionText, suffixText = "") {
+    const prefix = String(prefixText || "");
+    const suffix = String(suffixText || "");
+    let value = String(insertionText || "").replace(/\r/g, "");
+    if (!value) {
+      return "";
+    }
+
+    const prefixEndsWhitespace = /\s$/.test(prefix);
+    const suffixStartsWhitespace = /^\s/.test(suffix);
+
+    if (prefixEndsWhitespace) {
+      value = value.trimStart();
+    } else {
+      const startsWhitespace = /^\s/.test(value);
+      const startsClosingPunctuation = /^[,.;:!?)}\]]/.test(value);
+      if (startsWhitespace) {
+        value = value.replace(/^\s+/, " ");
+      } else if (prefix && /[A-Za-z0-9)\]}]$/.test(prefix) && !startsClosingPunctuation) {
+        value = ` ${value}`;
+      }
+    }
+
+    if (suffixStartsWhitespace || /^[,.;:!?)}\]]/.test(suffix)) {
+      value = value.replace(/\s+$/, "");
+    }
+
+    value = value.replace(/\s+\n/g, "\n");
+    value = value.replace(/\n\s+/g, "\n");
+    return value.trim() ? value : "";
+  }
+
   isOverleafSourceAdapter(adapter) {
     if (!adapter?.root || !(adapter.root instanceof Element)) {
       return false;
@@ -1299,15 +1331,20 @@ class ZetaApp {
         suffix,
         context.suffixText
       );
-      if (!insertion.trim()) {
+      const boundarySafeInsertion = this.normalizeAutocompleteBoundarySpacing(
+        context.prefixText,
+        insertion,
+        context.suffixText
+      );
+      if (!boundarySafeInsertion.trim()) {
         continue;
       }
-      const key = insertion.trim().toLowerCase();
+      const key = boundarySafeInsertion.trim().toLowerCase();
       if (seen.has(key)) {
         continue;
       }
       seen.add(key);
-      normalized.push(insertion);
+      normalized.push(boundarySafeInsertion);
       if (normalized.length >= 3) {
         break;
       }
@@ -1630,9 +1667,14 @@ class ZetaApp {
       return false;
     }
 
-    const insertion = this.normalizeAutocompleteInsertion(
+    let insertion = this.normalizeAutocompleteInsertion(
       context.prefixText,
       completion,
+      context.suffixText
+    );
+    insertion = this.normalizeAutocompleteBoundarySpacing(
+      context.prefixText,
+      insertion,
       context.suffixText
     );
     if (!insertion) {
@@ -1662,7 +1704,7 @@ class ZetaApp {
     if (!event || String(event.key || "").toLowerCase() !== "tab") {
       return false;
     }
-    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
       return false;
     }
     if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
@@ -1677,9 +1719,12 @@ class ZetaApp {
       if (target.closest(".zeta-shell, .zeta-popup-mirror, .zeta-suggestion-popover")) {
         return false;
       }
-      if (!this.activeAdapter.containsNode(target)) {
-        return false;
-      }
+    }
+    const targetInAdapter = target instanceof Element && this.activeAdapter.containsNode(target);
+    const focused = document.activeElement;
+    const focusedInAdapter = focused instanceof Element && this.activeAdapter.containsNode(focused);
+    if (!targetInAdapter && !focusedInAdapter) {
+      return false;
     }
     const accepted = this.acceptActiveAutocomplete("tab");
     if (!accepted) {

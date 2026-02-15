@@ -786,6 +786,9 @@ body[data-zeta-embedded="1"] .zeta-panel {
   padding: 8px;
   border: 1px solid var(--zeta-border);
   background: color-mix(in srgb, var(--zeta-surface) 94%, var(--zeta-nav) 6%);
+  max-height: min(54vh, 360px);
+  overflow: hidden;
+  align-self: start;
 }
 
 .zeta-assistant-chat {
@@ -803,6 +806,7 @@ body[data-zeta-embedded="1"] .zeta-panel {
 }
 
 .zeta-list--assistant-threads {
+  max-height: 100%;
   overflow: auto;
 }
 
