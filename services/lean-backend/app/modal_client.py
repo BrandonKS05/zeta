@@ -446,6 +446,27 @@ def _build_herald_autocomplete_payload(
     }
 
 
+def _build_complete_endpoint_autocomplete_payload(request_payload: dict[str, Any]) -> dict[str, Any]:
+    """Payload for strict /v1/complete endpoints (translator-modal CompleteRequest schema)."""
+    text = request_payload.get("text") or ""
+    cursor = request_payload.get("cursor_offset")
+    if cursor is None or (isinstance(text, str) and isinstance(cursor, int) and cursor > len(text)):
+        cursor = len(text) if isinstance(text, str) else 0
+    imports = list(request_payload.get("imports") or ["Std"])
+    raw_context = request_payload.get("context")
+    context_str = raw_context if isinstance(raw_context, str) else ""
+    return {
+        "text": text,
+        "cursor_offset": cursor,
+        "context": context_str,
+        "imports": imports,
+        "max_candidates": int(request_payload.get("max_candidates") or 3),
+        "max_new_tokens": min(int(request_payload.get("max_new_tokens") or 24), 128),
+        "temperature": float(request_payload.get("temperature") or 0.35),
+        "include_debug": bool(request_payload.get("include_debug") or False),
+    }
+
+
 def _build_backend_shape_autocomplete_payload(request_payload: dict[str, Any]) -> dict[str, Any]:
     """Compatibility payload for translator endpoints that expect nl_input/context/max_iters."""
     text = request_payload.get("text") or ""
@@ -726,7 +747,13 @@ async def complete_autocomplete(
     async with httpx.AsyncClient(timeout=timeout) as client:
         last_http_error: ModalClientError | None = None
         for index, candidate_url in enumerate(url_candidates):
-            payload_for_attempt = payload
+            path = urlsplit(candidate_url).path.rstrip("/")
+            uses_complete_schema = path.endswith(_COMPLETE_ENDPOINT_SUFFIX)
+            payload_for_attempt = (
+                _build_complete_endpoint_autocomplete_payload(request_payload)
+                if uses_complete_schema
+                else payload
+            )
             try:
                 response = await client.post(candidate_url, json=payload_for_attempt, headers=headers)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
