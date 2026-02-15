@@ -171,7 +171,9 @@ async def generate_lean(
 
     headers = {"Content-Type": "application/json"}
     if settings.modal_api_key:
+        # Support both gateway-style bearer auth and translator-modal's x-api-key auth.
         headers["Authorization"] = f"Bearer {settings.modal_api_key}"
+        headers["x-api-key"] = settings.modal_api_key
 
     context_payload = context or {}
     payload = _build_modal_payload(

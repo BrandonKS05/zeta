@@ -13,6 +13,17 @@ zeta now ships a real frontend shell for math statement checking:
 - persisted settings (`backend URL`, mode, scope, timeout, retries, notation strictness)
 - keyboard shortcuts for issue navigation
 
+## LaTeX delimiter coverage
+
+Chunk/graph delimiters now include mainstream structural LaTeX commands, not only sectioning.
+
+- Sectioning: `\part`, `\chapter`, `\section`, `\subsection`, `\subsubsection`, `\paragraph`, `\subparagraph`
+- Front matter: `\title`, `\author`, `\date`, `\subtitle`, `\institute`, `\thanks`, `\maketitle`
+- Document structure: `\tableofcontents`, `\listoffigures`, `\listoftables`, `\appendix`, `\frontmatter`, `\mainmatter`, `\backmatter`
+- Bibliography: `\bibliography`, `\bibliographystyle`, `\addbibresource`, `\printbibliography`
+- Cross-ref/citations: `\label`, `\ref`, `\eqref`, `\pageref`, `\autoref`, `\cref`, `\Cref`, `\cite`, `\citet`, `\citep`
+- Layout/page controls: `\newpage`, `\clearpage`, `\cleardoublepage`, `\pagebreak`, `\linebreak`, `\vspace`, `\hspace`, `\smallskip`, `\medskip`, `\bigskip`
+
 ## Content Script Organization
 
 The injected frontend is split into multiple files for maintainability:

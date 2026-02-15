@@ -8,6 +8,7 @@
     IGNORED_KEY,
     TELEMETRY_KEY,
     PANEL_SNAPSHOT_KEY,
+    UI_SURFACE_KEY,
     CACHE_TTL_MS,
     DEFAULT_SETTINGS,
     SEVERITY_WEIGHT,
@@ -32,6 +33,121 @@
     ZetaPanel,
   } = zeta;
 
+const LATEX_SECTION_LEVELS = Object.freeze({
+  part: 0,
+  chapter: 0,
+  section: 1,
+  subsection: 2,
+  subsubsection: 3,
+  paragraph: 4,
+  subparagraph: 5,
+});
+
+const LATEX_SECTION_COMMAND_NAMES = Object.freeze(Object.keys(LATEX_SECTION_LEVELS));
+
+const LATEX_DELIMITER_COMMAND_SPECS = Object.freeze([
+  { commandName: "title", requiresBracedArg: true },
+  { commandName: "author", requiresBracedArg: true },
+  { commandName: "date", requiresBracedArg: true },
+  { commandName: "subtitle", requiresBracedArg: true },
+  { commandName: "institute", requiresBracedArg: true },
+  { commandName: "thanks", requiresBracedArg: true },
+  { commandName: "dedicatory", requiresBracedArg: true },
+  { commandName: "keywords", requiresBracedArg: true },
+  { commandName: "keyword", requiresBracedArg: true },
+  { commandName: "maketitle", requiresBracedArg: false },
+  { commandName: "tableofcontents", requiresBracedArg: false },
+  { commandName: "listoffigures", requiresBracedArg: false },
+  { commandName: "listoftables", requiresBracedArg: false },
+  { commandName: "listofalgorithms", requiresBracedArg: false },
+  { commandName: "listoftheorems", requiresBracedArg: false },
+  { commandName: "appendix", requiresBracedArg: false },
+  { commandName: "frontmatter", requiresBracedArg: false },
+  { commandName: "mainmatter", requiresBracedArg: false },
+  { commandName: "backmatter", requiresBracedArg: false },
+  { commandName: "input", requiresBracedArg: true },
+  { commandName: "include", requiresBracedArg: true },
+  { commandName: "includeonly", requiresBracedArg: true },
+  { commandName: "bibliography", requiresBracedArg: true },
+  { commandName: "bibliographystyle", requiresBracedArg: true },
+  { commandName: "addbibresource", requiresBracedArg: true },
+  { commandName: "printbibliography", requiresBracedArg: false },
+  { commandName: "label", requiresBracedArg: true },
+  { commandName: "ref", requiresBracedArg: true },
+  { commandName: "eqref", requiresBracedArg: true },
+  { commandName: "pageref", requiresBracedArg: true },
+  { commandName: "autoref", requiresBracedArg: true },
+  { commandName: "cref", requiresBracedArg: true },
+  { commandName: "Cref", requiresBracedArg: true },
+  { commandName: "cite", requiresBracedArg: true },
+  { commandName: "citet", requiresBracedArg: true },
+  { commandName: "citep", requiresBracedArg: true },
+  { commandName: "citealt", requiresBracedArg: true },
+  { commandName: "citealp", requiresBracedArg: true },
+  { commandName: "url", requiresBracedArg: true },
+  { commandName: "href", requiresBracedArg: true },
+  { commandName: "footnote", requiresBracedArg: true },
+  { commandName: "includegraphics", requiresBracedArg: true },
+  { commandName: "newpage", requiresBracedArg: false },
+  { commandName: "clearpage", requiresBracedArg: false },
+  { commandName: "cleardoublepage", requiresBracedArg: false },
+  { commandName: "pagebreak", requiresBracedArg: false },
+  { commandName: "linebreak", requiresBracedArg: false },
+  { commandName: "smallskip", requiresBracedArg: false },
+  { commandName: "medskip", requiresBracedArg: false },
+  { commandName: "bigskip", requiresBracedArg: false },
+  { commandName: "vspace", requiresBracedArg: true },
+  { commandName: "hspace", requiresBracedArg: true },
+]);
+
+function escapeRegexLiteral(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildLatexCommandRegex(commandName, requiresBracedArg) {
+  const escaped = escapeRegexLiteral(commandName);
+  const optionalArgPattern = "(?:\\s*\\[[^\\]]*\\])?";
+  const mandatoryBracedPattern = "\\s*\\{[^{}]*\\}";
+  if (requiresBracedArg) {
+    return new RegExp(`\\\\${escaped}\\*?${optionalArgPattern}${mandatoryBracedPattern}`, "g");
+  }
+  return new RegExp(`\\\\${escaped}\\*?${optionalArgPattern}`, "g");
+}
+
+const LATEX_SECTION_BLOCK_REGEX = new RegExp(
+  `\\\\(${LATEX_SECTION_COMMAND_NAMES.map(escapeRegexLiteral).join("|")})\\*?\\s*(?:\\[[^\\]]*\\])?\\s*\\{[^}]*\\}`,
+  "g"
+);
+
+const LATEX_DELIMITER_COMMAND_REGEX_SPECS = Object.freeze(
+  LATEX_DELIMITER_COMMAND_SPECS.map((spec) => ({
+    commandName: String(spec.commandName || "").toLowerCase(),
+    regex: buildLatexCommandRegex(spec.commandName, !!spec.requiresBracedArg),
+  }))
+);
+
+const NON_ANALYZABLE_LATEX_COMMANDS = new Set([
+  "documentclass",
+  "usepackage",
+  "begin",
+  "end",
+  "newcommand",
+  "renewcommand",
+  "providecommand",
+  "declaremathoperator",
+  ...LATEX_SECTION_COMMAND_NAMES.map((name) => String(name || "").toLowerCase()),
+  ...LATEX_DELIMITER_COMMAND_REGEX_SPECS.map((spec) => spec.commandName),
+  "label",
+  "ref",
+  "eqref",
+  "pageref",
+  "autoref",
+  "cref",
+  "cite",
+  "citet",
+  "citep",
+]);
+
 class ZetaApp {
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS };
@@ -44,6 +160,7 @@ class ZetaApp {
     );
 
     this.panel = new ZetaPanel({
+      onTogglePanel: (open) => this.togglePanel(open),
       onRunNow: () => this.runAnalysis("manual", true),
       onRegenerate: () => this.runAnalysis("regenerate", true),
       onUndoLast: () => this.undoLastAction(),
@@ -62,16 +179,32 @@ class ZetaApp {
     this.activeAdapter = null;
     this.scanTimer = null;
     this.scheduledTimer = null;
+    this.snapshotSyncTimer = null;
     this.activeRequestId = 0;
     this.lastAnalyzedSignature = "";
     this.lastRun = null;
     this.focusedIssueIndex = -1;
     this.responseCache = new Map();
     this.sentenceCache = new Map();
+    this.chunkTree = null;
+    this.activeChunkId = null;
     this.lastInferenceMs = null;
     this.lastTelemetry = null;
     this.lastPanelSnapshotSignature = "";
     this.currentHealthScore = 100;
+    this.currentHealthBreakdown = {
+      score: 100,
+      issueCount: 0,
+      severityCounts: { error: 0, warning: 0, info: 0, unknown: 0 },
+      rawSeverityPenalty: 0,
+      normalizedSeverityPenalty: 0,
+      densityPenalty: 0,
+      pendingPenalty: 0,
+      cachedSentences: 0,
+      pendingSentences: 0,
+      analyzedSentences: 0,
+      coverageRatio: 1,
+    };
     this.currentSentenceCached = 0;
     this.currentSentencePending = 0;
     this.currentMacroList = [];
@@ -92,6 +225,12 @@ class ZetaApp {
     await this.loadSettings();
     this.panel.setSettings(this.settings);
     this.panel.setOpen(!!this.settings.panelOpen);
+    storageLocalSet({
+      [UI_SURFACE_KEY]: {
+        surface: "none",
+        updatedAt: Date.now(),
+      },
+    });
     this.panel.setStatus("idle", "Idle");
     this.panel.setGlobalState("ready", "global · waiting");
     this.panel.setInferenceTime(null, 0);
@@ -106,6 +245,8 @@ class ZetaApp {
     this.persistPanelSnapshot({
       status: "idle",
       issueCount: 0,
+      chunkTree: null,
+      activeChunkId: null,
     });
 
     this.refreshAdapters();
@@ -191,6 +332,20 @@ class ZetaApp {
   }
 
   handleRuntimeMessage(message, _sender, sendResponse) {
+    if (message && message.type === "zeta-ui-surface") {
+      const surface = String(message.surface || "").toLowerCase();
+      console.info("[zeta:content] ui_surface_received", {
+        ts: new Date().toISOString(),
+        surface,
+      });
+      if (surface === "popup" && this.settings.panelOpen) {
+        this.settings.panelOpen = false;
+        this.panel.setOpen(false);
+      }
+      sendResponse?.({ ok: true, surface });
+      return true;
+    }
+
     if (!message || message.type !== "zeta-popup-action") {
       return false;
     }
@@ -241,6 +396,15 @@ class ZetaApp {
   }
 
   handleStorageChange(changes, areaName) {
+    if (areaName === "local" && changes[UI_SURFACE_KEY]?.newValue) {
+      const nextSurface = String(changes[UI_SURFACE_KEY].newValue.surface || "").toLowerCase();
+      if (nextSurface === "popup" && this.settings.panelOpen) {
+        this.settings.panelOpen = false;
+        this.panel.setOpen(false);
+      }
+      return;
+    }
+
     if (areaName !== "sync") {
       return;
     }
@@ -263,7 +427,7 @@ class ZetaApp {
       nextSettings.mode = normalizeMode(nextSettings.mode);
       nextSettings.scope = normalizeScope(nextSettings.scope);
       nextSettings.theme = "light";
-      nextSettings.panelOpen = false;
+      nextSettings.panelOpen = this.settings.panelOpen;
       this.settings = nextSettings;
       changed = true;
     }
@@ -325,10 +489,11 @@ class ZetaApp {
 
       adapter.setupObservers(
         () => {
-          if (adapter === this.activeAdapter && this.settings.checkOnType) {
-            this.scheduleAnalysis("typing");
-          }
           if (adapter === this.activeAdapter) {
+            this.scheduleChunkSnapshotSync("typing");
+            if (this.settings.checkOnType) {
+              this.scheduleAnalysis("typing");
+            }
             this.scheduleRender();
           }
         },
@@ -403,6 +568,7 @@ class ZetaApp {
     this.activeAdapter = adapter;
     this.panel.setStatus("idle", `Ready on ${adapter.constructor.name}`);
     this.panel.setGlobalState("ready", "global · editor connected");
+    this.scheduleChunkSnapshotSync("adapter-switch");
     this.scheduleAnalysis("adapter-switch", true);
   }
 
@@ -542,7 +708,6 @@ class ZetaApp {
     next.mode = normalizeMode(next.mode);
     next.scope = normalizeScope(next.scope);
     next.theme = "light";
-    next.panelOpen = false;
 
     await storageSyncSet({
       [SETTINGS_KEY]: next,
@@ -577,18 +742,27 @@ class ZetaApp {
 
   async togglePanel(forceOpen) {
     const nextOpen = !!forceOpen;
+    this.settings.panelOpen = nextOpen;
+    this.panel.setOpen(nextOpen);
+    storageLocalSet({
+      [UI_SURFACE_KEY]: {
+        surface: nextOpen ? "side" : "none",
+        updatedAt: Date.now(),
+      },
+    });
     if (nextOpen) {
-      this.panel.setOpen(false);
-      return;
+      this.scheduleChunkSnapshotSync("typing");
     }
-    await this.updateSettings({ panelOpen: false }, false);
-    this.panel.setOpen(false);
   }
 
   setSentenceStats(cachedCount, pendingCount) {
     this.currentSentenceCached = Math.max(0, Number(cachedCount) || 0);
     this.currentSentencePending = Math.max(0, Number(pendingCount) || 0);
+    const nextHealth = this.computeHealthBreakdown(this.lastRun?.issues || []);
+    this.currentHealthScore = nextHealth.score;
+    this.currentHealthBreakdown = nextHealth;
     this.panel.setSentenceStats(this.currentSentenceCached, this.currentSentencePending);
+    this.panel.setHealth(this.currentHealthScore);
     this.persistPanelSnapshot();
   }
 
@@ -621,8 +795,10 @@ class ZetaApp {
   }
 
   persistPanelSnapshot(partial = {}) {
+    const serializedChunkTree = this.serializeChunkTree(this.chunkTree);
     const next = {
       healthScore: Math.round(this.currentHealthScore),
+      healthBreakdown: this.currentHealthBreakdown,
       sentenceCached: this.currentSentenceCached,
       sentencePending: this.currentSentencePending,
       issueCount: ensureArray(this.lastRun?.issues).length,
@@ -633,6 +809,8 @@ class ZetaApp {
       macros: this.currentMacroList.slice(0, 80),
       lastShortcut: this.lastShortcut,
       shortcutPulseId: this.shortcutPulseId,
+      chunkTree: serializedChunkTree,
+      activeChunkId: this.activeChunkId,
       updatedAt: Date.now(),
       ...partial,
     };
@@ -640,6 +818,12 @@ class ZetaApp {
     const signature = shortHash(
       JSON.stringify({
         healthScore: next.healthScore,
+        healthBreakdown: next.healthBreakdown
+          ? `${next.healthBreakdown.score}|${next.healthBreakdown.issueCount}|` +
+            `${next.healthBreakdown.normalizedSeverityPenalty}|${next.healthBreakdown.densityPenalty}|` +
+            `${next.healthBreakdown.pendingPenalty}|${next.healthBreakdown.cachedSentences}|` +
+            `${next.healthBreakdown.pendingSentences}`
+          : null,
         sentenceCached: next.sentenceCached,
         sentencePending: next.sentencePending,
         issueCount: next.issueCount,
@@ -650,6 +834,18 @@ class ZetaApp {
         macros: next.macros,
         lastShortcut: next.lastShortcut,
         shortcutPulseId: next.shortcutPulseId,
+        chunkTreeHash: shortHash(
+          JSON.stringify(
+            ensureArray(next.chunkTree?.chunks).map((chunk) => (
+              `${chunk.chunkId}|${chunk.parentId || ""}|${chunk.start}|${chunk.end}|${chunk.type || ""}|` +
+              `${shortHash(String(chunk.text || ""))}|` +
+              `${ensureArray(chunk.sentences).map((sentence) => (
+                `${sentence.start}|${sentence.end}|${shortHash(String(sentence.text || ""))}`
+              )).join(";")}`
+            ))
+          )
+        ),
+        activeChunkId: next.activeChunkId,
       })
     );
 
@@ -661,6 +857,37 @@ class ZetaApp {
     storageLocalSet({
       [PANEL_SNAPSHOT_KEY]: next,
     });
+  }
+
+  serializeChunkTree(chunkTree) {
+    if (!chunkTree || typeof chunkTree !== "object") {
+      return null;
+    }
+
+    const chunks = ensureArray(chunkTree.chunks).map((chunk) => ({
+      chunkId: chunk.chunkId,
+      parentId: chunk.parentId || null,
+      type: chunk.type || "text",
+      start: Number.isInteger(chunk.start) ? chunk.start : 0,
+      end: Number.isInteger(chunk.end) ? chunk.end : 0,
+      text: String(chunk.text || ""),
+      sectionName: chunk.sectionName || null,
+      sectionTitle: chunk.sectionTitle || null,
+      envName: chunk.envName || null,
+      commandName: chunk.commandName || null,
+      sentences: ensureArray(chunk.sentences).map((sentence) => ({
+        sentenceId: sentence.sentenceId || null,
+        start: Number.isInteger(sentence.start) ? sentence.start : 0,
+        end: Number.isInteger(sentence.end) ? sentence.end : 0,
+        text: String(sentence.text || ""),
+      })),
+    }));
+
+    return {
+      chunks,
+      activeChunkId: chunkTree.activeChunkId || null,
+      leafCount: ensureArray(chunkTree.leafChunks).length,
+    };
   }
 
   persistTelemetry(partial = {}) {
@@ -713,6 +940,54 @@ class ZetaApp {
     }, delay);
   }
 
+  scheduleChunkSnapshotSync(reason) {
+    if (!this.activeAdapter) {
+      return;
+    }
+    if (this.snapshotSyncTimer) {
+      clearTimeout(this.snapshotSyncTimer);
+      this.snapshotSyncTimer = null;
+    }
+    const delay = reason === "typing" ? 90 : 0;
+    this.snapshotSyncTimer = window.setTimeout(() => {
+      this.snapshotSyncTimer = null;
+      this.syncChunkSnapshotFromEditor(reason);
+    }, delay);
+  }
+
+  syncChunkSnapshotFromEditor(reason = "typing") {
+    const adapter = this.activeAdapter;
+    if (!adapter || !adapter.isConnected()) {
+      return;
+    }
+    const effectiveScope = this.resolveScopeForReason(reason);
+    const snapshot = adapter.getScopeSnapshot(effectiveScope);
+    const scopeText = String(snapshot.text || "");
+
+    if (!scopeText.trim()) {
+      this.chunkTree = null;
+      this.activeChunkId = null;
+      this.persistPanelSnapshot({
+        chunkTree: null,
+        activeChunkId: null,
+      });
+      return;
+    }
+
+    const caretOffset = this.resolveCaretOffsetInScope(snapshot, adapter);
+    const chunkWindow = this.resolveChunkWindow(snapshot, caretOffset);
+    this.chunkTree = this.buildChunkTree(
+      chunkWindow.text,
+      chunkWindow.caretOffset,
+      chunkWindow.baseOffset
+    );
+    this.activeChunkId = this.chunkTree?.activeChunkId || null;
+    this.persistPanelSnapshot({
+      chunkTree: this.serializeChunkTree(this.chunkTree),
+      activeChunkId: this.activeChunkId,
+    });
+  }
+
   resolveScopeForReason(reason) {
     // Always analyze the full editor while typing to keep backend context complete.
     if (reason === "typing" || reason === "init" || reason === "adapter-switch") {
@@ -750,6 +1025,8 @@ class ZetaApp {
         diagnostics: [],
         issues: [],
       };
+      this.chunkTree = null;
+      this.activeChunkId = null;
       this.focusedIssueIndex = -1;
       this.panel.setStatus("idle", "Nothing to analyze in this scope.");
       this.panel.setIssues([], -1);
@@ -763,7 +1040,10 @@ class ZetaApp {
       });
       this.persistPanelSnapshot({
         healthScore: 100,
+        healthBreakdown: this.computeHealthBreakdown([]),
         issueCount: 0,
+        chunkTree: null,
+        activeChunkId: null,
       });
       this.overlay.clear();
       this.popover.close();
@@ -771,6 +1051,14 @@ class ZetaApp {
     }
 
     const proseSpans = this.extractProseSpans(scopeText);
+    const caretOffset = this.resolveCaretOffsetInScope(snapshot, adapter);
+    const chunkWindow = this.resolveChunkWindow(snapshot, caretOffset);
+    this.chunkTree = this.buildChunkTree(
+      chunkWindow.text,
+      chunkWindow.caretOffset,
+      chunkWindow.baseOffset
+    );
+    this.activeChunkId = this.chunkTree?.activeChunkId || null;
     const localIssues = this.detectLocalMathTypos(scopeText, proseSpans);
     const sentencePlan = this.buildSentencePlan(snapshot, force, proseSpans);
     logTrace("analysis_plan", {
@@ -787,10 +1075,6 @@ class ZetaApp {
         signatures: sentencePlan.activeSignatures,
       })
     );
-
-    if (!force && signature === this.lastAnalyzedSignature && sentencePlan.pending.length === 0) {
-      return;
-    }
 
     this.lastAnalyzedSignature = signature;
     const requestId = this.activeRequestId + 1;
@@ -873,6 +1157,16 @@ class ZetaApp {
         return;
       }
 
+      if (sentenceEntry.activityLog && sentenceEntry.shouldAnalyze) {
+        this.addActivity(
+          sentenceEntry.activityLog.message,
+          sentenceEntry.activityLog.level,
+          null,
+          sentenceEntry.activityLog.detailText
+        );
+        sentenceEntry.activityLog = null;
+      }
+
       const pendingLeft = sentencePlan.pending.length - i - 1;
       this.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
       this.panel.setInferenceTime(this.lastInferenceMs, pendingLeft);
@@ -909,7 +1203,7 @@ class ZetaApp {
   }
 
   buildSentencePlan(snapshot, force, proseSpans) {
-    const segments = this.splitLatexAwareSentences(snapshot.text, proseSpans);
+    const segments = this.collectInnermostSentenceSegments(snapshot, proseSpans);
     const now = Date.now();
     const activeKeys = [];
     const activeSignatures = [];
@@ -922,17 +1216,21 @@ class ZetaApp {
         continue;
       }
 
-      const base = shortHash(sentenceText);
+      const chunkKey = String(segment.chunkId || "scope");
+      const base = shortHash(`${chunkKey}|${sentenceText}`);
       const occurrence = occurrenceByBase.get(base) || 0;
       occurrenceByBase.set(base, occurrence + 1);
-      const key = `${base}:${occurrence}`;
+      const key = `${chunkKey}:${base}:${occurrence}`;
+      const shouldAnalyze = sentenceText.endsWith(".");
 
       const signature = shortHash(
         JSON.stringify({
+          chunkId: chunkKey,
           text: sentenceText,
           mode: this.settings.mode,
           notationStrictness: this.settings.notationStrictness,
           backendUrl: this.settings.backendUrl,
+          shouldAnalyze,
         })
       );
 
@@ -944,6 +1242,8 @@ class ZetaApp {
           text: sentenceText,
           start: segment.start,
           end: segment.end,
+          chunkId: segment.chunkId || null,
+          shouldAnalyze,
           status: "pending",
           issues: [],
           diagnostics: [],
@@ -957,7 +1257,18 @@ class ZetaApp {
         entry.text = sentenceText;
         entry.start = segment.start;
         entry.end = segment.end;
+        entry.chunkId = segment.chunkId || null;
+        entry.shouldAnalyze = shouldAnalyze;
         entry.lastSeenAt = now;
+      }
+
+      if (!shouldAnalyze) {
+        entry.status = "skipped";
+        entry.issues = [];
+        entry.diagnostics = [];
+        entry.hasError = false;
+        entry.updatedAt = now;
+        continue;
       }
 
       const stale = now - (entry.updatedAt || 0) > CACHE_TTL_MS;
@@ -989,6 +1300,728 @@ class ZetaApp {
     };
   }
 
+  collectInnermostSentenceSegments(snapshot, proseSpans) {
+    const chunkTree = this.chunkTree;
+    if (chunkTree && Array.isArray(chunkTree.leafChunks) && chunkTree.leafChunks.length > 0) {
+      const activeChunkId = this.activeChunkId || chunkTree.activeChunkId || chunkTree.leafChunks[0].chunkId;
+      const activeLeaf = chunkTree.leafChunks.find((chunk) => chunk.chunkId === activeChunkId) || chunkTree.leafChunks[0];
+      if (activeLeaf) {
+        return ensureArray(activeLeaf.sentences)
+          .filter((sentence) => Number.isInteger(sentence.start) && Number.isInteger(sentence.end) && sentence.end > sentence.start)
+          .map((sentence) => ({
+            text: String(sentence.text || ""),
+            start: sentence.start,
+            end: sentence.end,
+            chunkId: activeLeaf.chunkId,
+          }));
+      }
+    }
+
+    return this.splitLatexAwareSentences(snapshot.text, proseSpans)
+      .filter((sentence) => Number.isInteger(sentence.start) && Number.isInteger(sentence.end) && sentence.end > sentence.start)
+      .map((sentence) => ({
+        text: String(sentence.text || ""),
+        start: sentence.start,
+        end: sentence.end,
+        chunkId: null,
+      }));
+  }
+
+  resolveCaretOffsetInScope(snapshot, adapter) {
+    let caret = null;
+
+    try {
+      const visible = adapter.getVisibleTextSnapshot();
+      caret = adapter.getCaretOffset(visible);
+    } catch (_error) {
+      caret = null;
+    }
+
+    if (!Number.isInteger(caret)) {
+      try {
+        caret = adapter.getCaretOffset();
+      } catch (_error) {
+        caret = null;
+      }
+    }
+
+    if (!Number.isInteger(caret)) {
+      return null;
+    }
+
+    if (caret < snapshot.scopeStart || caret > snapshot.scopeEnd) {
+      return null;
+    }
+
+    return clamp(caret - snapshot.scopeStart, 0, String(snapshot.text || "").length);
+  }
+
+  findDocumentBodyStart(text) {
+    const source = String(text || "");
+    const match = source.match(/\\begin\s*\{\s*document\s*}/);
+    return match ? match.index + match[0].length : -1;
+  }
+
+  resolveChunkWindow(snapshot, caretOffset) {
+    const scopeText = String(snapshot.text || "");
+    const sourceText = String(snapshot.sourceText || snapshot.context || scopeText);
+    const scopeStart = Number.isInteger(snapshot.scopeStart) ? snapshot.scopeStart : 0;
+    const scopeEnd = Number.isInteger(snapshot.scopeEnd) ? snapshot.scopeEnd : scopeStart + scopeText.length;
+    const docBodyStart = this.findDocumentBodyStart(sourceText);
+
+    if (docBodyStart === -1) {
+      return {
+        text: scopeText,
+        baseOffset: 0,
+        caretOffset,
+      };
+    }
+
+    if (docBodyStart >= scopeEnd) {
+      return {
+        text: "",
+        baseOffset: 0,
+        caretOffset: null,
+      };
+    }
+
+    const bodyStartInScope = Math.max(0, docBodyStart - scopeStart);
+    const text = scopeText.slice(bodyStartInScope);
+    let nextCaret = null;
+    if (Number.isInteger(caretOffset) && caretOffset >= bodyStartInScope) {
+      nextCaret = caretOffset - bodyStartInScope;
+    }
+
+    return {
+      text,
+      baseOffset: bodyStartInScope,
+      caretOffset: nextCaret,
+    };
+  }
+
+  buildChunkTree(scopeText, caretOffset, baseOffset = 0) {
+    const text = String(scopeText || "");
+    const rootId = "__root__";
+    const chunks = [];
+    const leafChunks = [];
+    const chunkById = new Map();
+
+    const addChunk = (chunk, leaf = false) => {
+      chunks.push(chunk);
+      chunkById.set(chunk.chunkId, chunk);
+      if (leaf) {
+        leafChunks.push(chunk);
+      }
+    };
+
+    if (!text.trim()) {
+      return {
+        chunks,
+        leafChunks,
+        chunkById,
+        activeChunkId: null,
+      };
+    }
+
+    const documentAnchor = this.buildChunkAnchor(text.slice(0, 240));
+    const documentChunk = this.createChunk({
+      chunkId: `document-${shortHash(`${baseOffset}|${text.length}|${documentAnchor}`)}`,
+      type: "document",
+      start: baseOffset,
+      end: baseOffset + text.length,
+      text,
+      includeSentences: false,
+    });
+    addChunk(documentChunk, false);
+
+    const sectionMetas = this.parseSectionBlocks(text, baseOffset);
+    const envMetas = this.parseEnvironmentBlocks(text, baseOffset);
+    const commandMetas = this.parseCommandBlocks(text, baseOffset);
+
+    const sectionChunks = sectionMetas.map((meta) => {
+      return this.createChunk({
+        chunkId: meta.chunkId,
+        type: "section",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        sectionName: meta.name,
+        sectionTitle: meta.title,
+        sectionLevel: meta.level,
+        commandEnd: meta.commandEnd,
+      });
+    });
+
+    const envChunks = envMetas.map((meta) => {
+      return this.createChunk({
+        chunkId: meta.chunkId,
+        type: "environment",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        envName: meta.envName,
+        bodyStart: meta.bodyStart,
+        bodyEnd: meta.bodyEnd,
+        closeEnd: meta.closeEnd,
+      });
+    });
+
+    const commandChunks = commandMetas.map((meta) => {
+      return this.createChunk({
+        chunkId: meta.chunkId,
+        type: "command",
+        start: meta.start,
+        end: meta.end,
+        text: text.slice(meta.startLocal, meta.endLocal),
+        includeSentences: false,
+        commandName: meta.commandName,
+      });
+    });
+
+    const envById = new Map(envChunks.map((chunk) => [chunk.chunkId, chunk]));
+
+    for (const sectionChunk of sectionChunks) {
+      let parentId = this.pickSectionParentId(sectionChunk, sectionChunks);
+      if (!parentId) {
+        parentId = this.pickContainingEnvironmentId(sectionChunk, envChunks);
+      }
+      sectionChunk.parentId = parentId || documentChunk.chunkId;
+    }
+
+    for (let i = 0; i < envChunks.length; i += 1) {
+      const envChunk = envChunks[i];
+      const meta = envMetas[i];
+      const parentEnvId = meta.parentEnvId;
+      if (parentEnvId && envById.has(parentEnvId)) {
+        envChunk.parentId = parentEnvId;
+        continue;
+      }
+      const sectionParentId = this.pickContainingSectionId(envChunk, sectionChunks);
+      envChunk.parentId = sectionParentId || documentChunk.chunkId;
+    }
+
+    for (const commandChunk of commandChunks) {
+      const envParentId = this.pickContainingEnvironmentId(commandChunk, envChunks);
+      if (envParentId) {
+        commandChunk.parentId = envParentId;
+        continue;
+      }
+      const sectionParentId = this.pickContainingSectionId(commandChunk, sectionChunks);
+      commandChunk.parentId = sectionParentId || documentChunk.chunkId;
+    }
+
+    const structuralChunks = [...sectionChunks, ...envChunks, ...commandChunks];
+    for (const chunk of structuralChunks) {
+      addChunk(chunk, false);
+    }
+
+    const childrenByParent = new Map();
+    const pushChild = (parentId, child) => {
+      const key = parentId || rootId;
+      const bucket = childrenByParent.get(key) || [];
+      bucket.push(child);
+      childrenByParent.set(key, bucket);
+    };
+
+    pushChild(documentChunk.parentId, documentChunk);
+    for (const chunk of structuralChunks) {
+      pushChild(chunk.parentId, chunk);
+    }
+
+    for (const bucket of childrenByParent.values()) {
+      bucket.sort((a, b) => (a.start || 0) - (b.start || 0));
+    }
+
+    const textIndexByParent = new Map();
+    const addTextLeaf = (parentId, rawStart, rawEnd) => {
+      const localStart = rawStart - baseOffset;
+      const localEnd = rawEnd - baseOffset;
+      const spans = this.splitWithoutEndTokens(text, localStart, localEnd);
+      for (const [spanStart, spanEnd] of spans) {
+        const [trimmedLocalStart, trimmedLocalEnd] = this.trimSpan(text, spanStart, spanEnd);
+        if (trimmedLocalEnd <= trimmedLocalStart) {
+          continue;
+        }
+
+        const start = baseOffset + trimmedLocalStart;
+        const end = baseOffset + trimmedLocalEnd;
+        const leafText = text.slice(trimmedLocalStart, trimmedLocalEnd);
+        const anchor = this.buildChunkAnchor(leafText);
+        const index = textIndexByParent.get(parentId) || 0;
+        textIndexByParent.set(parentId, index + 1);
+
+        const leafChunk = this.createChunk({
+          chunkId: this.buildTextChunkId(parentId, index, anchor, start),
+          type: "text",
+          start,
+          end,
+          text: leafText,
+          parentId: parentId === rootId ? undefined : parentId,
+        });
+        addChunk(leafChunk, true);
+      }
+    };
+
+    const walkContainer = (parentId, regionStart, regionEnd) => {
+      if (regionEnd <= regionStart) {
+        return;
+      }
+
+      const children = ensureArray(childrenByParent.get(parentId))
+        .filter((child) => child.start < regionEnd && child.end > regionStart)
+        .sort((a, b) => (a.start || 0) - (b.start || 0));
+      let cursor = regionStart;
+
+      for (const child of children) {
+        const childStart = clamp(child.start, regionStart, regionEnd);
+        if (childStart > cursor) {
+          addTextLeaf(parentId, cursor, childStart);
+        }
+
+        const childRegion = this.getChildRegionForChunk(child);
+        const nestedStart = Math.max(regionStart, childRegion.start);
+        const nestedEnd = Math.min(regionEnd, childRegion.end);
+        if (nestedEnd > nestedStart) {
+          walkContainer(child.chunkId, nestedStart, nestedEnd);
+        }
+
+        const postChildCursor = this.getPostChildCursor(child);
+        cursor = Math.max(cursor, Math.min(regionEnd, postChildCursor));
+      }
+
+      if (cursor < regionEnd) {
+        addTextLeaf(parentId, cursor, regionEnd);
+      }
+    };
+
+    const rootStart = baseOffset;
+    const rootEnd = baseOffset + text.length;
+    walkContainer(documentChunk.chunkId, rootStart, rootEnd);
+
+    if (leafChunks.length === 0) {
+      addTextLeaf(documentChunk.chunkId, rootStart, rootEnd);
+    }
+
+    chunks.sort((a, b) => (a.start || 0) - (b.start || 0));
+    leafChunks.sort((a, b) => (a.start || 0) - (b.start || 0));
+
+    const absoluteCaret = Number.isInteger(caretOffset) ? baseOffset + caretOffset : null;
+    const activeChunkId = this.selectActiveChunkId(leafChunks, absoluteCaret);
+    return {
+      chunks,
+      leafChunks,
+      chunkById,
+      activeChunkId,
+    };
+  }
+
+  createChunk(input) {
+    const includeSentences = input.includeSentences !== false;
+    const chunk = {
+      chunkId: input.chunkId,
+      type: input.type,
+      start: input.start,
+      end: input.end,
+      text: input.text,
+      parentId: input.parentId || undefined,
+      sentences: includeSentences
+        ? this.buildChunkSentences(input.text, input.start, input.chunkId)
+        : [],
+      envName: input.envName || undefined,
+      sectionName: input.sectionName || undefined,
+      sectionTitle: input.sectionTitle || undefined,
+      commandName: input.commandName || undefined,
+      sectionLevel: Number.isInteger(input.sectionLevel) ? input.sectionLevel : undefined,
+      commandEnd: Number.isInteger(input.commandEnd) ? input.commandEnd : undefined,
+      bodyStart: Number.isInteger(input.bodyStart) ? input.bodyStart : undefined,
+      bodyEnd: Number.isInteger(input.bodyEnd) ? input.bodyEnd : undefined,
+      closeEnd: Number.isInteger(input.closeEnd) ? input.closeEnd : undefined,
+    };
+    return chunk;
+  }
+
+  parseSectionBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    const regex = LATEX_SECTION_BLOCK_REGEX;
+    regex.lastIndex = 0;
+
+    let match;
+    while ((match = regex.exec(source)) !== null) {
+      const raw = String(match[0] || "");
+      const name = String(match[1] || "").toLowerCase();
+      const titleMatch = raw.match(/\{([^}]*)\}\s*$/);
+      const title = titleMatch ? String(titleMatch[1] || "").trim() : "";
+      const startLocal = match.index;
+      const commandEndLocal = match.index + match[0].length;
+      const level = LATEX_SECTION_LEVELS[name] ?? 6;
+      blocks.push({
+        kind: "section",
+        name,
+        title,
+        level,
+        startLocal,
+        commandEndLocal,
+        start: baseOffset + startLocal,
+        commandEnd: baseOffset + commandEndLocal,
+      });
+    }
+
+    for (let i = 0; i < blocks.length; i += 1) {
+      const current = blocks[i];
+      let endLocal = source.length;
+      for (let j = i + 1; j < blocks.length; j += 1) {
+        if (blocks[j].level <= current.level) {
+          endLocal = blocks[j].startLocal;
+          break;
+        }
+      }
+
+      current.endLocal = endLocal;
+      current.end = baseOffset + endLocal;
+      const anchor = this.buildChunkAnchor(source.slice(current.startLocal, Math.min(endLocal, current.startLocal + 120)));
+      current.chunkId = this.buildSectionChunkId(i, current.name, anchor, current.start);
+    }
+
+    return blocks;
+  }
+
+  parseEnvironmentBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    const regex = /\\(begin|end)\s*\{\s*([^{}]+?)\s*\}/g;
+    const stack = [];
+    let envIndex = 0;
+
+    let match;
+    while ((match = regex.exec(source)) !== null) {
+      const kind = String(match[1] || "").toLowerCase();
+      const envName = String(match[2] || "").trim();
+      const tokenStartLocal = match.index;
+      const tokenEndLocal = match.index + match[0].length;
+      const normalizedEnvName = envName.toLowerCase();
+
+      if (!envName || normalizedEnvName === "document") {
+        continue;
+      }
+
+      if (kind === "begin") {
+        const parentEnvId = stack.length > 0 ? stack[stack.length - 1].chunkId : null;
+        const anchor = this.buildChunkAnchor(
+          source.slice(tokenEndLocal, Math.min(source.length, tokenEndLocal + 100))
+        );
+        const chunkId = this.buildEnvironmentChunkId(
+          envIndex,
+          envName,
+          anchor,
+          baseOffset + tokenStartLocal
+        );
+        stack.push({
+          envName,
+          chunkId,
+          startLocal: tokenStartLocal,
+          bodyStartLocal: tokenEndLocal,
+          parentEnvId,
+          envIndex,
+        });
+        envIndex += 1;
+        continue;
+      }
+
+      let openIdx = -1;
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        if (stack[i].envName === envName) {
+          openIdx = i;
+          break;
+        }
+      }
+      if (openIdx === -1) {
+        continue;
+      }
+
+      const removed = stack.splice(openIdx);
+      const open = removed[0];
+      const endLocal = tokenStartLocal;
+      const bodyEndLocal = tokenStartLocal;
+      if (endLocal < open.startLocal) {
+        continue;
+      }
+
+      blocks.push({
+        kind: "environment",
+        envName: open.envName,
+        chunkId: open.chunkId,
+        parentEnvId: open.parentEnvId,
+        startLocal: open.startLocal,
+        endLocal,
+        bodyStartLocal: open.bodyStartLocal,
+        bodyEndLocal,
+        start: baseOffset + open.startLocal,
+        end: baseOffset + endLocal,
+        bodyStart: baseOffset + open.bodyStartLocal,
+        bodyEnd: baseOffset + bodyEndLocal,
+        closeEnd: baseOffset + tokenEndLocal,
+      });
+    }
+
+    for (const open of stack) {
+      const endLocal = source.length;
+      const bodyEndLocal = source.length;
+      if (endLocal < open.startLocal) {
+        continue;
+      }
+      blocks.push({
+        kind: "environment",
+        envName: open.envName,
+        chunkId: open.chunkId,
+        parentEnvId: open.parentEnvId,
+        startLocal: open.startLocal,
+        endLocal,
+        bodyStartLocal: open.bodyStartLocal,
+        bodyEndLocal,
+        start: baseOffset + open.startLocal,
+        end: baseOffset + endLocal,
+        bodyStart: baseOffset + open.bodyStartLocal,
+        bodyEnd: baseOffset + bodyEndLocal,
+        closeEnd: baseOffset + endLocal,
+      });
+    }
+
+    blocks.sort((a, b) => a.startLocal - b.startLocal);
+    return blocks;
+  }
+
+  parseCommandBlocks(text, baseOffset = 0) {
+    const source = String(text || "");
+    const blocks = [];
+    let commandIndex = 0;
+
+    for (const spec of LATEX_DELIMITER_COMMAND_REGEX_SPECS) {
+      spec.regex.lastIndex = 0;
+      let match;
+      while ((match = spec.regex.exec(source)) !== null) {
+        const startLocal = match.index;
+        const endLocal = match.index + match[0].length;
+        const anchor = this.buildChunkAnchor(match[0]);
+        blocks.push({
+          kind: "command",
+          commandName: spec.commandName,
+          startLocal,
+          endLocal,
+          start: baseOffset + startLocal,
+          end: baseOffset + endLocal,
+          chunkId: this.buildCommandChunkId(commandIndex, spec.commandName, anchor, baseOffset + startLocal),
+        });
+        commandIndex += 1;
+      }
+    }
+
+    blocks.sort((a, b) => a.startLocal - b.startLocal);
+    return blocks;
+  }
+
+  pickSectionParentId(sectionChunk, sectionChunks) {
+    const currentLevel = Number.isInteger(sectionChunk.sectionLevel) ? sectionChunk.sectionLevel : 99;
+    let best = null;
+    for (const candidate of sectionChunks) {
+      if (candidate.chunkId === sectionChunk.chunkId) {
+        continue;
+      }
+      const candidateLevel = Number.isInteger(candidate.sectionLevel) ? candidate.sectionLevel : 99;
+      if (candidateLevel >= currentLevel) {
+        continue;
+      }
+      if (candidate.start > sectionChunk.start || candidate.end <= sectionChunk.start) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  pickContainingSectionId(targetChunk, sectionChunks) {
+    let best = null;
+    for (const candidate of sectionChunks) {
+      if (candidate.start > targetChunk.start || candidate.end < targetChunk.end) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  pickContainingEnvironmentId(targetChunk, envChunks) {
+    let best = null;
+    for (const candidate of envChunks) {
+      if (candidate.start > targetChunk.start || candidate.end < targetChunk.end) {
+        continue;
+      }
+      if (!best || candidate.start > best.start) {
+        best = candidate;
+      }
+    }
+    return best?.chunkId || null;
+  }
+
+  getChildRegionForChunk(chunk) {
+    if (chunk.type === "section") {
+      const start = Number.isInteger(chunk.commandEnd) ? chunk.commandEnd : chunk.start;
+      return { start, end: chunk.end };
+    }
+    if (chunk.type === "environment") {
+      const start = Number.isInteger(chunk.bodyStart) ? chunk.bodyStart : chunk.start;
+      const end = Number.isInteger(chunk.bodyEnd) ? chunk.bodyEnd : chunk.end;
+      return { start, end };
+    }
+    if (chunk.type === "command") {
+      return { start: chunk.end, end: chunk.end };
+    }
+    return { start: chunk.start, end: chunk.end };
+  }
+
+  getPostChildCursor(chunk) {
+    if (chunk.type === "environment" && Number.isInteger(chunk.closeEnd)) {
+      return chunk.closeEnd;
+    }
+    return chunk.end;
+  }
+
+  splitWithoutEndTokens(text, start, end) {
+    const source = String(text || "");
+    const left = clamp(start, 0, source.length);
+    const right = clamp(end, 0, source.length);
+    if (right <= left) {
+      return [];
+    }
+
+    const spans = [];
+    const regex = /\\end\s*\{\s*[^{}]+?\s*\}/g;
+    regex.lastIndex = left;
+    let cursor = left;
+    let match;
+
+    while ((match = regex.exec(source)) !== null) {
+      const tokenStart = match.index;
+      const tokenEnd = match.index + match[0].length;
+      if (tokenStart >= right) {
+        break;
+      }
+      if (tokenStart > cursor) {
+        spans.push([cursor, Math.min(tokenStart, right)]);
+      }
+      cursor = Math.max(cursor, Math.min(tokenEnd, right));
+      if (cursor >= right) {
+        break;
+      }
+    }
+
+    if (cursor < right) {
+      spans.push([cursor, right]);
+    }
+
+    return spans;
+  }
+
+  trimSpan(text, start, end) {
+    const source = String(text || "");
+    let left = clamp(start, 0, source.length);
+    let right = clamp(end, 0, source.length);
+
+    while (left < right && /\s/.test(source[left])) {
+      left += 1;
+    }
+    while (right > left && /\s/.test(source[right - 1])) {
+      right -= 1;
+    }
+
+    return [left, right];
+  }
+
+  buildChunkSentences(chunkText, chunkStart, chunkId) {
+    const sentences = [];
+    const spans = this.splitLatexAwareSentences(chunkText);
+    for (let i = 0; i < spans.length; i += 1) {
+      const span = spans[i];
+      const sentenceText = String(span.text || "").trim();
+      if (!sentenceText) {
+        continue;
+      }
+      const anchor = this.buildChunkAnchor(sentenceText);
+      sentences.push({
+        sentenceId: this.buildSentenceId(chunkId, i, anchor),
+        chunkId,
+        start: chunkStart + span.start,
+        end: chunkStart + span.end,
+        text: sentenceText,
+      });
+    }
+    return sentences;
+  }
+
+  buildChunkAnchor(text) {
+    const normalized = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return normalized.slice(0, 40) || "chunk";
+  }
+
+  buildSectionChunkId(sectionIndex, sectionName, anchor, start) {
+    return `section-${sectionIndex}-${shortHash(`${sectionName}|${start}|${anchor}`)}`;
+  }
+
+  buildEnvironmentChunkId(envIndex, envName, anchor, start) {
+    return `env-${envIndex}-${shortHash(`${envName}|${start}|${anchor}`)}`;
+  }
+
+  buildCommandChunkId(commandIndex, commandName, anchor, start) {
+    return `cmd-${commandIndex}-${shortHash(`${commandName}|${start}|${anchor}`)}`;
+  }
+
+  buildTextChunkId(parentId, textIndex, anchor, start) {
+    return `text-${shortHash(`${parentId}|${textIndex}|${start}|${anchor}`)}`;
+  }
+
+  buildSentenceId(chunkId, sentenceIndex, anchor) {
+    return `sentence-${chunkId}-${sentenceIndex}-${shortHash(`${chunkId}|${sentenceIndex}|${anchor}`)}`;
+  }
+
+  selectActiveChunkId(leafChunks, caretOffset) {
+    if (!leafChunks.length) {
+      return null;
+    }
+
+    if (!Number.isInteger(caretOffset)) {
+      return leafChunks[0].chunkId;
+    }
+
+    for (const chunk of leafChunks) {
+      if (caretOffset >= chunk.start && caretOffset <= chunk.end) {
+        return chunk.chunkId;
+      }
+    }
+
+    let bestChunk = leafChunks[0];
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const chunk of leafChunks) {
+      const distance = caretOffset < chunk.start
+        ? chunk.start - caretOffset
+        : caretOffset - chunk.end;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestChunk = chunk;
+      }
+    }
+
+    return bestChunk.chunkId;
+  }
+
   stripLatexComment(line) {
     const input = String(line || "");
     for (let i = 0; i < input.length; i += 1) {
@@ -1017,38 +2050,7 @@ class ZetaApp {
     const commandMatch = line.match(/^\\([a-zA-Z@]+)\*?/);
     if (commandMatch) {
       const command = String(commandMatch[1] || "").toLowerCase();
-      const structuralCommands = new Set([
-        "documentclass",
-        "usepackage",
-        "title",
-        "author",
-        "date",
-        "maketitle",
-        "tableofcontents",
-        "begin",
-        "end",
-        "chapter",
-        "part",
-        "section",
-        "subsection",
-        "subsubsection",
-        "paragraph",
-        "newpage",
-        "pagebreak",
-        "clearpage",
-        "vspace",
-        "hspace",
-        "smallskip",
-        "medskip",
-        "bigskip",
-        "bibliography",
-        "bibliographystyle",
-        "label",
-        "ref",
-        "eqref",
-        "cite",
-      ]);
-      if (structuralCommands.has(command)) {
+      if (NON_ANALYZABLE_LATEX_COMMANDS.has(command)) {
         return false;
       }
     }
@@ -1320,21 +2322,32 @@ class ZetaApp {
     };
 
     const startedAt = performance.now();
+    sentenceEntry.activityLog = null;
     try {
-      const responsePayload = await this.fetchWithCache(
+      const requestResult = await this.fetchWithCache(
         sentenceEntry.signature,
         sentenceSnapshot,
         `${reason}:sentence`
       );
+      const responsePayload = requestResult.payload;
       const normalized = this.normalizeBackendResponse(responsePayload, sentenceEntry.text);
       sentenceEntry.issues = ensureArray(normalized.issues);
       sentenceEntry.diagnostics = ensureArray(normalized.diagnostics);
       sentenceEntry.hasError = !!normalized.hasError;
       sentenceEntry.status = "ready";
+      sentenceEntry.inferenceMs = performance.now() - startedAt;
+      sentenceEntry.activityLog = this.buildSentenceActivityLog(
+        sentenceEntry,
+        responsePayload,
+        normalized,
+        requestResult.request,
+        requestResult.cacheHit
+      );
     } catch (error) {
       const message = String(error?.message || error || "Request failed.");
       sentenceEntry.hasError = true;
       sentenceEntry.status = "error";
+      sentenceEntry.inferenceMs = performance.now() - startedAt;
       const priorIssues = ensureArray(sentenceEntry.issues).filter(
         (item) => item?.id !== `sentence-error-${sentenceEntry.key}`
       );
@@ -1353,6 +2366,14 @@ class ZetaApp {
           source: "backend",
         },
       ];
+      sentenceEntry.activityLog = this.buildSentenceActivityLog(
+        sentenceEntry,
+        null,
+        { diagnostics: [], hasError: true },
+        null,
+        false,
+        message
+      );
     } finally {
       sentenceEntry.updatedAt = Date.now();
       sentenceEntry.lastSeenAt = sentenceEntry.updatedAt;
@@ -1365,14 +2386,19 @@ class ZetaApp {
     const cached = this.responseCache.get(signature);
     const now = Date.now();
     if (cached && now - cached.timestamp <= CACHE_TTL_MS) {
-      return cached.payload;
+      return {
+        payload: cached.payload,
+        cacheHit: true,
+        request: cached.request || null,
+      };
     }
 
-    const payload = this.buildBackendPayload(snapshot, reason);
-    const response = await this.sendBackendRequest(payload);
+    const request = this.buildBackendPayload(snapshot, reason);
+    const response = await this.sendBackendRequest(request);
     this.responseCache.set(signature, {
       timestamp: now,
       payload: response,
+      request,
     });
 
     for (const [key, value] of this.responseCache.entries()) {
@@ -1381,7 +2407,11 @@ class ZetaApp {
       }
     }
 
-    return response;
+    return {
+      payload: response,
+      cacheHit: false,
+      request,
+    };
   }
 
   buildBackendPayload(snapshot, reason) {
@@ -1822,12 +2852,102 @@ class ZetaApp {
     );
   }
 
-  addActivity(message, level = "info", undoAction = null) {
+  truncateActivityText(text, maxLength = 1800) {
+    const value = String(text || "");
+    if (!value) {
+      return "";
+    }
+    if (value.length <= maxLength) {
+      return value;
+    }
+    return `${value.slice(0, maxLength)}\n...[truncated]`;
+  }
+
+  formatSentenceLabel(sentenceText) {
+    const compact = String(sentenceText || "").replace(/\s+/g, " ").trim();
+    if (!compact) {
+      return "sentence";
+    }
+    if (compact.length <= 92) {
+      return compact;
+    }
+    return `${compact.slice(0, 89)}...`;
+  }
+
+  buildSentenceActivityLog(sentenceEntry, responsePayload, normalized, request, cacheHit, errorMessage = null) {
+    const compile = responsePayload?.compile || {};
+    const diagnostics = ensureArray(normalized?.diagnostics);
+    const compileSuccess = compile?.success === true;
+    const level = errorMessage || normalized?.hasError ? "error" : "success";
+    const sentenceLabel = this.formatSentenceLabel(sentenceEntry.text);
+    const sourceLabel = cacheHit ? "cache" : "aws";
+    const message = errorMessage
+      ? `${sourceLabel} · failed · ${sentenceLabel}`
+      : `${sourceLabel} · ${compileSuccess ? "compiled" : "review"} · ${sentenceLabel}`;
+
+    const detailLines = [
+      `Sentence`,
+      this.truncateActivityText(sentenceEntry.text, 500),
+      "",
+      `Chunk`,
+      String(sentenceEntry.chunkId || this.activeChunkId || "innermost"),
+      "",
+      `Pipeline`,
+      `url: ${String(request?.requestUrl || this.settings.backendUrl)}`,
+      `cache_hit: ${cacheHit ? "true" : "false"}`,
+      `inference_ms: ${Number.isFinite(sentenceEntry.inferenceMs) ? Math.round(sentenceEntry.inferenceMs) : "--"}`,
+    ];
+
+    if (errorMessage) {
+      detailLines.push("", "Error", this.truncateActivityText(errorMessage, 1200));
+      return {
+        message,
+        level,
+        detailText: detailLines.join("\n"),
+      };
+    }
+
+    detailLines.push(
+      "",
+      "Compile",
+      `success: ${compileSuccess ? "true" : "false"}`,
+      `diagnostics: ${diagnostics.length}`
+    );
+
+    const stdout = this.truncateActivityText(compile?.stdout, 1600);
+    const stderr = this.truncateActivityText(compile?.stderr, 1600);
+    const leanCode = this.truncateActivityText(responsePayload?.lean_code, 2200);
+    if (stdout) {
+      detailLines.push("", "stdout", stdout);
+    }
+    if (stderr) {
+      detailLines.push("", "stderr", stderr);
+    }
+    if (leanCode) {
+      detailLines.push("", "lean_code", leanCode);
+    }
+    if (diagnostics.length > 0) {
+      const diagnosticText = diagnostics
+        .slice(0, 10)
+        .map((diag, index) => `${index + 1}. ${diag?.severity || "info"} · ${diag?.message || "diagnostic"}`)
+        .join("\n");
+      detailLines.push("", "diagnostics", this.truncateActivityText(diagnosticText, 1400));
+    }
+
+    return {
+      message,
+      level,
+      detailText: detailLines.join("\n"),
+    };
+  }
+
+  addActivity(message, level = "info", undoAction = null, detailText = "") {
     const now = new Date();
     const entry = {
       id: `act-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
       message,
       level,
+      detailText: this.truncateActivityText(detailText, 7000),
       timeLabel: now.toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
@@ -1912,8 +3032,10 @@ class ZetaApp {
   renderState(state) {
     const issues = ensureArray(state.issues);
 
-    const score = this.computeHealthScore(issues);
+    const breakdown = this.computeHealthBreakdown(issues);
+    const score = breakdown.score;
     this.currentHealthScore = score;
+    this.currentHealthBreakdown = breakdown;
     this.currentMacroList = this.extractMacroNames(
       state?.snapshot?.context || state?.snapshot?.text || ""
     );
@@ -1921,7 +3043,10 @@ class ZetaApp {
     this.panel.setIssues(issues, this.focusedIssueIndex);
     this.persistPanelSnapshot({
       healthScore: score,
+      healthBreakdown: breakdown,
       issueCount: issues.length,
+      chunkTree: this.serializeChunkTree(this.chunkTree),
+      activeChunkId: this.activeChunkId,
     });
 
     if (this.activeAdapter && state.snapshot) {
@@ -1931,12 +3056,65 @@ class ZetaApp {
     }
   }
 
-  computeHealthScore(issues) {
-    let penalty = 0;
-    for (const issue of ensureArray(issues)) {
-      penalty += SEVERITY_WEIGHT[normalizeSeverity(issue.severity)] || SEVERITY_WEIGHT.unknown;
+  computeHealthBreakdown(issues) {
+    const issueList = ensureArray(issues);
+    const severityCounts = {
+      error: 0,
+      warning: 0,
+      info: 0,
+      unknown: 0,
+    };
+
+    let rawSeverityPenalty = 0;
+    for (const issue of issueList) {
+      const severity = normalizeSeverity(issue?.severity);
+      if (Object.prototype.hasOwnProperty.call(severityCounts, severity)) {
+        severityCounts[severity] += 1;
+      } else {
+        severityCounts.unknown += 1;
+      }
+      rawSeverityPenalty += SEVERITY_WEIGHT[severity] || SEVERITY_WEIGHT.unknown;
     }
-    return clamp(100 - penalty, 0, 100);
+
+    const cachedSentences = Math.max(0, Number(this.currentSentenceCached) || 0);
+    const pendingSentences = Math.max(0, Number(this.currentSentencePending) || 0);
+    const analyzedSentences = cachedSentences + pendingSentences;
+    const denominator = Math.max(1, analyzedSentences);
+
+    // Severity impact is damped by analyzed scope size so longer documents are not over-penalized.
+    const normalizedSeverityPenalty = Math.min(
+      74,
+      Math.round(rawSeverityPenalty / Math.sqrt(denominator))
+    );
+    // Density punishes many findings in a small amount of analyzed text.
+    const densityPenalty = Math.min(16, Math.round((issueList.length / denominator) * 18));
+    // Pending work lowers confidence in the score while analysis is still in flight.
+    const pendingPenalty = Math.min(12, Math.round((pendingSentences / denominator) * 12));
+
+    const score = clamp(
+      100 - normalizedSeverityPenalty - densityPenalty - pendingPenalty,
+      0,
+      100
+    );
+    const coverageRatio = analyzedSentences > 0 ? cachedSentences / analyzedSentences : 1;
+
+    return {
+      score,
+      issueCount: issueList.length,
+      severityCounts,
+      rawSeverityPenalty,
+      normalizedSeverityPenalty,
+      densityPenalty,
+      pendingPenalty,
+      cachedSentences,
+      pendingSentences,
+      analyzedSentences,
+      coverageRatio,
+    };
+  }
+
+  computeHealthScore(issues) {
+    return this.computeHealthBreakdown(issues).score;
   }
 
   scheduleRender() {
@@ -2128,6 +3306,15 @@ class ZetaApp {
     if (this.scheduledTimer) {
       clearTimeout(this.scheduledTimer);
     }
+    if (this.snapshotSyncTimer) {
+      clearTimeout(this.snapshotSyncTimer);
+    }
+    storageLocalSet({
+      [UI_SURFACE_KEY]: {
+        surface: "none",
+        updatedAt: Date.now(),
+      },
+    });
 
     this.detachGlobalListeners();
     this.popover.close();

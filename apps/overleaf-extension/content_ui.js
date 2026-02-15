@@ -384,11 +384,18 @@ class ZetaPanel {
       <img src="${chrome.runtime.getURL("assets/zeta-black-white-2048.png")}" alt="" />
     `;
     document.body.append(this.fab);
-    this.comingSoon = document.createElement("div");
-    this.comingSoon.className = "zeta-coming-soon";
-    this.comingSoon.textContent = "Coming soon";
-    document.body.append(this.comingSoon);
-    this.comingSoonTimer = null;
+    this.popupMirror = document.createElement("aside");
+    this.popupMirror.className = "zeta-popup-mirror";
+    this.popupMirror.setAttribute("aria-hidden", "true");
+    this.popupMirror.innerHTML = `
+      <iframe
+        class="zeta-popup-mirror-frame"
+        src="${chrome.runtime.getURL("popup.html?embedded=1")}"
+        title="zeta popup mirror"
+      ></iframe>
+    `;
+    document.body.append(this.popupMirror);
+    this.isPopupOpen = false;
 
     this.refs = {
       statusDot: this.root.querySelector("#zeta-status-dot"),
@@ -432,7 +439,7 @@ class ZetaPanel {
 
   bindEvents() {
     this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel?.(false));
-    this.fab.addEventListener("click", () => this.showComingSoon());
+    this.fab.addEventListener("click", () => this.handlers.onTogglePanel?.(!this.isPopupOpen));
     this.refs.runBtn.addEventListener("click", () => this.handlers.onRunNow());
     this.refs.regenerateBtn.addEventListener("click", () => this.handlers.onRegenerate());
     this.refs.undoBtn.addEventListener("click", () => this.handlers.onUndoLast());
@@ -496,26 +503,17 @@ class ZetaPanel {
   }
 
   setOpen(open) {
-    this.root.classList.toggle("is-collapsed", !open);
-    this.fab.classList.toggle("is-hidden", !!open);
-    this.fab.setAttribute("aria-expanded", open ? "true" : "false");
+    this.isPopupOpen = !!open;
+    // Keep the legacy shell hidden; the mirror iframe shows the same UI as the toolbar popup.
+    this.root.classList.add("is-collapsed");
+    this.popupMirror.classList.toggle("is-open", this.isPopupOpen);
+    this.popupMirror.setAttribute("aria-hidden", this.isPopupOpen ? "false" : "true");
+    this.fab.setAttribute("aria-expanded", this.isPopupOpen ? "true" : "false");
   }
 
   setTheme(_theme) {
     this.root.setAttribute("data-theme", "light");
     document.documentElement.setAttribute("data-zeta-theme", "light");
-  }
-
-  showComingSoon() {
-    if (this.comingSoonTimer) {
-      clearTimeout(this.comingSoonTimer);
-      this.comingSoonTimer = null;
-    }
-    this.comingSoon.classList.add("is-visible");
-    this.comingSoonTimer = window.setTimeout(() => {
-      this.comingSoon.classList.remove("is-visible");
-      this.comingSoonTimer = null;
-    }, 1600);
   }
 
   setGlobalState(state, text) {
@@ -655,11 +653,8 @@ class ZetaPanel {
   }
 
   remove() {
-    if (this.comingSoonTimer) {
-      clearTimeout(this.comingSoonTimer);
-    }
-    this.comingSoon.remove();
     this.fab.remove();
+    this.popupMirror.remove();
     this.root.remove();
   }
 }

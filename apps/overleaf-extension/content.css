@@ -9,8 +9,7 @@
 .zeta-shell,
 .zeta-shell *,
 .zeta-suggestion-popover,
-.zeta-suggestion-popover *,
-.zeta-coming-soon {
+.zeta-suggestion-popover * {
   border-radius: 0 !important;
 }
 
@@ -39,10 +38,10 @@
 }
 
 .zeta-suggestion-popover {
-  --popover-bg: #ffffff;
-  --popover-border: #c7c7c7;
-  --popover-text: #141414;
-  --popover-muted: #666666;
+  --popover-bg: #fffdf9;
+  --popover-border: #dfcfbf;
+  --popover-text: #2e2d29;
+  --popover-muted: #6e6258;
   position: fixed;
   width: min(360px, calc(100vw - 24px));
   border: 1px solid var(--popover-border);
@@ -101,8 +100,8 @@
   width: 58px;
   height: 58px;
   border-radius: 9999px !important;
-  border: 1px solid #c7c7c7;
-  background: #ffffff;
+  border: 1px solid #dfcfbf;
+  background: #fffdf9;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
   display: inline-flex;
   align-items: center;
@@ -116,7 +115,7 @@
   width: 30px;
   height: 30px;
   border-radius: 9999px !important;
-  background: #ffffff;
+  background: #fffdf9;
 }
 
 .zeta-fab:hover {
@@ -134,47 +133,54 @@
   transform: translateY(8px) scale(0.93);
 }
 
-.zeta-coming-soon {
+.zeta-popup-mirror {
   position: fixed;
-  right: 16px;
-  bottom: 82px;
-  padding: 8px 10px;
-  border: 1px solid #c7c7c7;
-  background: #ffffff;
-  color: #1b1b1b;
-  font-family: "DM Sans", sans-serif;
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
-  z-index: 2147483617;
+  right: 14px;
+  bottom: 88px;
+  width: min(420px, calc(100vw - 20px));
+  height: min(88vh, 920px);
+  border: 1px solid #dfcfbf;
+  background: #fffdf9;
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.12);
+  z-index: 2147483618;
+  overflow: hidden;
   opacity: 0;
-  transform: translateY(6px);
   pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.zeta-coming-soon.is-visible {
+.zeta-popup-mirror.is-open {
   opacity: 1;
-  transform: translateY(0);
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.zeta-popup-mirror-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #f8f5f0;
 }
 
 
 .zeta-shell {
-  --zeta-bg: #f8f8f8;
-  --zeta-surface: #ffffff;
-  --zeta-surface-2: #ffffff;
-  --zeta-border: #d3d3d3;
-  --zeta-text: #141414;
-  --zeta-muted: #666666;
-  --zeta-emphasis: #141414;
-  --zeta-btn-bg: #ffffff;
-  --zeta-btn-text: #141414;
-  --zeta-mode-thumb: #ececec;
-  --zeta-mode-active: #141414;
+  --zeta-bg: #f8f5f0;
+  --zeta-surface: #fffdf9;
+  --zeta-surface-2: #fffaf4;
+  --zeta-border: #dfcfbf;
+  --zeta-text: #2e2d29;
+  --zeta-muted: #6e6258;
+  --zeta-emphasis: #2e2d29;
+  --zeta-btn-bg: #fffdf9;
+  --zeta-btn-text: #2e2d29;
+  --zeta-mode-thumb: #ecd2cb;
+  --zeta-mode-active: #2e2d29;
   --zeta-card-shadow: rgba(0, 0, 0, 0.12);
-  --zeta-track: #efefef;
-  --zeta-health-fill: linear-gradient(90deg, #7a7a7a 0%, #b7b7b7 100%);
-  --zeta-accent: #7a7a7a;
+  --zeta-track: #f0e4d7;
+  --zeta-health-fill: linear-gradient(90deg, #8c1515 0%, #b83c3c 100%);
+  --zeta-accent: #8c1515;
   --zeta-success: #2f8f5b;
   --zeta-error: #b1040e;
   position: fixed;
@@ -197,21 +203,21 @@
 }
 
 .zeta-shell[data-theme="light"] {
-  --zeta-bg: #f8f8f8;
-  --zeta-surface: #ffffff;
-  --zeta-surface-2: #ffffff;
-  --zeta-border: #d3d3d3;
-  --zeta-text: #141414;
-  --zeta-muted: #666666;
-  --zeta-emphasis: #141414;
-  --zeta-btn-bg: #ffffff;
-  --zeta-btn-text: #141414;
-  --zeta-mode-thumb: #ececec;
-  --zeta-mode-active: #141414;
+  --zeta-bg: #f8f5f0;
+  --zeta-surface: #fffdf9;
+  --zeta-surface-2: #fffaf4;
+  --zeta-border: #dfcfbf;
+  --zeta-text: #2e2d29;
+  --zeta-muted: #6e6258;
+  --zeta-emphasis: #2e2d29;
+  --zeta-btn-bg: #fffdf9;
+  --zeta-btn-text: #2e2d29;
+  --zeta-mode-thumb: #ecd2cb;
+  --zeta-mode-active: #2e2d29;
   --zeta-card-shadow: rgba(0, 0, 0, 0.12);
-  --zeta-track: #efefef;
-  --zeta-health-fill: linear-gradient(90deg, #7a7a7a 0%, #b7b7b7 100%);
-  --zeta-accent: #7a7a7a;
+  --zeta-track: #f0e4d7;
+  --zeta-health-fill: linear-gradient(90deg, #8c1515 0%, #b83c3c 100%);
+  --zeta-accent: #8c1515;
   --zeta-success: #2f8f5b;
   --zeta-error: #b1040e;
 }
@@ -244,7 +250,7 @@
   height: 36px;
   border-radius: 999px;
   border: 1px solid var(--zeta-border);
-  background: #fff;
+  background: var(--zeta-surface);
 }
 
 .zeta-brand h2 {
@@ -284,7 +290,7 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #8d8d8d;
+  background: color-mix(in srgb, var(--zeta-muted) 78%, #ffffff 22%);
 }
 
 .zeta-global-pill.is-analyzing .zeta-global-dot {
@@ -301,7 +307,7 @@
 }
 
 .zeta-global-pill.is-offline .zeta-global-dot {
-  background: #999999;
+  background: color-mix(in srgb, var(--zeta-muted) 86%, #ffffff 14%);
 }
 
 .zeta-status-row {
@@ -324,7 +330,7 @@
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #888;
+  background: color-mix(in srgb, var(--zeta-muted) 80%, #ffffff 20%);
 }
 
 .zeta-status-dot.is-analyzing {
@@ -534,6 +540,32 @@
   gap: 7px;
 }
 
+.zeta-tab-strip {
+  display: inline-flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.zeta-tab-btn {
+  border: 1px solid var(--zeta-border);
+  border-radius: 999px;
+  background: var(--zeta-surface-2);
+  color: var(--zeta-muted);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.zeta-tab-btn.is-active {
+  color: var(--zeta-btn-text);
+  border-color: var(--zeta-accent);
+}
+
+.zeta-tab-panel[hidden] {
+  display: none !important;
+}
+
 .zeta-item {
   border: 1px solid var(--zeta-border);
   border-left: 3px solid var(--zeta-error);
@@ -544,15 +576,15 @@
 
 .zeta-shell[data-theme="light"] .zeta-item {
   border-color: var(--zeta-border);
-  background: color-mix(in srgb, #ffffff 90%, #f2e8e8 10%);
+  background: color-mix(in srgb, var(--zeta-surface) 86%, var(--zeta-accent) 14%);
 }
 
 .zeta-item[data-severity="warning"] {
-  border-left-color: #ffd84a;
+  border-left-color: #c7851a;
 }
 
 .zeta-item[data-severity="info"] {
-  border-left-color: #7f7f7f;
+  border-left-color: color-mix(in srgb, var(--zeta-muted) 84%, #ffffff 16%);
 }
 
 .zeta-item strong {
@@ -603,7 +635,7 @@
 
 .zeta-activity-item {
   border: 1px solid var(--zeta-border);
-  border-left: 3px solid #888;
+  border-left: 3px solid color-mix(in srgb, var(--zeta-muted) 80%, #ffffff 20%);
   border-radius: 10px;
   background: var(--zeta-surface-2);
   padding: 7px 8px;
@@ -624,6 +656,71 @@
 
 .zeta-activity-item p {
   margin: 3px 0 0;
+  font-size: 10px;
+  color: var(--zeta-muted);
+}
+
+.zeta-fs-list {
+  gap: 6px;
+}
+
+.zeta-fs-node {
+  border: 1px solid var(--zeta-border);
+  border-radius: 9px;
+  background: var(--zeta-surface-2);
+  padding: 6px 7px;
+}
+
+.zeta-fs-node.is-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zeta-accent) 60%, #ffffff 40%);
+}
+
+.zeta-fs-node--root {
+  background: var(--zeta-surface);
+}
+
+.zeta-fs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.zeta-fs-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.zeta-fs-meta {
+  font-size: 10px;
+  color: var(--zeta-muted);
+}
+
+.zeta-fs-id {
+  margin: 3px 0 0;
+  font-size: 10px;
+  color: var(--zeta-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.zeta-fs-children {
+  list-style: none;
+  margin: 6px 0 0 10px;
+  padding: 0 0 0 9px;
+  border-left: 1px dashed var(--zeta-border);
+  display: grid;
+  gap: 6px;
+}
+
+.zeta-fs-node--sentence {
+  background: var(--zeta-bg);
+  border-style: dashed;
+}
+
+.zeta-fs-text {
+  margin: 4px 0 0;
   font-size: 10px;
   color: var(--zeta-muted);
 }
@@ -676,9 +773,12 @@
     bottom: 12px;
   }
 
-  .zeta-coming-soon {
-    right: 12px;
-    bottom: 74px;
+  .zeta-popup-mirror {
+    inset: 10px;
+    width: auto;
+    height: auto;
+    bottom: 10px;
+    right: 10px;
   }
 
   .zeta-toolbar {

@@ -8,6 +8,7 @@
   const IGNORED_KEY = "zetaIgnoredIssueKeys";
   const TELEMETRY_KEY = "zetaTelemetry";
   const PANEL_SNAPSHOT_KEY = "zetaPanelSnapshot";
+  const UI_SURFACE_KEY = "zetaUiSurface";
   const CACHE_TTL_MS = 90 * 1000;
   const MAX_HIGHLIGHT_RECTS = 120;
 
@@ -158,6 +159,7 @@
     IGNORED_KEY,
     TELEMETRY_KEY,
     PANEL_SNAPSHOT_KEY,
+    UI_SURFACE_KEY,
     CACHE_TTL_MS,
     MAX_HIGHLIGHT_RECTS,
     DEFAULT_SETTINGS,
