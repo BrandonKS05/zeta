@@ -219,6 +219,13 @@ def _is_herald_root_endpoint(modal_endpoint_url: str) -> bool:
     return path == "" or path == "/"
 
 
+def _modal_base_url(modal_endpoint_url: str) -> str:
+    """Return the Modal app base URL (scheme + netloc + /) with no path. Used for autocomplete (translator/Herald)."""
+    normalized = modal_endpoint_url.strip()
+    parsed = urlsplit(normalized)
+    return urlunsplit((parsed.scheme, parsed.netloc, "/", parsed.query, parsed.fragment))
+
+
 def _resolve_modal_complete_url(modal_endpoint_url: str) -> str:
     """Resolve the Modal /v1/complete URL from the configured modal endpoint (e.g. /v1/generate or /v1/analyze)."""
     normalized = modal_endpoint_url.strip()
@@ -470,23 +477,15 @@ async def complete_autocomplete(
         raise ModalClientError(
             "MODAL_ENDPOINT_URL is not configured. Set it on the lean-backend server (e.g. to your Modal app URL like https://user--app.modal.run or .../v1/generate) so autocomplete can run."
         )
-    use_herald = _is_herald_root_endpoint(settings.modal_endpoint_url)
-    complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
+    # Autocomplete always uses the translator/Herald contract: POST to base URL only (no /v1/...).
+    complete_url = _modal_base_url(settings.modal_endpoint_url)
     logger.info(
-        "modal_autocomplete_request configured=%s resolved_url=%s use_herald=%s",
+        "modal_autocomplete_request configured=%s resolved_url=%s",
         settings.modal_endpoint_url,
         complete_url,
-        use_herald,
     )
     herald_system = (system_prompt or getattr(settings, "modal_complete_system_prompt", None) or HERALD_AUTOCOMPLETE_SYSTEM_PROMPT).strip()
-    if use_herald:
-        payload = _build_herald_autocomplete_payload(request_payload, herald_system)
-    else:
-        payload = dict(request_payload)
-        if system_prompt is not None and system_prompt.strip():
-            payload["system_prompt"] = system_prompt.strip()
-        elif getattr(settings, "modal_complete_system_prompt", None):
-            payload["system_prompt"] = settings.modal_complete_system_prompt.strip()
+    payload = _build_herald_autocomplete_payload(request_payload, herald_system)
 
     headers = {"Content-Type": "application/json"}
     if settings.modal_api_key:
@@ -500,11 +499,7 @@ async def complete_autocomplete(
             raise ModalClientError(f"Modal complete request failed: {exc}") from exc
         if response.status_code >= 400:
             body_preview = (response.text or "")[:400].strip()
-            hint = ""
-            if response.status_code == 404 and not use_herald:
-                hint = " Ensure the Modal app exposes POST /v1/complete."
-            elif response.status_code == 502:
-                hint = " Modal app may be cold or failing; check the Modal dashboard."
+            hint = " Check the Modal app (POST /) and dashboard." if response.status_code == 502 else ""
             raise ModalClientError(
                 f"Modal complete returned HTTP {response.status_code}: {body_preview or 'no body'}.{hint}"
             )
@@ -514,6 +509,4 @@ async def complete_autocomplete(
             raise ModalClientError("Modal complete returned non-JSON response")
         if not isinstance(data, dict):
             raise ModalClientError("Modal complete returned non-object response")
-        if use_herald:
-            return _normalize_herald_complete_response(data, request_payload)
-        return data
+        return _normalize_herald_complete_response(data, request_payload)

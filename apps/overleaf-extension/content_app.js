@@ -818,6 +818,10 @@ class ZetaApp {
       this.clearAutocompleteSuggestion();
       return;
     }
+    if (this.autocompleteInFlight) {
+      this.cancelAutocompleteNow();
+      this.renderTabGhost();
+    }
     if (this.lastRun) {
       this.syncPopoverWithCaret();
     }
@@ -1879,7 +1883,7 @@ class ZetaApp {
       thinking.className = "zeta-tab-thinking";
       const label = document.createElement("span");
       label.className = "zeta-tab-thinking-label";
-      label.textContent = "zeta thinking";
+      label.textContent = "Zeta is thinking...";
       const dots = document.createElement("span");
       dots.className = "zeta-tab-thinking-dots";
       for (let i = 0; i < 3; i += 1) {
