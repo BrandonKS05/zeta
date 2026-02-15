@@ -6,7 +6,11 @@ Minimal, production-leaning FastAPI backend for NL theorem/proof -> Lean generat
 
 - `POST /v1/lean/solve`
   - Calls Modal endpoint to generate Lean code.
-  - For translator Modal endpoints (root URL, `/v1/analyze`, `/v1/generate`, or `/v1/query`), request payload is sent as:
+  - Payload mapping depends on Modal endpoint form:
+    - Root endpoint (e.g. `https://...modal.run`): forwards backend schema unchanged:
+      - `nl_input`, `context`, `max_iters`
+      - preserves all custom fields inside `context`
+    - Explicit translator API endpoints (`/v1/analyze`, `/v1/generate`, `/v1/query`): sends:
     - `text` <- `nl_input`
     - `theorem_name` <- `context.theorem_name` (or fallback `generated_theorem`)
     - `imports` <- `context.imports` (default `["Std"]`)

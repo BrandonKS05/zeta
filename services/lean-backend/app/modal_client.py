@@ -44,14 +44,19 @@ _ANALYZE_METADATA_FIELDS = (
 
 
 def _uses_analyze_payload_shape(endpoint_url: str) -> bool:
-    """Translator-modal accepts this shape on root, /v1/analyze, /v1/generate, and /v1/query."""
+    """Translator-modal OpenAPI endpoints expect the analyze-style payload."""
     path = urlsplit(endpoint_url.strip()).path.rstrip("/")
     return (
-        path == ""
-        or path.endswith(_ANALYZE_ENDPOINT_SUFFIX)
+        path.endswith(_ANALYZE_ENDPOINT_SUFFIX)
         or path.endswith(_GENERATE_ENDPOINT_SUFFIX)
         or path.endswith(_QUERY_ENDPOINT_SUFFIX)
     )
+
+
+def _uses_backend_payload_shape(endpoint_url: str) -> bool:
+    """Root modal endpoints typically proxy lean-backend's nl_input/context schema."""
+    path = urlsplit(endpoint_url.strip()).path.rstrip("/")
+    return path == ""
 
 
 def _compact_dict(data: dict[str, Any]) -> dict[str, Any]:
@@ -136,6 +141,13 @@ def _build_modal_payload(
     include_raw_model_output = _normalize_optional_bool(context_payload.get("include_raw_model_output"))
     if include_raw_model_output is not None:
         analyze_payload["include_raw_model_output"] = include_raw_model_output
+
+    if _uses_backend_payload_shape(endpoint_url):
+        return {
+            "nl_input": prompt,
+            "context": context_payload,
+            "max_iters": max_iters,
+        }
 
     if _uses_analyze_payload_shape(endpoint_url):
         return analyze_payload
