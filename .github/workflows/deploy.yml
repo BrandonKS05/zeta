@@ -19,7 +19,7 @@ jobs:
             cd /home/ubuntu/treehacks-2026/services/lean-backend
             git fetch --all
             git reset --hard origin/main
-            docker compose pull || true
-            docker compose up -d --build
+            docker compose up -d --build lean-backend
+            curl -fsS http://127.0.0.1:8000/healthz >/dev/null
             docker image prune -f
 
