@@ -397,6 +397,39 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _log_llm_response_when_content_missing(data: dict[str, Any], log: logging.Logger) -> None:
+    """Log response structure when message content is missing (for debugging empty content)."""
+    try:
+        log.warning("llm_response_missing_content top_keys=%s", list(data.keys()))
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            c0 = choices[0]
+            if isinstance(c0, dict):
+                log.warning(
+                    "llm_response_missing_content choice0 finish_reason=%s",
+                    c0.get("finish_reason"),
+                )
+                msg = c0.get("message")
+                if isinstance(msg, dict):
+                    raw = msg.get("content")
+                    if raw is None:
+                        desc = "None"
+                    elif isinstance(raw, str):
+                        desc = f"str(len={len(raw)})"
+                    elif isinstance(raw, list):
+                        desc = f"list(len={len(raw)})"
+                    else:
+                        desc = type(raw).__name__
+                    log.warning(
+                        "llm_response_missing_content message.content=%s message_keys=%s has_refusal=%s",
+                        desc,
+                        list(msg.keys()),
+                        "refusal" in msg and msg.get("refusal") is not None,
+                    )
+    except Exception as e:
+        log.warning("llm_response_missing_content log_err=%s", e)
+
+
 def _fallback_interpretation(
     *,
     nl_input: str,
