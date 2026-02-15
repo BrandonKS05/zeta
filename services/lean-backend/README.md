@@ -67,10 +67,14 @@ services/lean-backend/
 - Lean compile:
   - `LEAN_COMMAND` (default `lean`)
   - `LAKE_COMMAND` (default `lake`)
+  - `ELAN_COMMAND` (default `elan`)
   - `LAKE_PROJECT_DIR` (if set, compile via `lake env lean`)
   - `LEAN_TEMP_DIR` (optional parent dir for temp compile files)
   - `ELAN_HOME` (optional custom elan toolchain location)
   - `REQUIRE_LAKE_FOR_MATHLIB` (default `true`; reject Mathlib imports when no `LAKE_PROJECT_DIR`)
+  - `AUTO_CONFIGURE_ELAN_TOOLCHAIN` (default `true`; when Lean reports "no default toolchain configured", run `elan default ...` once and retry)
+  - `ELAN_DEFAULT_TOOLCHAIN` (default `stable`; toolchain passed to `elan default`)
+  - `ELAN_TOOLCHAIN_INSTALL_TIMEOUT_SECONDS` (default `180`)
   - `LEAN_TIMEOUT_SECONDS` (default `15`)
   - `COMPILER_OUTPUT_MAX_CHARS` (default `20000`)
 

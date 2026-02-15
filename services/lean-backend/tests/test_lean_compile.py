@@ -204,3 +204,55 @@ def test_compile_lean_does_not_fallback_to_standalone_for_mathlib_inputs(tmp_pat
 
     assert result.success is False
     assert "external command 'git' exited with code 255" in result.stderr
+
+
+def test_compile_lean_bootstraps_elan_default_toolchain_on_missing_default(tmp_path: Path) -> None:
+    marker = tmp_path / "toolchain_ready"
+
+    fake_lean = tmp_path / "fake_lean.sh"
+    fake_lean.write_text(
+        "#!/usr/bin/env bash\n"
+        f"marker=\"{marker.as_posix()}\"\n"
+        "if [ ! -f \"$marker\" ]; then\n"
+        "  echo 'error: no default toolchain configured. run `elan default stable` to install & configure the latest Lean 4 stable release.' >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_lean.chmod(0o755)
+
+    fake_elan = tmp_path / "fake_elan.sh"
+    fake_elan.write_text(
+        "#!/usr/bin/env bash\n"
+        f"marker=\"{marker.as_posix()}\"\n"
+        "if [ \"$1\" = \"default\" ] && [ \"$2\" = \"stable\" ]; then\n"
+        "  touch \"$marker\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo \"unexpected elan args: $*\" >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_elan.chmod(0o755)
+
+    settings = SimpleNamespace(
+        lean_command=str(fake_lean),
+        lake_command="lake",
+        elan_command=str(fake_elan),
+        lake_project_dir=None,
+        auto_configure_elan_toolchain=True,
+        elan_default_toolchain="stable",
+        elan_toolchain_install_timeout_seconds=5.0,
+        lean_timeout_seconds=5.0,
+        compiler_output_max_chars=20_000,
+        lean_temp_dir=None,
+        elan_home=None,
+    )
+
+    result = asyncio.run(compile_lean("def ok : Nat := 1", settings=settings))
+
+    assert marker.exists()
+    assert result.success is True
+    assert result.stderr == ""
+    assert result.diagnostics == []

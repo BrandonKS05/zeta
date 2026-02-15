@@ -18,6 +18,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 RUN if [ "$INSTALL_LEAN" = "true" ]; then \
       curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y; \
       /root/.elan/bin/elan default stable; \
+      ln -sf /root/.elan/bin/elan /usr/local/bin/elan; \
       ln -sf /root/.elan/bin/lean /usr/local/bin/lean; \
       ln -sf /root/.elan/bin/lake /usr/local/bin/lake; \
       lean --version; \

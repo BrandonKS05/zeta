@@ -25,6 +25,8 @@ _ALLOWED_SOURCES = {"latex", "lean", "both", "unknown"}
 
 
 def _endpoint_url(settings: Settings) -> str:
+    if settings.llm_endpoint_url:
+        return settings.llm_endpoint_url
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
 
@@ -408,7 +410,6 @@ async def explain_issue_chat(
 
     body = {
         "model": settings.llm_model,
-        "temperature": 0,
         "messages": [
             {
                 "role": "system",

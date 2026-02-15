@@ -20,7 +20,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v4"
+APP_VERSION = "2026-02-15-llm-semantic-interpretation-v6"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -141,6 +141,38 @@ Rules:
 4) Do not invent imports or theorem names not implied by context.
 """
 
+SEMANTIC_INTERPRETATION_SYSTEM_PROMPT = """You are a math semantics checker for NL->Lean translations.
+You receive the natural-language statement and the Lean proposition that typechecked.
+Return JSON only with keys:
+- summary: short sentence
+- items: list of 0-2 objects with keys:
+  error, probable_cause, suggested_fix, source, latex_start, latex_end, latex_excerpt, replacement, confidence
+- suggestions: list of short actionable strings
+
+Rules:
+1) If no high-confidence semantic issue is found, return items as [] and suggestions as [].
+2) Only flag clear contradictions or over-strong quantifier claims (for example statements that are not true for all values).
+2a) For universal (`for all` / `∀`) numeric claims, actively test simple counterexamples mentally (small and larger values) before returning items=[].
+3) If you flag an issue, include latex_excerpt that appears verbatim in the original input.
+4) `replacement` must be direct replacement text for latex_excerpt (not prose), when possible.
+5) `source` should be one of: latex, lean, both, unknown.
+6) Never output congratulatory/positive diagnostics (for example "correct statement", "valid statement"). Use items=[] for valid inputs.
+
+Example problematic case:
+input_text: "For all n ≥ 2, n + 2 = 2n."
+items[0].error should indicate the universal equality is false.
+items[0].latex_excerpt can be "n + 2 = 2n".
+items[0].replacement can be a corrected mathematical claim text.
+
+Another problematic case:
+input_text: "For all n in Nat, n^2 ≤ n + 3."
+This is false for large n (e.g. n=5). items should include that counterexample-style reason.
+
+Example valid case:
+input_text: "For all n ∈ N, n + 0 = n."
+items should be [].
+"""
+
 LEAN_DECL_RE = re.compile(
     r"^(theorem|lemma|example|axiom)\s+([A-Za-z_][A-Za-z0-9_']*)?\s*:\s*(.*)$",
     re.IGNORECASE | re.DOTALL,
@@ -205,16 +237,10 @@ LEAN_STATEMENT_JSONISH_RE = re.compile(
     re.DOTALL,
 )
 
-COMPLETE_FORBIDDEN_TOKENS = (
-    "theorem ",
-    "lemma ",
-    "axiom ",
-    "import ",
-    "namespace ",
-    "set_option ",
-    "#check ",
-    "sorry",
-    "by ",
+COMPLETE_FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("lean_keyword_start", re.compile(r"^\s*(?:theorem|lemma|axiom|import|namespace|set_option|#check)\b", re.IGNORECASE)),
+    ("lean_proof_start", re.compile(r"^\s*by\b", re.IGNORECASE)),
+    ("sorry_token", re.compile(r"\bsorry\b", re.IGNORECASE)),
 )
 COMPLETE_TEXT_CLEANUP_RE = re.compile(r"^[\s:;,.-]+")
 COMPLETE_CANDIDATES_ARRAY_RE = re.compile(
@@ -227,26 +253,26 @@ COMPLETE_TRUNCATED_FIRST_CANDIDATE_RE = re.compile(
     re.IGNORECASE,
 )
 COMPLETE_RETRIEVAL_CORPUS = (
-    "∀ n : Nat, n + 0 = n",
-    "∀ n : Nat, 0 + n = n",
-    "∀ m n : Nat, m + n = n + m",
-    "∀ a b c : Nat, a * (b + c) = a * b + a * c",
-    "∀ x : Real, x = x",
-    "∀ x : Real, x ^ 2 ≥ 0",
-    "∀ x y : Real, x = y → y = x",
-    "∀ x y z : Real, x = y → y = z → x = z",
-    "∀ x : Real, x + 0 = x",
-    "∀ x : Real, 0 + x = x",
-    "∀ x : Real, x * 1 = x",
-    "∀ x : Real, 1 * x = x",
-    "∀ x y : Real, x + y = y + x",
-    "∀ x y : Real, x * y = y * x",
-    "∀ x : Real, x ≤ x",
-    "∀ x y z : Real, x ≤ y → y ≤ z → x ≤ z",
-    "∀ x : Real, |x| ≥ 0",
-    "∀ x : Real, x ≠ 0 → x * x⁻¹ = 1",
-    "∀ G : Type*, [Group G], ∀ a : G, a * 1 = a",
-    "∀ G : Type*, [Group G], ∀ a : G, 1 * a = a",
+    " therefore,",
+    " hence,",
+    " this implies that",
+    " it follows that",
+    " we obtain",
+    " by definition,",
+    " by contradiction,",
+    " by induction on n,",
+    " assume for contradiction that",
+    " for every n in Nat,",
+    " for all real numbers x,",
+    " let epsilon be positive.",
+    " in a right triangle,",
+    " the Pythagorean identity gives",
+    " so we can rewrite the expression as",
+    " the inequality holds because",
+    " applying the hypothesis yields",
+    " combining both sides gives",
+    " we conclude that",
+    " as required.",
 )
 
 app = modal.App(APP_NAME)
@@ -325,6 +351,8 @@ VLLM_MAX_NUM_SEQS = _env_int("VLLM_MAX_NUM_SEQS", 8)
 VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", False)
 ENABLE_FINAL_FEEDBACK_LLM = _env_bool("ENABLE_FINAL_FEEDBACK_LLM", True)
 FINAL_FEEDBACK_MAX_NEW_TOKENS = _env_int("FINAL_FEEDBACK_MAX_NEW_TOKENS", 224)
+ENABLE_SEMANTIC_INTERPRETATION_LLM = _env_bool("ENABLE_SEMANTIC_INTERPRETATION_LLM", True)
+SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS = _env_int("SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS", 224)
 
 
 def _resolve_secret(secret_name_env: str, secret_value_env: str) -> modal.Secret | None:
@@ -429,6 +457,26 @@ class LeanDiagnostic(BaseModel):
     message: str
 
 
+class InterpretationItem(BaseModel):
+    error: str
+    probable_cause: str | None = None
+    suggested_fix: str | None = None
+    source: Literal["latex", "lean", "both", "unknown"] = "unknown"
+    latex_start: int | None = None
+    latex_end: int | None = None
+    latex_excerpt: str | None = None
+    lean_line: int | None = None
+    lean_column: int | None = None
+    replacement: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class Interpretation(BaseModel):
+    summary: str
+    items: list[InterpretationItem] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
 class AnalyzeResponse(BaseModel):
     model: str
     status: Literal["ok", "needs_revision", "model_parse_error", "runtime_error", "unchecked"]
@@ -447,6 +495,7 @@ class AnalyzeResponse(BaseModel):
     cache_hit: bool = False
     model_output: str | None = None
     final_feedback: list[str] = Field(default_factory=list)
+    interpretation: Interpretation | None = None
     latency_ms: int = 0
     mode: Literal["fast", "thinking"] = "fast"
     iteration_count: int = 1
@@ -714,7 +763,41 @@ def _token_overlap_score(a_text: str, b_text: str) -> float:
     return intersection / max(1, len(a_tokens | b_tokens))
 
 
-def _retrieve_completion_hints(prefix_text: str, top_k: int) -> list[str]:
+def _extract_context_completion_hints(prefix_text: str, context_text: str, top_k: int) -> list[str]:
+    text = str(context_text or "").strip()
+    if not text:
+        return []
+
+    clipped = text[-2400:]
+    parts = re.split(r"(?:\n+|(?<=[.!?;:])\s+)", clipped)
+    seen: set[str] = set()
+    scored: list[tuple[float, str]] = []
+    prefix_tail = prefix_text[-320:]
+    for idx, part in enumerate(parts):
+        candidate = " ".join(part.strip().split())
+        if len(candidate) < 12 or len(candidate) > 220:
+            continue
+        if re.match(r"^(?:theorem|lemma|axiom|import|namespace|set_option|#check)\b", candidate, re.IGNORECASE):
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        overlap = _token_overlap_score(prefix_tail, candidate)
+        recency_bonus = idx / max(1, len(parts))
+        score = (0.8 * overlap) + (0.2 * recency_bonus)
+        scored.append((score, candidate))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    hints = [candidate for score, candidate in scored if score > 0]
+    return hints[: max(1, top_k)]
+
+
+def _retrieve_completion_hints(prefix_text: str, context_text: str, top_k: int) -> list[str]:
+    context_hints = _extract_context_completion_hints(prefix_text, context_text, top_k=max(1, top_k * 2))
+    if len(context_hints) >= top_k:
+        return context_hints[:top_k]
+
     ranked = sorted(
         (
             (_token_overlap_score(prefix_text, candidate), candidate)
@@ -723,10 +806,21 @@ def _retrieve_completion_hints(prefix_text: str, top_k: int) -> list[str]:
         key=lambda item: item[0],
         reverse=True,
     )
-    hints = [candidate for score, candidate in ranked if score > 0][: max(1, top_k)]
-    if not hints:
-        hints = list(COMPLETE_RETRIEVAL_CORPUS[: max(1, top_k)])
-    return hints
+    fallback_hints = [candidate for score, candidate in ranked if score > 0]
+    if not fallback_hints:
+        fallback_hints = list(COMPLETE_RETRIEVAL_CORPUS[: max(1, top_k)])
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for candidate in [*context_hints, *fallback_hints]:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(candidate)
+        if len(merged) >= max(1, top_k):
+            break
+    return merged
 
 
 def _complete_user_prompt(
@@ -1118,9 +1212,9 @@ def _normalize_completion_suffix(prefix_text: str, candidate: str) -> tuple[str 
         return None, ["empty_after_prefix_strip"]
 
     lowered = cleaned.lower()
-    for forbidden in COMPLETE_FORBIDDEN_TOKENS:
-        if forbidden in lowered:
-            reasons.append(f"forbidden_token:{forbidden.strip()}")
+    for label, pattern in COMPLETE_FORBIDDEN_PATTERNS:
+        if pattern.search(cleaned):
+            reasons.append(f"forbidden_pattern:{label}")
 
     if '"lean_statement_type"' in lowered or cleaned.startswith("{") or cleaned.endswith("}"):
         reasons.append("json_like_candidate")
@@ -1169,6 +1263,12 @@ def _rank_completion_candidates(
     ranked: list[CompletionCandidate] = []
     rejected: list[dict[str, Any]] = []
     seen: set[str] = set()
+    prefix_tail = prefix_text[-320:]
+    prefix_tokens = set(_tokenize_for_retrieval(prefix_tail))
+    in_inline_math = prefix_text.count("$") % 2 == 1
+    math_fragment_tokens = set()
+    if in_inline_math:
+        math_fragment_tokens = set(_tokenize_for_retrieval(prefix_text.rsplit("$", 1)[-1]))
 
     raw_candidates: list[str] = []
     for output in raw_outputs:
@@ -1182,13 +1282,31 @@ def _rank_completion_candidates(
         if suffix in seen:
             continue
         seen.add(suffix)
+        candidate_tokens = set(_tokenize_for_retrieval(suffix))
+        candidate_token_count = len(candidate_tokens)
+        if candidate_token_count >= 2 and candidate_tokens and candidate_tokens.issubset(prefix_tokens):
+            rejected.append({"candidate": raw_candidate, "reasons": ["redundant_with_prefix"]})
+            continue
 
         model_score = max(0.0, 1.0 - (idx * 0.08))
         retrieval_score = 0.0
         if retrieval_hints:
             retrieval_score = max(_token_overlap_score(suffix, hint) for hint in retrieval_hints)
+        context_score = _token_overlap_score(suffix, prefix_tail)
+        if candidate_token_count >= 2 and prefix_tokens and not (candidate_tokens & prefix_tokens):
+            rejected.append({"candidate": raw_candidate, "reasons": ["low_relevance_to_prefix"]})
+            continue
+        if in_inline_math and candidate_token_count >= 2 and math_fragment_tokens:
+            if not (candidate_tokens & math_fragment_tokens):
+                rejected.append({"candidate": raw_candidate, "reasons": ["math_context_mismatch"]})
+                continue
         syntax_score = _completion_syntax_score(suffix)
-        total_score = (0.55 * model_score) + (0.30 * retrieval_score) + (0.15 * syntax_score)
+        total_score = (
+            (0.45 * model_score)
+            + (0.20 * retrieval_score)
+            + (0.20 * context_score)
+            + (0.15 * syntax_score)
+        )
         ranked.append(
             CompletionCandidate(
                 completion=suffix,
@@ -1386,6 +1504,238 @@ def _summarize_final_feedback_with_llm(
     return deduped[:4]
 
 
+def _generate_semantic_interpretation_output(response: AnalyzeResponse) -> str | None:
+    if not ENABLE_SEMANTIC_INTERPRETATION_LLM:
+        return None
+    if not response.is_valid_lean:
+        return None
+
+    payload = {
+        "input_text": _shorten_for_prompt(response.input_text, 1200),
+        "normalized_text": _shorten_for_prompt(response.normalized_text, 1200),
+        "statement_type": _shorten_for_prompt(response.statement_type or "", 800),
+        "feedback": response.feedback,
+        "final_feedback": response.final_feedback,
+    }
+    user_prompt = (
+        "Typechecked translation payload:\n"
+        f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+        "Return only JSON with summary, items, and suggestions."
+    )
+
+    runtime = _load_runtime()
+    tokenizer = runtime.tokenizer
+
+    if getattr(tokenizer, "chat_template", None):
+        prompt = tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": SEMANTIC_INTERPRETATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        prompt = f"{SEMANTIC_INTERPRETATION_SYSTEM_PROMPT}\n\n{user_prompt}\n\nJSON:"
+    if runtime.backend == "vllm":
+        llm = runtime.llm
+        if llm is None:
+            return None
+        try:
+            from vllm import SamplingParams
+        except ModuleNotFoundError:
+            return None
+
+        sampling_kwargs: dict[str, Any] = {
+            "max_tokens": SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS,
+            "temperature": 0.0,
+            "top_p": 1.0,
+        }
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_token_id, int):
+            sampling_kwargs["stop_token_ids"] = [eos_token_id]
+        outputs = llm.generate(
+            [prompt],
+            sampling_params=SamplingParams(**sampling_kwargs),
+            use_tqdm=False,
+        )
+        if not outputs:
+            return None
+        candidates = getattr(outputs[0], "outputs", None) or []
+        if not candidates:
+            return None
+        return str(getattr(candidates[0], "text", "")).strip()
+
+    import torch
+
+    model = runtime.model
+    if model is None:
+        return None
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    kwargs: dict[str, Any] = {
+        **inputs,
+        "max_new_tokens": SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS,
+        "do_sample": False,
+        "use_cache": True,
+        "pad_token_id": tokenizer.pad_token_id,
+    }
+    if tokenizer.eos_token_id is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
+
+    with torch.inference_mode():
+        outputs = model.generate(**kwargs)
+
+    input_tokens = inputs["input_ids"].shape[1]
+    generated = outputs[0][input_tokens:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def _interpret_semantic_items_with_llm(response: AnalyzeResponse) -> Interpretation | None:
+    if not ENABLE_SEMANTIC_INTERPRETATION_LLM:
+        return None
+    if not response.is_valid_lean:
+        return None
+    if not response.statement_type:
+        return None
+
+    raw_output = _generate_semantic_interpretation_output(response)
+    if not raw_output:
+        return None
+
+    payload = _extract_json(raw_output)
+    if payload is None:
+        return None
+
+    source_text = response.input_text or response.normalized_text or ""
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    negative_markers = (
+        "false",
+        "not true",
+        "cannot hold",
+        "inconsistent",
+        "contradiction",
+        "wrong",
+        "invalid",
+        "fails for",
+        "counterexample",
+        "too strong",
+    )
+    positive_markers = (
+        "correct statement",
+        "valid statement",
+        "accurately represents",
+        "well-formed",
+        "looks good",
+    )
+
+    items: list[InterpretationItem] = []
+    for raw_item in raw_items[:2]:
+        if not isinstance(raw_item, dict):
+            continue
+
+        error = str(raw_item.get("error") or raw_item.get("message") or "").strip()
+        probable_cause = str(raw_item.get("probable_cause") or raw_item.get("cause") or "").strip() or None
+        suggested_fix = str(
+            raw_item.get("suggested_fix")
+            or raw_item.get("fix")
+            or raw_item.get("edit_hint")
+            or ""
+        ).strip() or None
+        replacement = str(
+            raw_item.get("replacement")
+            or raw_item.get("replace_with")
+            or ""
+        ).strip() or None
+        excerpt = str(
+            raw_item.get("latex_excerpt")
+            or raw_item.get("excerpt")
+            or raw_item.get("target_text")
+            or ""
+        ).strip() or None
+
+        start_raw = raw_item.get("latex_start")
+        end_raw = raw_item.get("latex_end")
+        start = int(start_raw) if isinstance(start_raw, int) else None
+        end = int(end_raw) if isinstance(end_raw, int) else None
+        if (start is None or end is None) and excerpt and source_text:
+            idx = source_text.find(excerpt)
+            if idx != -1:
+                start = idx
+                end = idx + len(excerpt)
+        if start is not None and end is not None:
+            if start < 0 or end <= start or end > len(source_text):
+                start = None
+                end = None
+
+        if not error:
+            error = suggested_fix or "Potential semantic inconsistency."
+        if not error:
+            continue
+
+        combined = " ".join(
+            part for part in [error, probable_cause or "", suggested_fix or ""] if part
+        ).lower()
+        if any(marker in combined for marker in positive_markers):
+            continue
+        if not any(marker in combined for marker in negative_markers):
+            continue
+
+        source = str(raw_item.get("source") or "latex").strip().lower()
+        if source not in {"latex", "lean", "both", "unknown"}:
+            source = "latex"
+
+        confidence_raw = raw_item.get("confidence")
+        confidence = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
+        if confidence is not None:
+            confidence = max(0.0, min(1.0, confidence))
+
+        if replacement:
+            replacement_lower = replacement.lower()
+            if any(marker in replacement_lower for marker in positive_markers):
+                replacement = None
+            elif len(replacement.split()) > 18 and not re.search(r"[=<>≤≥∈+\-*/^]", replacement):
+                replacement = None
+
+        items.append(
+            InterpretationItem(
+                error=error,
+                probable_cause=probable_cause,
+                suggested_fix=suggested_fix,
+                source=source,  # type: ignore[arg-type]
+                latex_start=start,
+                latex_end=end,
+                latex_excerpt=excerpt,
+                replacement=replacement,
+                confidence=confidence,
+            )
+        )
+
+    if not items:
+        return None
+
+    suggestions: list[str] = []
+    raw_suggestions = payload.get("suggestions")
+    if isinstance(raw_suggestions, list):
+        suggestions.extend(str(item).strip() for item in raw_suggestions if str(item).strip())
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        suggestions.append(summary)
+    for item in items:
+        if item.suggested_fix:
+            suggestions.append(item.suggested_fix)
+    suggestions = list(dict.fromkeys(item for item in suggestions if item))[:4]
+    summary_text = summary or (suggestions[0] if suggestions else "Potential semantic issue.")
+
+    return Interpretation(
+        summary=summary_text,
+        items=items,
+        suggestions=suggestions,
+    )
+
+
 def _apply_final_feedback_summary(request: AnalyzeRequest, response: AnalyzeResponse) -> AnalyzeResponse:
     if request.skip_lean_check or response.status == "runtime_error":
         return response
@@ -1400,9 +1750,73 @@ def _apply_final_feedback_summary(request: AnalyzeRequest, response: AnalyzeResp
 
     response.final_feedback = final_feedback
     for item in final_feedback:
-        rendered = f"LLM final feedback: {item}"
-        if rendered not in response.feedback:
-            response.feedback.append(rendered)
+        if item not in response.feedback:
+            response.feedback.append(item)
+    return response
+
+
+def _attach_interpretation(response: AnalyzeResponse) -> AnalyzeResponse:
+    if response.status in {"runtime_error", "unchecked"}:
+        return response
+
+    has_compile_error = (not response.is_valid_lean) or any(
+        diag.severity == "error" for diag in response.diagnostics
+    )
+    if not has_compile_error:
+        try:
+            semantic_interpretation = _interpret_semantic_items_with_llm(response)
+        except Exception:  # noqa: BLE001
+            semantic_interpretation = None
+        if semantic_interpretation and semantic_interpretation.items:
+            response.interpretation = semantic_interpretation
+            for item in semantic_interpretation.suggestions:
+                if item and item not in response.feedback:
+                    response.feedback.append(item)
+        elif response.interpretation is not None and not response.interpretation.items:
+            response.interpretation = None
+        return response
+
+    suggestions = [item for item in response.final_feedback if item.strip()]
+    if not suggestions:
+        suggestions = [
+            item
+            for item in response.feedback
+            if item.strip()
+            and not item.startswith("Generated a Lean statement type candidate")
+            and not item.startswith("Model assumptions:")
+            and not item.startswith("Model notes:")
+        ]
+    if not suggestions:
+        first_error = next(
+            (diag.message for diag in response.diagnostics if diag.severity == "error" and diag.message.strip()),
+            "",
+        )
+        if first_error:
+            suggestions = [first_error]
+    suggestions = list(dict.fromkeys(suggestions))[:4]
+
+    summary = suggestions[0] if suggestions else "Lean compilation failed."
+    default_fix = suggestions[0] if suggestions else None
+
+    error_diagnostics = [diag for diag in response.diagnostics if diag.severity == "error"]
+    fallback_diagnostics = error_diagnostics or response.diagnostics
+    items = [
+        InterpretationItem(
+            error=diag.message,
+            suggested_fix=default_fix,
+            source="lean",
+            lean_line=diag.line,
+            lean_column=diag.column,
+            confidence=0.55 if default_fix else None,
+        )
+        for diag in fallback_diagnostics
+    ]
+
+    response.interpretation = Interpretation(
+        summary=summary,
+        items=items,
+        suggestions=suggestions,
+    )
     return response
 
 
@@ -1827,7 +2241,7 @@ def _run_lean_check(
 
 def _build_feedback(
     statement_type: str | None,
-    diagnostics: list[LeanDiagnostic],
+    _diagnostics: list[LeanDiagnostic],
     assumptions: list[str],
     notes: str,
 ) -> list[str]:
@@ -1838,21 +2252,6 @@ def _build_feedback(
         feedback.append("Model assumptions: " + "; ".join(assumptions))
     if notes:
         feedback.append("Model notes: " + notes)
-
-    for diagnostic in diagnostics:
-        if diagnostic.severity != "error":
-            continue
-        lower = diagnostic.message.lower()
-        if "unknown constant" in lower or "unknown identifier" in lower:
-            feedback.append("Lean found an unknown identifier. Add explicit binders or required imports.")
-        elif "unknown package" in lower or "unknown module prefix" in lower:
-            feedback.append("Requested import is unavailable in this runtime. Install that Lean package or use `Std`.")
-        elif "type mismatch" in lower:
-            feedback.append("Lean reported a type mismatch. Clarify quantifiers/domains in the statement.")
-        elif "unexpected token" in lower or "parse" in lower:
-            feedback.append("Lean parsing failed. Check punctuation and Lean syntax around quantifiers.")
-        else:
-            feedback.append("Lean returned an error. Inspect diagnostics and revise wording/notation.")
     return feedback
 
 
@@ -2287,7 +2686,11 @@ def _complete(request: CompleteRequest) -> CompleteResponse:
 
     try:
         retrieval_started = time.perf_counter()
-        retrieval_hints = _retrieve_completion_hints(prefix_text, COMPLETE_RETRIEVAL_TOP_K)
+        retrieval_hints = _retrieve_completion_hints(
+            prefix_text,
+            request.context,
+            COMPLETE_RETRIEVAL_TOP_K,
+        )
         timings["retrieval"] = int((time.perf_counter() - retrieval_started) * 1000)
 
         generation_started = time.perf_counter()
@@ -2364,6 +2767,7 @@ def analyze_rpc(request: dict[str, Any]) -> dict[str, Any]:
         response.iteration_count = 1
         response.iteration_history = None
     response = _apply_final_feedback_summary(parsed, response)
+    response = _attach_interpretation(response)
     payload = response.model_dump()
     payload["cache_hit"] = False
     _cache_put(_analyze_cache, key, payload, ANALYZE_CACHE_MAX_ENTRIES)

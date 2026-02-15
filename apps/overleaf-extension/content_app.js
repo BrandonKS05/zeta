@@ -157,8 +157,11 @@ const AUTOCOMPLETE_MAX_TEXT_WINDOW = 1200;
 const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
 const DEFAULT_MODAL_ANALYZE_URL =
   "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/v1/analyze";
-const HARDCODED_ANALYZE_URL = DEFAULT_MODAL_ANALYZE_URL;
-const HARDCODED_COMPLETE_URL = HARDCODED_ANALYZE_URL.replace(/\/v1\/analyze\/?$/, "/v1/complete");
+const DEFAULT_LEAN_SOLVE_URL = "http://13.57.35.202:8000/v1/lean/solve";
+const DEFAULT_MODAL_COMPLETE_URL =
+  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/v1/complete";
+const HARDCODED_ANALYZE_URL = DEFAULT_LEAN_SOLVE_URL;
+const HARDCODED_COMPLETE_URL = DEFAULT_MODAL_COMPLETE_URL;
 
 class ZetaApp {
   constructor() {
@@ -197,6 +200,7 @@ class ZetaApp {
     this.lastRun = null;
     this.focusedIssueIndex = -1;
     this.responseCache = new Map();
+    this.inFlightSentenceRequests = new Map();
     this.sentenceCache = new Map();
     this.chunkTree = null;
     this.activeChunkId = null;
@@ -228,6 +232,7 @@ class ZetaApp {
     this.chatById = new Map();
     this.activeChatThreadId = null;
     this.lastChatSnapshotSignature = "";
+    this.pinnedPopoverIssueKey = "";
     this.autocompleteTimer = null;
     this.autocompleteCache = new Map();
     this.autocompleteRequestSeq = 0;
@@ -243,6 +248,7 @@ class ZetaApp {
 
     this.boundSelectionChange = this.handleSelectionChange.bind(this);
     this.boundFocusIn = this.handleFocusIn.bind(this);
+    this.boundPointerDown = this.handlePointerDown.bind(this);
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundScheduleByScroll = this.scheduleRender.bind(this);
     this.boundStorageChange = this.handleStorageChange.bind(this);
@@ -425,6 +431,7 @@ class ZetaApp {
   attachGlobalListeners() {
     document.addEventListener("selectionchange", this.boundSelectionChange, true);
     document.addEventListener("focusin", this.boundFocusIn, true);
+    document.addEventListener("pointerdown", this.boundPointerDown, true);
     document.addEventListener("keydown", this.boundKeyDown, true);
 
     window.addEventListener("scroll", this.boundScheduleByScroll, true);
@@ -441,6 +448,7 @@ class ZetaApp {
   detachGlobalListeners() {
     document.removeEventListener("selectionchange", this.boundSelectionChange, true);
     document.removeEventListener("focusin", this.boundFocusIn, true);
+    document.removeEventListener("pointerdown", this.boundPointerDown, true);
     document.removeEventListener("keydown", this.boundKeyDown, true);
 
     window.removeEventListener("scroll", this.boundScheduleByScroll, true);
@@ -586,7 +594,9 @@ class ZetaApp {
       nextSettings.backendUrl = HARDCODED_ANALYZE_URL;
       nextSettings.panelOpen = this.settings.panelOpen;
       this.settings = nextSettings;
-      if (this.settings.autocompleteManualTrigger) {
+      if (!this.settings.autocompleteEnabled) {
+        this.cancelAutocompleteNow();
+      } else if (this.settings.autocompleteManualTrigger) {
         this.clearAutocompleteSuggestion();
       }
       changed = true;
@@ -763,6 +773,43 @@ class ZetaApp {
       this.syncPopoverWithCaret();
     }
     this.scheduleAutocomplete("selection");
+  }
+
+  handlePointerDown(event) {
+    if (!event || event.button !== 0) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element) {
+      if (target.closest(".zeta-shell, .zeta-popup-mirror, .zeta-suggestion-popover")) {
+        return;
+      }
+    }
+    if (!this.lastRun || !this.activeAdapter || !this.overlay) {
+      this.pinnedPopoverIssueKey = "";
+      return;
+    }
+    if (!Array.isArray(this.overlay.rectIssueMap) || this.overlay.rectIssueMap.length === 0) {
+      this.pinnedPopoverIssueKey = "";
+      return;
+    }
+
+    const row = this.overlay.findIssueAtPoint(event.clientX, event.clientY);
+    if (!row || !row.issue) {
+      this.pinnedPopoverIssueKey = "";
+      return;
+    }
+
+    const issue = row.issue;
+    this.pinnedPopoverIssueKey = String(issue.key || "");
+    event.__zetaKeepPopover = true; // consumed by popover outside-click handler
+    const issueIndex = ensureArray(this.lastRun.issues).findIndex((item) => item?.key === issue.key);
+    if (issueIndex >= 0) {
+      this.focusedIssueIndex = issueIndex;
+      this.panel.setIssues(this.lastRun.issues, this.focusedIssueIndex);
+      this.panel.scrollIssueIntoView(this.focusedIssueIndex);
+    }
+    this.popover.open(issue, row.rect);
   }
 
   shouldClearAutocompleteOnKeydown(event) {
@@ -980,6 +1027,19 @@ class ZetaApp {
     this.renderTabGhost();
   }
 
+  cancelAutocompleteNow() {
+    if (this.autocompleteTimer) {
+      clearTimeout(this.autocompleteTimer);
+      this.autocompleteTimer = null;
+    }
+    this.autocompleteRequestSeq += 1;
+    this.autocompleteInFlight = false;
+    this.autocompletePendingSince = 0;
+    this.autocompleteQueuedReason = "";
+    this.autocompleteAwaitingUserInput = false;
+    this.clearAutocompleteSuggestion();
+  }
+
   reportAutocompleteErrorOnce(key, message) {
     const dedupeKey = String(key || "").trim();
     if (!dedupeKey || !message) {
@@ -1147,6 +1207,63 @@ class ZetaApp {
     return value.trim() ? value : "";
   }
 
+  isSentenceCompleteForAutocomplete(prefixText) {
+    let probe = String(prefixText || "");
+    if (!probe) {
+      return false;
+    }
+    probe = probe.replace(/\s+$/, "");
+    if (!probe) {
+      return false;
+    }
+
+    while (true) {
+      const next = probe
+        .replace(/(?:\\\)|\\\]|\)|\]|\}|["'`]|”|’)+$/gu, "")
+        .replace(/\$+$/g, "")
+        .replace(/\s+$/g, "");
+      if (next === probe) {
+        break;
+      }
+      probe = next;
+    }
+
+    return /[.?!;:]$/.test(probe);
+  }
+
+  getLiveAutocompleteBoundaryContext() {
+    if (!this.activeAdapter || !this.activeAdapter.isConnected()) {
+      return null;
+    }
+    try {
+      const snapshot = this.activeAdapter.getScopeSnapshot("document");
+      const text = String(snapshot?.sourceText || snapshot?.context || snapshot?.text || "");
+      const caretRaw = this.resolveCaretOffsetInScope(snapshot, this.activeAdapter);
+      if (!Number.isInteger(caretRaw)) {
+        return null;
+      }
+      const caret = clamp(caretRaw, 0, text.length);
+      return {
+        prefixText: text.slice(0, caret),
+        suffixText: text.slice(caret),
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  isSelectionInActiveAdapter() {
+    if (!this.activeAdapter || !this.activeAdapter.isConnected()) {
+      return false;
+    }
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0) {
+      return false;
+    }
+    const anchorNode = selection.anchorNode;
+    return !!(anchorNode && this.activeAdapter.containsNode(anchorNode));
+  }
+
   isOverleafSourceAdapter(adapter) {
     if (!adapter?.root || !(adapter.root instanceof Element)) {
       return false;
@@ -1185,6 +1302,9 @@ class ZetaApp {
     }
     const caretOffset = clamp(caretOffsetRaw, 0, sourceText.length);
     const prefixText = sourceText.slice(0, caretOffset);
+    if (this.isSentenceCompleteForAutocomplete(prefixText)) {
+      return null;
+    }
     const sentenceBoundary = Math.max(
       prefixText.lastIndexOf("\n"),
       prefixText.lastIndexOf("."),
@@ -1358,7 +1478,7 @@ class ZetaApp {
       this.autocompleteTimer = null;
     }
     if (this.settings.autocompleteEnabled === false) {
-      this.clearAutocompleteSuggestion();
+      this.cancelAutocompleteNow();
       return;
     }
     if (!this.activeAdapter || !this.activeAdapter.isConnected()) {
@@ -1375,7 +1495,16 @@ class ZetaApp {
     if (this.autocompleteAwaitingUserInput && reasonLabel === "typing") {
       return;
     }
-    const delay = immediate ? 0 : AUTOCOMPLETE_DEBOUNCE_MS;
+    if (reasonLabel !== "manual") {
+      const liveContext = this.getLiveAutocompleteBoundaryContext();
+      const livePrefix = String(liveContext?.prefixText || "");
+      if (this.isSentenceCompleteForAutocomplete(livePrefix)) {
+        this.clearAutocompleteSuggestion();
+        return;
+      }
+    }
+    const allowImmediate = immediate && reasonLabel === "manual";
+    const delay = allowImmediate ? 0 : AUTOCOMPLETE_DEBOUNCE_MS;
     this.autocompleteTimer = window.setTimeout(() => {
       this.autocompleteTimer = null;
       this.runAutocomplete(reasonLabel);
@@ -1385,7 +1514,7 @@ class ZetaApp {
   async runAutocomplete(reason = "typing") {
     const reasonLabel = String(reason || "typing");
     if (this.settings.autocompleteEnabled === false) {
-      this.clearAutocompleteSuggestion();
+      this.cancelAutocompleteNow();
       return;
     }
     if (this.settings.autocompleteManualTrigger && reasonLabel !== "manual") {
@@ -1437,6 +1566,18 @@ class ZetaApp {
         signature: context.signature,
         payload: result.payload,
         cacheHit: !!result.cacheHit,
+        requestContext: {
+          endpointUrl,
+          reason: reasonLabel,
+          signature: context.signature,
+          fragment: String(context.fragment || ""),
+          caretOffset: Number(context.caretOffset) || 0,
+          localCursorOffset: Number(context.localCursorOffset) || 0,
+          prefixTail: String(context.prefixText || "").slice(-360),
+          suffixHead: String(context.suffixText || "").slice(0, 180),
+          textWindow: String(context.textWindow || ""),
+          contextWindow: String(context.contextWindow || ""),
+        },
         updatedAt: Date.now(),
       };
       this.autocompleteBackoffUntil = 0;
@@ -1485,6 +1626,11 @@ class ZetaApp {
     this.ensureTabGhostElement();
     const element = this.tabGhostElement;
     if (!element) {
+      return;
+    }
+    if (this.settings.autocompleteEnabled === false) {
+      element.classList.add("is-hidden");
+      element.textContent = "";
       return;
     }
     const hasSuggestion = !!this.activeAutocomplete;
@@ -1647,6 +1793,63 @@ class ZetaApp {
     return String(candidates[selectedIndex] || "");
   }
 
+  buildAutocompleteAcceptanceDetail(
+    trigger,
+    insertion,
+    completion,
+    contextPrefix,
+    contextSuffix,
+    requestContext = null
+  ) {
+    const selectedIndex = this.activeAutocomplete
+      ? clamp(
+        Number(this.activeAutocomplete.selectedIndex) || 0,
+        0,
+        Math.max(0, ensureArray(this.activeAutocomplete.candidates).length - 1)
+      )
+      : 0;
+    const cached = this.activeAutocomplete?.cacheHit ? "true" : "false";
+    const context = requestContext && typeof requestContext === "object"
+      ? requestContext
+      : null;
+    const lines = [
+      "Acceptance",
+      `trigger: ${String(trigger || "tab")}`,
+      `selected_index: ${selectedIndex}`,
+      `cache_hit: ${cached}`,
+      `candidate: ${this.truncateActivityText(String(completion || "").trim(), 220)}`,
+      `inserted: ${this.truncateActivityText(String(insertion || ""), 220)}`,
+      "",
+      "Live boundary",
+      `prefix_tail: ${this.truncateActivityText(String(contextPrefix || "").slice(-240), 300)}`,
+      `suffix_head: ${this.truncateActivityText(String(contextSuffix || "").slice(0, 140), 220)}`,
+    ];
+
+    if (!context) {
+      return lines.join("\n");
+    }
+
+    lines.push(
+      "",
+      "Request context",
+      `endpoint: ${String(context.endpointUrl || this.resolveAutocompleteEndpoint() || "--")}`,
+      `reason: ${String(context.reason || "--")}`,
+      `signature: ${String(context.signature || "--")}`,
+      `fragment: ${this.truncateActivityText(String(context.fragment || ""), 260)}`,
+      `caret_offset: ${Number.isFinite(Number(context.caretOffset)) ? Number(context.caretOffset) : "--"}`,
+      `local_cursor_offset: ${Number.isFinite(Number(context.localCursorOffset)) ? Number(context.localCursorOffset) : "--"}`,
+      `prefix_tail: ${this.truncateActivityText(String(context.prefixTail || ""), 360)}`,
+      `suffix_head: ${this.truncateActivityText(String(context.suffixHead || ""), 220)}`,
+      "",
+      "text_window",
+      this.truncateActivityText(String(context.textWindow || ""), 1800),
+      "",
+      "context_window",
+      this.truncateActivityText(String(context.contextWindow || ""), 2200)
+    );
+    return lines.join("\n");
+  }
+
   acceptActiveAutocomplete(trigger = "tab") {
     if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
       return false;
@@ -1655,10 +1858,24 @@ class ZetaApp {
       return false;
     }
 
-    const context = this.collectAutocompleteContext();
-    if (!context || context.signature !== this.activeAutocomplete.signature) {
+    const requestContext = this.collectAutocompleteContext();
+    const liveContext = this.getLiveAutocompleteBoundaryContext();
+    const contextPrefix = String(liveContext?.prefixText ?? requestContext?.prefixText ?? "");
+    const contextSuffix = String(liveContext?.suffixText ?? requestContext?.suffixText ?? "");
+    if (this.isSentenceCompleteForAutocomplete(contextPrefix)) {
       this.clearAutocompleteSuggestion();
       return false;
+    }
+    if (
+      requestContext &&
+      requestContext.signature &&
+      this.activeAutocomplete.signature &&
+      requestContext.signature !== this.activeAutocomplete.signature
+    ) {
+      logTrace("autocomplete_accept_context_mismatch", {
+        expected: this.activeAutocomplete.signature,
+        got: requestContext.signature,
+      });
     }
 
     const completion = this.getActiveAutocompleteCandidate();
@@ -1668,15 +1885,23 @@ class ZetaApp {
     }
 
     let insertion = this.normalizeAutocompleteInsertion(
-      context.prefixText,
+      contextPrefix,
       completion,
-      context.suffixText
+      contextSuffix
     );
     insertion = this.normalizeAutocompleteBoundarySpacing(
-      context.prefixText,
+      contextPrefix,
       insertion,
-      context.suffixText
+      contextSuffix
     );
+    const leftBoundaryChar = contextPrefix.slice(-1);
+    const rightBoundaryChar = contextSuffix.slice(0, 1);
+    if (/\s$/.test(contextPrefix) || /\s/.test(leftBoundaryChar)) {
+      insertion = insertion.replace(/^\s+/, "");
+    }
+    if (/^\s/.test(contextSuffix) || /\s/.test(rightBoundaryChar) || /^[,.;:!?)}\]]/.test(contextSuffix)) {
+      insertion = insertion.replace(/\s+$/, "");
+    }
     if (!insertion) {
       this.clearAutocompleteSuggestion();
       return false;
@@ -1687,9 +1912,19 @@ class ZetaApp {
       return false;
     }
 
+    const acceptanceDetail = this.buildAutocompleteAcceptanceDetail(
+      trigger,
+      insertion,
+      completion,
+      contextPrefix,
+      contextSuffix,
+      this.activeAutocomplete?.requestContext || requestContext
+    );
     this.addActivity(
       `${trigger === "click" ? "Applied" : "Accepted"} autocomplete: ${insertion.trim().slice(0, 120)}`,
-      "success"
+      "success",
+      null,
+      acceptanceDetail
     );
     this.autocompleteAwaitingUserInput = true;
     this.clearAutocompleteSuggestion();
@@ -1723,7 +1958,8 @@ class ZetaApp {
     const targetInAdapter = target instanceof Element && this.activeAdapter.containsNode(target);
     const focused = document.activeElement;
     const focusedInAdapter = focused instanceof Element && this.activeAdapter.containsNode(focused);
-    if (!targetInAdapter && !focusedInAdapter) {
+    const selectionInAdapter = this.isSelectionInActiveAdapter();
+    if (!targetInAdapter && !focusedInAdapter && !selectionInAdapter) {
       return false;
     }
     const accepted = this.acceptActiveAutocomplete("tab");
@@ -1755,10 +1991,7 @@ class ZetaApp {
     this.settings = next;
     this.panel.setSettings(this.settings);
     if (!this.settings.autocompleteEnabled) {
-      this.autocompleteRequestSeq += 1;
-      this.autocompleteInFlight = false;
-      this.autocompletePendingSince = 0;
-      this.clearAutocompleteSuggestion();
+      this.cancelAutocompleteNow();
     } else if (this.settings.autocompleteManualTrigger) {
       this.clearAutocompleteSuggestion();
     }
@@ -2249,6 +2482,59 @@ class ZetaApp {
     };
   }
 
+  resolveChatEndpoints() {
+    const primary = this.resolveChatEndpoint();
+    const candidates = [
+      primary,
+      "http://13.57.35.202:8000/v1/chat/explain",
+    ];
+    const unique = [];
+    const seen = new Set();
+    for (const candidate of candidates) {
+      const value = String(candidate || "").trim();
+      if (!value || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      unique.push(value);
+    }
+    return unique;
+  }
+
+  buildLocalChatFallback(thread, question, failureReason = "") {
+    const sentence = String(thread?.sentenceText || "").trim();
+    const issueMessage = String(thread?.issueMessage || "Lean reported an issue.").trim();
+    const target = String(thread?.targetText || "").trim();
+    const replacement = String(thread?.replacement || "").trim();
+    const firstDiagnostic = ensureArray(thread?.diagnostics)
+      .map((diag) => String(diag?.message || "").trim())
+      .find(Boolean);
+    const location = Number.isInteger(thread?.line) && Number.isInteger(thread?.column)
+      ? ` (L${thread.line}:C${thread.column})`
+      : "";
+    const lines = [];
+    lines.push(`Diagnosis: ${issueMessage}${location}`);
+    if (sentence) {
+      lines.push(`Sentence: ${sentence}`);
+    }
+    if (target) {
+      lines.push(`Likely problematic span: ${target}`);
+    }
+    if (firstDiagnostic) {
+      lines.push(`Compiler detail: ${firstDiagnostic}`);
+    }
+    if (replacement) {
+      lines.push(`Try this rewrite next: ${replacement}`);
+    } else {
+      lines.push("Try rewriting this statement with explicit quantifiers and a direct inequality/proof goal.");
+    }
+    lines.push(`Question: ${question}`);
+    if (failureReason) {
+      lines.push(`(Backend fallback triggered: ${failureReason})`);
+    }
+    return lines.join("\n");
+  }
+
   async sendChatForThread(threadId, message) {
     const id = String(threadId || "").trim();
     const question = String(message || "").trim();
@@ -2277,19 +2563,36 @@ class ZetaApp {
     this.activeChatThreadId = thread.id;
     this.persistChatSnapshot();
 
-    const requestUrl = this.resolveChatEndpoint();
+    const requestUrls = this.resolveChatEndpoints();
     const requestBody = this.buildChatRequestPayload(thread, question);
     logTrace("chat_request_send", {
       threadId: thread.id,
-      url: requestUrl,
+      url: requestUrls[0] || "",
       chars: question.length,
     });
     const startedAt = performance.now();
-    try {
-      const response = await this.sendBackendRequest({
-        requestUrl,
-        requestBody,
-      });
+    let response = null;
+    let sourceRequestUrl = "";
+    let lastError = null;
+    for (const requestUrl of requestUrls) {
+      try {
+        response = await this.sendBackendRequest({
+          requestUrl,
+          requestBody,
+        });
+        sourceRequestUrl = requestUrl;
+        break;
+      } catch (error) {
+        lastError = error;
+        logTrace("chat_request_failed", {
+          threadId: thread.id,
+          url: requestUrl,
+          message: String(error?.message || error),
+        });
+      }
+    }
+
+    if (response) {
       const answer = String(response?.answer || "").trim() || "No explanation returned.";
       const source = String(response?.source || "deterministic");
       const latencyMs = Number(response?.latency_ms);
@@ -2306,6 +2609,7 @@ class ZetaApp {
         ? latencyMs
         : performance.now() - startedAt;
       thread.lastError = "";
+      thread.requestUrl = sourceRequestUrl || thread.requestUrl;
       thread.updatedAt = Date.now();
       this.persistChatSnapshot();
       this.addActivity(
@@ -2319,29 +2623,34 @@ class ZetaApp {
         threadId: thread.id,
         source,
       };
-    } catch (error) {
-      const errorText = String(error?.message || error || "Assistant request failed.");
-      thread.messages.push({
-        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        role: "assistant",
-        text: `I could not explain this issue yet: ${errorText}`,
-        createdAt: Date.now(),
-        error: true,
-      });
-      thread.status = "error";
-      thread.lastError = errorText;
-      thread.lastSource = "deterministic";
-      thread.lastLatencyMs = performance.now() - startedAt;
-      thread.updatedAt = Date.now();
-      this.persistChatSnapshot();
-      this.addActivity(
-        `Assistant failed for issue: ${thread.title}`,
-        "error",
-        null,
-        this.truncateActivityText(errorText, 1200)
-      );
-      throw error;
     }
+
+    const errorText = String(lastError?.message || lastError || "Assistant request failed.");
+    const fallbackAnswer = this.buildLocalChatFallback(thread, question, errorText);
+    thread.messages.push({
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: "assistant",
+      text: fallbackAnswer,
+      createdAt: Date.now(),
+      error: false,
+    });
+    thread.status = "ready";
+    thread.lastError = errorText;
+    thread.lastSource = "local-fallback";
+    thread.lastLatencyMs = performance.now() - startedAt;
+    thread.updatedAt = Date.now();
+    this.persistChatSnapshot();
+    this.addActivity(
+      `Assistant fallback used: ${thread.title}`,
+      "info",
+      null,
+      this.truncateActivityText(errorText, 1200)
+    );
+    return {
+      ok: true,
+      threadId: thread.id,
+      source: "local-fallback",
+    };
   }
 
   serializeChunkTree(chunkTree) {
@@ -2569,7 +2878,7 @@ class ZetaApp {
     const rerenderFromCache = () => {
       const cachedSentenceIssues = this.collectSentenceIssues(sentencePlan.activeKeys);
       const mergedIssues = this.mergeIssues(cachedSentenceIssues)
-        .filter((issue) => !this.ignoredKeys.has(issue.key));
+        .filter((issue) => !this.isIssueIgnored(issue));
 
       this.lastRun = {
         snapshot,
@@ -2618,6 +2927,18 @@ class ZetaApp {
       }
 
       const sentenceEntry = sentencePlan.pending[i];
+      const sentenceLabel = this.formatSentenceLabel(sentenceEntry.text);
+      const liveActivityId = this.addActivity(
+        `analyzing · ${sentenceLabel} · queued`,
+        "info",
+        null,
+        this.buildLiveSentenceActivityDetail(sentenceEntry, "queued", {
+          index: i + 1,
+          total: sentencePlan.pending.length,
+          requestUrl: HARDCODED_ANALYZE_URL,
+          elapsedMs: 0,
+        })
+      );
       const remaining = sentencePlan.pending.length - i;
       logTrace("sentence_check_start", {
         index: i + 1,
@@ -2631,7 +2952,22 @@ class ZetaApp {
       );
       this.panel.setInferenceTime(this.lastInferenceMs, remaining);
 
-      await this.analyzeSentenceEntry(sentenceEntry, snapshot, reason);
+      await this.analyzeSentenceEntry(
+        sentenceEntry,
+        snapshot,
+        reason,
+        (step, meta = {}) => {
+          if (requestId !== this.activeRequestId) {
+            return;
+          }
+          this.syncLiveSentenceActivity(liveActivityId, sentenceEntry, step, {
+            index: i + 1,
+            total: sentencePlan.pending.length,
+            requestUrl: meta.requestUrl || HARDCODED_ANALYZE_URL,
+            ...meta,
+          });
+        }
+      );
       logTrace("sentence_check_done", {
         sentenceKey: sentenceEntry.key,
         status: sentenceEntry.status,
@@ -2640,16 +2976,45 @@ class ZetaApp {
       });
 
       if (requestId !== this.activeRequestId) {
+        this.updateActivityById(
+          liveActivityId,
+          {
+            message: `canceled · ${sentenceLabel}`,
+            level: "info",
+            detailText: this.buildLiveSentenceActivityDetail(sentenceEntry, "canceled", {
+              index: i + 1,
+              total: sentencePlan.pending.length,
+              requestUrl: HARDCODED_ANALYZE_URL,
+              elapsedMs: sentenceEntry.inferenceMs,
+            }),
+          },
+          {
+            refreshTime: true,
+          }
+        );
         return;
       }
 
       if (sentenceEntry.activityLog && sentenceEntry.shouldAnalyze) {
-        this.addActivity(
-          sentenceEntry.activityLog.message,
-          sentenceEntry.activityLog.level,
-          null,
-          sentenceEntry.activityLog.detailText
+        const updatedLiveEntry = this.updateActivityById(
+          liveActivityId,
+          {
+            message: sentenceEntry.activityLog.message,
+            level: sentenceEntry.activityLog.level,
+            detailText: sentenceEntry.activityLog.detailText,
+          },
+          {
+            refreshTime: true,
+          }
         );
+        if (!updatedLiveEntry) {
+          this.addActivity(
+            sentenceEntry.activityLog.message,
+            sentenceEntry.activityLog.level,
+            null,
+            sentenceEntry.activityLog.detailText
+          );
+        }
         sentenceEntry.activityLog = null;
       }
 
@@ -2732,6 +3097,7 @@ class ZetaApp {
           shouldAnalyze,
           status: "pending",
           issues: [],
+          persistentIssues: [],
           diagnostics: [],
           hasError: false,
           inferenceMs: null,
@@ -3780,7 +4146,10 @@ class ZetaApp {
         continue;
       }
 
-      const sentenceIssues = ensureArray(sentenceEntry.issues);
+      const persistentIssues = ensureArray(sentenceEntry.persistentIssues);
+      const sentenceIssues = persistentIssues.length > 0
+        ? persistentIssues
+        : ensureArray(sentenceEntry.issues);
       for (let i = 0; i < sentenceIssues.length; i += 1) {
         const issue = sentenceIssues[i];
         const startOffset = Number.isInteger(issue.start)
@@ -3807,6 +4176,7 @@ class ZetaApp {
           start: startOffset,
           end: endOffset,
           key: `${sentenceEntry.key}:${issue.key || i}:${startOffset ?? "na"}`,
+          originIssueKey: String(issue.key || ""),
           sentenceKey: sentenceEntry.key,
           sentenceInferenceMs: sentenceEntry.inferenceMs,
           sentenceText: sentenceEntry.text,
@@ -3822,7 +4192,18 @@ class ZetaApp {
     return issues;
   }
 
-  async analyzeSentenceEntry(sentenceEntry, snapshot, reason) {
+  async analyzeSentenceEntry(sentenceEntry, snapshot, reason, onProgress = null) {
+    const emitProgress = (step, meta = {}) => {
+      if (typeof onProgress !== "function") {
+        return;
+      }
+      try {
+        onProgress(step, meta);
+      } catch (_error) {
+        // ignore progress callback failures
+      }
+    };
+
     const sentenceSnapshot = {
       ...snapshot,
       text: sentenceEntry.text,
@@ -3830,16 +4211,72 @@ class ZetaApp {
     };
 
     const startedAt = performance.now();
+    let waitingTickerId = null;
+    const stopWaitingTicker = () => {
+      if (waitingTickerId) {
+        clearInterval(waitingTickerId);
+        waitingTickerId = null;
+      }
+    };
+    const startWaitingTicker = (requestUrl) => {
+      stopWaitingTicker();
+      waitingTickerId = window.setInterval(() => {
+        emitProgress("await_backend_pipeline", {
+          requestUrl,
+          elapsedMs: performance.now() - startedAt,
+        });
+      }, 1000);
+    };
     sentenceEntry.activityLog = null;
+    emitProgress("cache_lookup", {
+      requestUrl: HARDCODED_ANALYZE_URL,
+      elapsedMs: 0,
+    });
     try {
       const requestResult = await this.fetchWithCache(
         sentenceEntry.signature,
         sentenceSnapshot,
-        `${reason}:sentence`
+        `${reason}:sentence`,
+        sentenceEntry,
+        (step, meta = {}) => {
+          const requestUrl = String(meta.requestUrl || HARDCODED_ANALYZE_URL);
+          if (step === "request_sent") {
+            startWaitingTicker(requestUrl);
+          }
+          if (step === "response_received" || step === "cache_hit" || step === "request_failed") {
+            stopWaitingTicker();
+          }
+          emitProgress(step, {
+            ...meta,
+            requestUrl,
+            elapsedMs: Number(meta.elapsedMs) || (performance.now() - startedAt),
+          });
+        }
       );
+      stopWaitingTicker();
+      emitProgress("parse_response", {
+        requestUrl: String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL),
+        elapsedMs: performance.now() - startedAt,
+      });
       const responsePayload = requestResult.payload;
-      const normalized = this.normalizeBackendResponse(responsePayload, sentenceEntry.text);
-      sentenceEntry.issues = ensureArray(normalized.issues);
+      const normalized = this.normalizeBackendResponse(
+        responsePayload,
+        sentenceEntry.text,
+        String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL)
+      );
+      emitProgress("normalize_response", {
+        requestUrl: String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL),
+        elapsedMs: performance.now() - startedAt,
+      });
+      const latestIssues = ensureArray(normalized.issues);
+      sentenceEntry.issues = latestIssues;
+      if (latestIssues.length > 0) {
+        sentenceEntry.persistentIssues = this.mergeIssues(latestIssues);
+      } else {
+        sentenceEntry.persistentIssues = this.mergeIssues(
+          ensureArray(sentenceEntry.persistentIssues)
+        );
+      }
       sentenceEntry.diagnostics = ensureArray(normalized.diagnostics);
       sentenceEntry.hasError = !!normalized.hasError;
       sentenceEntry.status = "ready";
@@ -3854,7 +4291,14 @@ class ZetaApp {
         requestResult.request,
         requestResult.cacheHit
       );
+      emitProgress("complete", {
+        requestUrl: String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL),
+        cacheHit: !!requestResult.cacheHit,
+        issueCount: sentenceEntry.issues.length,
+        elapsedMs: sentenceEntry.inferenceMs,
+      });
     } catch (error) {
+      stopWaitingTicker();
       const message = String(error?.message || error || "Request failed.");
       sentenceEntry.hasError = true;
       sentenceEntry.status = "error";
@@ -3877,6 +4321,7 @@ class ZetaApp {
           source: "backend",
         },
       ];
+      sentenceEntry.persistentIssues = this.mergeIssues(sentenceEntry.issues);
       sentenceEntry.lastRequest = null;
       sentenceEntry.lastResponse = null;
       sentenceEntry.lastCacheHit = false;
@@ -3888,7 +4333,13 @@ class ZetaApp {
         false,
         message
       );
+      emitProgress("error", {
+        requestUrl: String(error?.requestUrl || HARDCODED_ANALYZE_URL),
+        message,
+        elapsedMs: sentenceEntry.inferenceMs,
+      });
     } finally {
+      stopWaitingTicker();
       sentenceEntry.updatedAt = Date.now();
       sentenceEntry.lastSeenAt = sentenceEntry.updatedAt;
       sentenceEntry.inferenceMs = performance.now() - startedAt;
@@ -3896,10 +4347,30 @@ class ZetaApp {
     }
   }
 
-  async fetchWithCache(signature, snapshot, reason) {
+  async fetchWithCache(signature, snapshot, reason, sentenceEntry = null, onProgress = null) {
+    const emitProgress = (step, meta = {}) => {
+      if (typeof onProgress !== "function") {
+        return;
+      }
+      try {
+        onProgress(step, meta);
+      } catch (_error) {
+        // ignore progress callback failures
+      }
+    };
+
     const cached = this.responseCache.get(signature);
     const now = Date.now();
+    emitProgress("cache_lookup", {
+      requestUrl: HARDCODED_ANALYZE_URL,
+      elapsedMs: 0,
+    });
     if (cached && now - cached.timestamp <= CACHE_TTL_MS) {
+      emitProgress("cache_hit", {
+        requestUrl: String(cached.request?.requestUrl || HARDCODED_ANALYZE_URL),
+        cacheAgeMs: now - cached.timestamp,
+        elapsedMs: 0,
+      });
       return {
         payload: cached.payload,
         cacheHit: true,
@@ -3907,46 +4378,154 @@ class ZetaApp {
       };
     }
 
-    const request = this.buildBackendPayload(snapshot, reason);
-    const response = await this.sendBackendRequest(request);
-    this.responseCache.set(signature, {
-      timestamp: now,
-      payload: response,
-      request,
-    });
-
-    for (const [key, value] of this.responseCache.entries()) {
-      if (now - value.timestamp > CACHE_TTL_MS) {
-        this.responseCache.delete(key);
-      }
+    const request = this.buildBackendPayload(snapshot, reason, sentenceEntry);
+    const inFlight = this.inFlightSentenceRequests.get(signature);
+    if (inFlight?.promise) {
+      emitProgress("inflight_join", {
+        requestUrl: String(inFlight.requestUrl || request.requestUrl || HARDCODED_ANALYZE_URL),
+        elapsedMs: 0,
+      });
+      return inFlight.promise;
     }
 
-    return {
-      payload: response,
-      cacheHit: false,
-      request,
-    };
+    const requestPromise = (async () => {
+      let effectiveRequest = request;
+      emitProgress("prepare_request", {
+        requestUrl: request.requestUrl,
+        elapsedMs: 0,
+      });
+      let response;
+      try {
+        response = await this.sendBackendRequest(request, onProgress);
+      } catch (error) {
+        const fallbackRequest = request?.fallbackRequest;
+        const canFallback = !!(
+          fallbackRequest &&
+          typeof fallbackRequest === "object" &&
+          typeof fallbackRequest.requestUrl === "string" &&
+          fallbackRequest.requestUrl
+        );
+        if (!canFallback) {
+          throw error;
+        }
+        emitProgress("fallback_to_legacy", {
+          requestUrl: String(fallbackRequest.requestUrl),
+          previousRequestUrl: String(request.requestUrl || ""),
+          reason: String(error?.message || "primary_request_failed"),
+        });
+        response = await this.sendBackendRequest(fallbackRequest, onProgress);
+        effectiveRequest = fallbackRequest;
+      }
+      emitProgress("response_ready", {
+        requestUrl: effectiveRequest.requestUrl,
+        elapsedMs: 0,
+      });
+
+      const cacheTimestamp = Date.now();
+      this.responseCache.set(signature, {
+        timestamp: cacheTimestamp,
+        payload: response,
+        request: effectiveRequest,
+      });
+
+      for (const [key, value] of this.responseCache.entries()) {
+        if (cacheTimestamp - value.timestamp > CACHE_TTL_MS) {
+          this.responseCache.delete(key);
+        }
+      }
+
+      return {
+        payload: response,
+        cacheHit: false,
+        request: effectiveRequest,
+      };
+    })();
+
+    this.inFlightSentenceRequests.set(signature, {
+      requestUrl: String(request.requestUrl || HARDCODED_ANALYZE_URL),
+      promise: requestPromise,
+    });
+
+    try {
+      return await requestPromise;
+    } finally {
+      const current = this.inFlightSentenceRequests.get(signature);
+      if (current?.promise === requestPromise) {
+        this.inFlightSentenceRequests.delete(signature);
+      }
+    }
   }
 
-  buildBackendPayload(snapshot, reason) {
-    return {
-      requestUrl: HARDCODED_ANALYZE_URL,
+  buildBackendPayload(snapshot, reason, sentenceEntry = null) {
+    const requestUrl = HARDCODED_ANALYZE_URL;
+    const mode = this.settings.mode === "accurate" ? "thinking" : "fast";
+    const maxIters = mode === "thinking" ? 2 : 1;
+    const sentenceText = String(sentenceEntry?.text || snapshot?.text || "").trim();
+    const chunkId = String(sentenceEntry?.chunkId || this.activeChunkId || "input");
+    const legacyRequest = {
+      requestUrl: DEFAULT_MODAL_ANALYZE_URL,
       requestBody: {
-        text: snapshot.text,
-        context: snapshot.context.slice(0, 6000),
+        text: sentenceText,
+        context: String(snapshot?.context || "").slice(0, 6000),
         theorem_name: "zeta_candidate",
         imports: ["Std"],
         temperature: this.settings.mode === "accurate" ? 0.1 : 0.0,
         max_new_tokens: this.settings.mode === "accurate" ? 220 : 140,
+        lean_timeout_seconds: 60,
         skip_lean_check: false,
         include_raw_model_output: false,
         zeta_meta: {
           reason,
-          scope: snapshot.scope,
+          scope: snapshot?.scope || this.settings.scope,
           notation: this.settings.notationStrictness,
+          chunk_id: chunkId,
         },
       },
     };
+
+    if (/\/v1\/lean\/solve(?:\/)?$/.test(requestUrl)) {
+      const chunkPayload = {
+        chunk_id: chunkId,
+        text: sentenceText,
+        start: 0,
+        end: sentenceText.length,
+        sentences: [
+          {
+            sentence_id: `sentence-${chunkId}`,
+            start: 0,
+            end: sentenceText.length,
+            text: sentenceText,
+          },
+        ],
+      };
+      return {
+        requestUrl,
+        requestBody: {
+          nl_input: sentenceText,
+          max_iters: maxIters,
+          context: {
+            theorem_name: "zeta_candidate",
+            imports: ["Std"],
+            temperature: this.settings.mode === "accurate" ? 0.1 : 0.0,
+            mode,
+            include_iteration_history: mode === "thinking",
+            include_raw_model_output: false,
+            lean_timeout_seconds: 60,
+            source_context: String(snapshot?.context || "").slice(0, 9000),
+            scope: snapshot?.scope || this.settings.scope,
+            notation: this.settings.notationStrictness,
+            reason,
+            chunk_id: chunkId,
+            chunk_start: 0,
+            active_chunk_id: chunkId,
+            chunks: [chunkPayload],
+          },
+        },
+        fallbackRequest: legacyRequest,
+      };
+    }
+
+    return legacyRequest;
   }
 
   logBackendPipeline(responseJson) {
@@ -3971,12 +4550,36 @@ class ZetaApp {
     }
   }
 
-  async sendBackendRequest(request) {
+  async sendBackendRequest(request, onProgress = null) {
+    const emitProgress = (step, meta = {}) => {
+      if (typeof onProgress !== "function") {
+        return;
+      }
+      try {
+        onProgress(step, meta);
+      } catch (_error) {
+        // ignore progress callback failures
+      }
+    };
+
     const attempts = Math.max(0, Number(this.settings.retries) || 0) + 1;
-    const effectiveTimeoutMs = this.resolveEffectiveTimeoutMs(request.requestUrl);
+    let effectiveTimeoutMs = this.resolveEffectiveTimeoutMs(request.requestUrl, request.requestBody);
+    if (
+      request?.fallbackRequest &&
+      /\/v1\/lean\/solve(?:\/)?$/.test(String(request.requestUrl || "")) &&
+      effectiveTimeoutMs > 22000
+    ) {
+      effectiveTimeoutMs = 22000;
+    }
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      emitProgress("request_sent", {
+        attempt,
+        attempts,
+        requestUrl: request.requestUrl,
+        timeoutMs: effectiveTimeoutMs,
+      });
       logTrace("backend_request_send", {
         attempt,
         attempts,
@@ -3999,6 +4602,15 @@ class ZetaApp {
           ok: response.ok,
           durationMs: performance.now() - startedAt,
         });
+        emitProgress("response_received", {
+          attempt,
+          attempts,
+          requestUrl: request.requestUrl,
+          timeoutMs: effectiveTimeoutMs,
+          status: response.status,
+          ok: response.ok,
+          durationMs: performance.now() - startedAt,
+        });
 
         if (!response.ok) {
           const detail = response.json?.detail || response.text || response.statusText || "Request failed";
@@ -4007,11 +4619,16 @@ class ZetaApp {
             status: response.status,
             detail,
           });
-          throw new Error(`Backend ${response.status || "error"}: ${detail}`);
+          const error = new Error(`Backend ${response.status || "error"}: ${detail}`);
+          error.status = Number(response.status) || 0; // eslint-disable-line no-param-reassign
+          error.requestUrl = String(request.requestUrl || ""); // eslint-disable-line no-param-reassign
+          throw error;
         }
 
         if (!response.json) {
-          throw new Error("Backend returned non-JSON response.");
+          const error = new Error("Backend returned non-JSON response.");
+          error.requestUrl = String(request.requestUrl || ""); // eslint-disable-line no-param-reassign
+          throw error;
         }
 
         this.logBackendPipeline(response.json);
@@ -4024,6 +4641,15 @@ class ZetaApp {
           message: String(error?.message || error),
         });
         const retryable = attempt < attempts;
+        emitProgress("request_failed", {
+          attempt,
+          attempts,
+          requestUrl: request.requestUrl,
+          timeoutMs: effectiveTimeoutMs,
+          retryable,
+          status: Number(error?.status) || 0,
+          message: String(error?.message || error),
+        });
         if (!retryable) {
           break;
         }
@@ -4034,17 +4660,28 @@ class ZetaApp {
     throw lastError || new Error("Unknown backend error");
   }
 
-  resolveEffectiveTimeoutMs(requestUrl) {
+  resolveEffectiveTimeoutMs(requestUrl, requestBody = null) {
     const configured = clamp(
       Number(this.settings.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs,
       2000,
       180000
     );
     const url = String(requestUrl || "");
+    const leanTimeoutSeconds = Number(
+      requestBody?.lean_timeout_seconds
+      || requestBody?.context?.lean_timeout_seconds
+    );
     const isLeanSolve = /\/v1\/lean\/solve(?:\/)?$/.test(url);
-    const minSolveTimeoutMs = this.settings.mode === "accurate" ? 90000 : 70000;
-    if (isLeanSolve && configured < minSolveTimeoutMs) {
-      return minSolveTimeoutMs;
+    const isAnalyze = /\/v1\/(?:analyze|query)(?:\/)?$/.test(url);
+    if (isLeanSolve || isAnalyze) {
+      const baseMinTimeoutMs = this.settings.mode === "accurate" ? 90000 : 70000;
+      const leanAlignedMinTimeoutMs = Number.isFinite(leanTimeoutSeconds) && leanTimeoutSeconds > 0
+        ? Math.round(leanTimeoutSeconds * 1000) + 12000
+        : 0;
+      const minTimeoutMs = Math.max(baseMinTimeoutMs, leanAlignedMinTimeoutMs);
+      if (configured < minTimeoutMs) {
+        return minTimeoutMs;
+      }
     }
     return configured;
   }
@@ -4083,20 +4720,246 @@ class ZetaApp {
     });
   }
 
-  normalizeBackendResponse(response, scopeText) {
+  resolveChunkIssueSeverity(diagnostics) {
+    const hasError = diagnostics.some((diag) => normalizeSeverity(diag?.severity) === "error");
+    if (hasError) {
+      return "error";
+    }
+    const hasWarning = diagnostics.some((diag) => normalizeSeverity(diag?.severity) === "warning");
+    if (hasWarning) {
+      return "warning";
+    }
+    const hasInfo = diagnostics.some((diag) => normalizeSeverity(diag?.severity) === "info");
+    if (hasInfo) {
+      return "info";
+    }
+    return "unknown";
+  }
+
+  isInfrastructureDiagnosticMessage(message) {
+    const text = String(message || "").toLowerCase();
+    if (!text) {
+      return false;
+    }
+    const markers = [
+      "no default toolchain configured",
+      "elan default stable",
+      "lean compiler command not found",
+      "install lean 4 (elan)",
+      "set lean_command/lake_command",
+      "lake_project_dir",
+      "missing lakefile",
+      "compile failed: no compile attempts were executed",
+    ];
+    return markers.some((marker) => text.includes(marker));
+  }
+
+  resolveCompileSuccess(response, diagnostics = []) {
+    if (typeof response?.compile?.success === "boolean") {
+      return response.compile.success;
+    }
+    if (typeof response?.is_valid_lean === "boolean") {
+      return response.is_valid_lean;
+    }
+    return !ensureArray(diagnostics).some((diag) => normalizeSeverity(diag?.severity) === "error");
+  }
+
+  resolveChunkFixSuggestion(response, diagnostics, topSuggestions, feedbackItems, semanticReasons) {
+    const picked = [];
+    const seen = new Set();
+    const push = (value) => {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      if (!text) {
+        return;
+      }
+      const key = text.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      picked.push(text);
+    };
+
+    for (const suggestion of [
+      ...ensureArray(topSuggestions),
+      ...ensureArray(feedbackItems),
+      ...ensureArray(response?.dashboard?.next_actions),
+      ...ensureArray(response?.dashboard?.messages),
+      ...ensureArray(semanticReasons),
+    ]) {
+      push(suggestion);
+    }
+
+    const compileFailed = !this.resolveCompileSuccess(response, diagnostics);
+    if (compileFailed && picked.length === 0) {
+      const firstError = ensureArray(diagnostics).find(
+        (diag) => normalizeSeverity(diag?.severity) === "error"
+      );
+      if (firstError?.message) {
+        push(firstError.message);
+      }
+    }
+
+    return picked[0] || "";
+  }
+
+  detectMonotonicInequalityIssues(scopeText) {
+    const source = String(scopeText || "");
+    if (!source.trim()) {
+      return [];
+    }
+
+    const issues = [];
+    const patterns = [
+      {
+        regex: /([A-Za-z])\s*\+\s*(\d+)\s*(\\geq|>=|≥)\s*\1\s*\+\s*(\d+)/g,
+        invalidWhen: (left, right) => left < right,
+        correctedComparator: "≤",
+      },
+      {
+        regex: /([A-Za-z])\s*\+\s*(\d+)\s*(\\leq|<=|≤)\s*\1\s*\+\s*(\d+)/g,
+        invalidWhen: (left, right) => left > right,
+        correctedComparator: "≥",
+      },
+    ];
+
+    for (const pattern of patterns) {
+      pattern.regex.lastIndex = 0;
+      let match;
+      while ((match = pattern.regex.exec(source)) !== null) {
+        const variable = String(match[1] || "n");
+        const leftConst = Number(match[2]);
+        const rightConst = Number(match[4]);
+        if (!Number.isFinite(leftConst) || !Number.isFinite(rightConst)) {
+          continue;
+        }
+        if (!pattern.invalidWhen(leftConst, rightConst)) {
+          continue;
+        }
+
+        const targetText = String(match[0] || "").trim();
+        const humanTargetText = this.toActivityMathText(targetText) || targetText;
+        const suggestion = `${variable} + ${leftConst} ${pattern.correctedComparator} ${variable} + ${rightConst}`;
+        issues.push({
+          id: `sanity-${issues.length + 1}`,
+          key: this.buildIssueKey({
+            category: "semantic-sanity",
+            message: `This inequality direction looks inconsistent: ${humanTargetText}.`,
+            targetText,
+            replacement: null,
+          }),
+          category: "semantic-sanity",
+          severity: "warning",
+          message: `This inequality direction looks inconsistent: ${humanTargetText}.`,
+          start: match.index,
+          end: match.index + targetText.length,
+          targetText,
+          replacement: null,
+          suggestion: `Did you mean ${suggestion}?`,
+          source: "heuristic",
+        });
+      }
+    }
+
+    return issues;
+  }
+
+  normalizeBackendResponse(response, scopeText, requestUrl = "") {
     const diagnostics =
       ensureArray(response.compile?.diagnostics).length > 0
         ? ensureArray(response.compile?.diagnostics)
         : ensureArray(response.diagnostics);
+    const inlineDiagnostics = diagnostics.filter(
+      (diag) => !this.isInfrastructureDiagnosticMessage(diag?.message)
+    );
+    const compileSuccess = this.resolveCompileSuccess(response, diagnostics);
 
     const interpretationItems = ensureArray(response.interpretation?.items);
-    const topSuggestions = ensureArray(response.interpretation?.suggestions);
-    const feedbackItems = ensureArray(response.feedback);
+    const finalFeedbackItems = ensureArray(response.final_feedback);
+    const topSuggestions = [
+      ...ensureArray(response.interpretation?.suggestions),
+      ...finalFeedbackItems,
+    ];
+    const feedbackItems = finalFeedbackItems.length > 0
+      ? finalFeedbackItems
+      : ensureArray(response.feedback);
     const semanticReasons = ensureArray(response.pipeline?.semantic?.reasons);
+    const semanticChecked = !!(response.pipeline && response.pipeline.semantic && typeof response.pipeline.semantic === "object");
+    const normalizedRequestUrl = String(requestUrl || "");
+    const isLegacyTranslatorAnalyze = /\/v1\/(?:analyze|query)(?:\/)?$/.test(normalizedRequestUrl);
+    const chunkScopeText = String(scopeText || "");
+    const chunkFixSuggestion = this.resolveChunkFixSuggestion(
+      response,
+      inlineDiagnostics,
+      topSuggestions,
+      feedbackItems,
+      semanticReasons
+    );
 
     const issues = [];
+    const highlightRanges = ensureArray(response.highlights?.highlights);
+    const coveredInterpretationIndices = new Set();
 
-    for (const item of interpretationItems) {
+    if (highlightRanges.length > 0) {
+      for (const range of highlightRanges) {
+        const itemIndex = Number.isInteger(range?.item_index) ? range.item_index : null;
+        if (itemIndex !== null) {
+          coveredInterpretationIndices.add(itemIndex);
+        }
+        const linkedItem = itemIndex !== null ? interpretationItems[itemIndex] : null;
+        const localStartRaw = Number.isInteger(range?.start_in_chunk)
+          ? range.start_in_chunk
+          : (Number.isInteger(range?.start) ? range.start : null);
+        const localEndRaw = Number.isInteger(range?.end_in_chunk)
+          ? range.end_in_chunk
+          : (Number.isInteger(range?.end) ? range.end : null);
+        const localStart = Number.isInteger(localStartRaw)
+          ? clamp(localStartRaw, 0, scopeText.length)
+          : null;
+        const localEnd = Number.isInteger(localEndRaw)
+          ? clamp(localEndRaw, 0, scopeText.length)
+          : null;
+        const targetText = (
+          Number.isInteger(localStart) &&
+          Number.isInteger(localEnd) &&
+          localEnd > localStart
+        )
+          ? scopeText.slice(localStart, localEnd)
+          : (String(range?.text || "").trim() || linkedItem?.latex_excerpt || null);
+        const message = linkedItem?.error
+          || linkedItem?.suggested_fix
+          || String(range?.text || "").trim()
+          || "Interpretation issue";
+
+        issues.push({
+          id: `hl-${issues.length + 1}`,
+          key: this.buildIssueKey({
+            category: "math-typo",
+            message,
+            targetText,
+            replacement: linkedItem?.replacement,
+          }),
+          category: "math-typo",
+          severity: "error",
+          message,
+          start: localStart,
+          end: localEnd,
+          targetText,
+          replacement: linkedItem?.replacement || null,
+          suggestion: linkedItem?.suggested_fix || null,
+          suggestedFix: linkedItem?.suggested_fix || null,
+          source: "backend",
+          line: Number.isInteger(linkedItem?.lean_line) ? linkedItem.lean_line : null,
+          column: Number.isInteger(linkedItem?.lean_column) ? linkedItem.lean_column : null,
+        });
+      }
+    }
+
+    for (let itemIndex = 0; itemIndex < interpretationItems.length; itemIndex += 1) {
+      if (coveredInterpretationIndices.has(itemIndex)) {
+        continue;
+      }
+      const item = interpretationItems[itemIndex];
       const start = Number.isInteger(item.latex_start) ? item.latex_start : null;
       const end = Number.isInteger(item.latex_end) ? item.latex_end : null;
       const excerpt = item.latex_excerpt || null;
@@ -4123,6 +4986,8 @@ class ZetaApp {
         end,
         targetText,
         replacement: item.replacement || null,
+        suggestion: item.suggested_fix || null,
+        suggestedFix: item.suggested_fix || null,
         source: "backend",
       });
     }
@@ -4155,11 +5020,17 @@ class ZetaApp {
       });
     }
 
+    const seenHintSuggestions = new Set();
     for (const suggestion of [...topSuggestions, ...feedbackItems]) {
       const text = String(suggestion || "").trim();
       if (!text) {
         continue;
       }
+      const key = text.toLowerCase();
+      if (seenHintSuggestions.has(key)) {
+        continue;
+      }
+      seenHintSuggestions.add(key);
 
       issues.push({
         id: `hint-${issues.length + 1}`,
@@ -4204,6 +5075,68 @@ class ZetaApp {
       });
     }
 
+    if (compileSuccess) {
+      const semanticHeuristics = this.detectMonotonicInequalityIssues(scopeText);
+      for (const heuristicIssue of semanticHeuristics) {
+        issues.push(heuristicIssue);
+      }
+    }
+
+    if (
+      compileSuccess &&
+      !semanticChecked &&
+      isLegacyTranslatorAnalyze &&
+      chunkScopeText.trim()
+    ) {
+      const semanticUncheckedMessage =
+        "Semantic validation did not run for this sentence, so mathematical truth was not verified.";
+      issues.push({
+        id: `semantic-unchecked-${issues.length + 1}`,
+        key: this.buildIssueKey({
+          category: "semantic-validation",
+          message: semanticUncheckedMessage,
+          targetText: chunkScopeText,
+          replacement: null,
+        }),
+        category: "semantic-validation",
+        severity: "warning",
+        message: semanticUncheckedMessage,
+        start: 0,
+        end: chunkScopeText.length,
+        targetText: chunkScopeText,
+        replacement: null,
+        suggestion: "Run the Lean semantic pipeline (`/v1/lean/solve`) to verify this claim.",
+        source: "backend",
+      });
+    }
+
+    const hasRangeBoundIssue = issues.some((issue) => (
+      Number.isInteger(issue?.start) &&
+      Number.isInteger(issue?.end) &&
+      issue.end > issue.start
+    ));
+    if (chunkScopeText.trim() && inlineDiagnostics.length > 0 && !hasRangeBoundIssue) {
+      const fallbackMessage = String(inlineDiagnostics[0]?.message || "Chunk requires review.");
+      issues.push({
+        id: `chunk-${issues.length + 1}`,
+        key: this.buildIssueKey({
+          category: "chunk-review",
+          message: fallbackMessage,
+          targetText: chunkScopeText,
+          replacement: null,
+        }),
+        category: "chunk-review",
+        severity: this.resolveChunkIssueSeverity(inlineDiagnostics),
+        message: fallbackMessage,
+        start: 0,
+        end: chunkScopeText.length,
+        targetText: chunkScopeText,
+        replacement: null,
+        suggestion: chunkFixSuggestion || null,
+        source: "backend",
+      });
+    }
+
     for (const issue of issues) {
       if (
         !Number.isInteger(issue.start) &&
@@ -4219,8 +5152,7 @@ class ZetaApp {
     }
 
     const hasCompileErrors =
-      response.compile?.success === false ||
-      response.is_valid_lean === false ||
+      !compileSuccess ||
       response.pipeline?.semantic?.success === false ||
       diagnostics.some((diag) => normalizeSeverity(diag.severity) === "error");
 
@@ -4264,8 +5196,53 @@ class ZetaApp {
     return `${value.slice(0, maxLength)}\n...[truncated]`;
   }
 
+  toActivityMathText(rawText) {
+    let text = String(rawText || "");
+    if (!text.trim()) {
+      return "";
+    }
+
+    const blackboardMap = {
+      N: "ℕ",
+      Z: "ℤ",
+      Q: "ℚ",
+      R: "ℝ",
+      C: "ℂ",
+    };
+    text = text
+      .replace(/\\\(|\\\)|\\\[|\\\]/g, " ")
+      .replace(/\$\$/g, " ")
+      .replace(/\$/g, " ")
+      .replace(/\\mathbb\s*\{\s*([A-Za-z])\s*\}/g, (_, letter) => {
+        const key = String(letter || "").toUpperCase();
+        return blackboardMap[key] || key;
+      })
+      .replace(/\\geq\b/g, "≥")
+      .replace(/\\leq\b/g, "≤")
+      .replace(/\\neq\b/g, "≠")
+      .replace(/\\in\b/g, "∈")
+      .replace(/\\notin\b/g, "∉")
+      .replace(/\\to\b/g, "→")
+      .replace(/\\rightarrow\b/g, "→")
+      .replace(/\\leftarrow\b/g, "←")
+      .replace(/\\iff\b/g, "↔")
+      .replace(/\\implies\b/g, "⇒")
+      .replace(/\\forall\b/g, "∀")
+      .replace(/\\exists\b/g, "∃")
+      .replace(/\\cdot\b/g, "·")
+      .replace(/\\times\b/g, "×")
+      .replace(/\\pm\b/g, "±")
+      .replace(/\\mp\b/g, "∓")
+      .replace(/\\[a-zA-Z@]+\*?/g, " ")
+      .replace(/[{}]/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([,.;:!?])/g, "$1")
+      .trim();
+    return text;
+  }
+
   formatSentenceLabel(sentenceText) {
-    const compact = String(sentenceText || "").replace(/\s+/g, " ").trim();
+    const compact = this.toActivityMathText(sentenceText);
     if (!compact) {
       return "sentence";
     }
@@ -4273,6 +5250,161 @@ class ZetaApp {
       return compact;
     }
     return `${compact.slice(0, 89)}...`;
+  }
+
+  resolveActivitySentenceText(sentenceEntry, responsePayload = null) {
+    const backendInput = String(responsePayload?.input_text || "").trim();
+    if (backendInput) {
+      return backendInput;
+    }
+    return String(sentenceEntry?.text || "").trim();
+  }
+
+  formatInferenceDuration(valueMs) {
+    const ms = Number(valueMs);
+    if (!Number.isFinite(ms)) {
+      return "--";
+    }
+    if (ms > 1000) {
+      const seconds = ms / 1000;
+      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+    }
+    return `${Math.round(ms)} ms`;
+  }
+
+  estimateLivePipelinePhase(elapsedMs) {
+    const elapsed = Number(elapsedMs);
+    if (!Number.isFinite(elapsed) || elapsed <= 1200) {
+      return "queueing";
+    }
+    if (elapsed <= 6500) {
+      return "model inference";
+    }
+    if (elapsed <= 20000) {
+      return "lean compile";
+    }
+    return "lean compile (long run)";
+  }
+
+  describeLivePipelineStep(step, meta = {}) {
+    const value = String(step || "").trim();
+    if (!value) {
+      return "working";
+    }
+    if (value === "queued") {
+      return "queued";
+    }
+    if (value === "cache_lookup") {
+      return "cache lookup";
+    }
+    if (value === "cache_hit") {
+      return "cache hit";
+    }
+    if (value === "inflight_join") {
+      return "joining in-flight request";
+    }
+    if (value === "prepare_request") {
+      return "building request";
+    }
+    if (value === "request_sent") {
+      const attempt = Number(meta.attempt) || 1;
+      const attempts = Number(meta.attempts) || attempt;
+      return `request sent (${attempt}/${attempts})`;
+    }
+    if (value === "await_backend_pipeline") {
+      const phase = this.estimateLivePipelinePhase(meta.elapsedMs);
+      return `backend pipeline · ${phase}`;
+    }
+    if (value === "response_received") {
+      return "response received";
+    }
+    if (value === "response_ready") {
+      return "response ready";
+    }
+    if (value === "fallback_to_legacy") {
+      return "fallback to /v1/analyze";
+    }
+    if (value === "parse_response") {
+      return "parsing response";
+    }
+    if (value === "normalize_response") {
+      return "normalizing issues";
+    }
+    if (value === "complete") {
+      return "completed";
+    }
+    if (value === "error" || value === "request_failed") {
+      return "failed";
+    }
+    return value.replace(/[_-]+/g, " ");
+  }
+
+  buildLiveSentenceActivityDetail(sentenceEntry, step, meta = {}) {
+    const text = String(sentenceEntry?.text || "");
+    const displayText = this.toActivityMathText(text) || text;
+    const chunkId = String(sentenceEntry?.chunkId || this.activeChunkId || "innermost");
+    const requestUrl = String(meta.requestUrl || HARDCODED_ANALYZE_URL);
+    const stepLabel = this.describeLivePipelineStep(step, meta);
+
+    const detailLines = [
+      "Sentence",
+      this.truncateActivityText(displayText, 500),
+      "",
+      "Chunk",
+      chunkId,
+      "",
+      "Pipeline",
+      `url: ${requestUrl}`,
+      `request_key: ${String(sentenceEntry?.key || "--")}`,
+      `step: ${stepLabel}`,
+    ];
+
+    if (Number.isFinite(Number(meta.index)) && Number.isFinite(Number(meta.total)) && Number(meta.total) > 0) {
+      detailLines.push(`progress: ${Number(meta.index)}/${Number(meta.total)}`);
+    }
+    if (Number.isFinite(Number(meta.attempt)) && Number.isFinite(Number(meta.attempts))) {
+      detailLines.push(`attempt: ${Number(meta.attempt)}/${Number(meta.attempts)}`);
+    }
+    if (Number.isFinite(Number(meta.status)) && Number(meta.status) > 0) {
+      detailLines.push(`status: ${Number(meta.status)}`);
+    }
+    if (Number.isFinite(Number(meta.timeoutMs)) && Number(meta.timeoutMs) > 0) {
+      detailLines.push(`timeout: ${this.formatInferenceDuration(Number(meta.timeoutMs))}`);
+    }
+    if (Number.isFinite(Number(meta.durationMs)) && Number(meta.durationMs) >= 0) {
+      detailLines.push(`network: ${this.formatInferenceDuration(Number(meta.durationMs))}`);
+    }
+    if (Number.isFinite(Number(meta.cacheAgeMs)) && Number(meta.cacheAgeMs) >= 0) {
+      detailLines.push(`cache_age: ${this.formatInferenceDuration(Number(meta.cacheAgeMs))}`);
+    }
+    if (Number.isFinite(Number(meta.elapsedMs)) && Number(meta.elapsedMs) >= 0) {
+      detailLines.push(`elapsed: ${this.formatInferenceDuration(Number(meta.elapsedMs))}`);
+    }
+    if (step === "await_backend_pipeline") {
+      detailLines.push(`pipeline_phase: ${this.estimateLivePipelinePhase(meta.elapsedMs)}`);
+    }
+    if ((step === "error" || step === "request_failed") && meta.message) {
+      detailLines.push("", "Error", this.truncateActivityText(String(meta.message || ""), 1200));
+    }
+
+    return detailLines.join("\n");
+  }
+
+  syncLiveSentenceActivity(activityId, sentenceEntry, step, meta = {}) {
+    const id = String(activityId || "");
+    if (!id) {
+      return;
+    }
+    const stepLabel = this.describeLivePipelineStep(step, meta);
+    const sentenceLabel = this.formatSentenceLabel(sentenceEntry?.text || "");
+    const level = step === "error" || step === "request_failed"
+      ? "error"
+      : (step === "complete" ? "success" : "info");
+    this.updateActivityById(id, {
+      message: `analyzing · ${sentenceLabel} · ${stepLabel}`,
+      level,
+      detailText: this.buildLiveSentenceActivityDetail(sentenceEntry, step, meta),
+    });
   }
 
   summarizePipelineDetails(details, maxLength = 520) {
@@ -4311,116 +5443,38 @@ class ZetaApp {
   }
 
   buildSentenceActivityLog(sentenceEntry, responsePayload, normalized, request, cacheHit, errorMessage = null) {
-    const compile = responsePayload?.compile || {};
     const pipeline = responsePayload?.pipeline && typeof responsePayload.pipeline === "object"
       ? responsePayload.pipeline
       : null;
     const stages = ensureArray(pipeline?.stages);
+    const requestUrl = String(request?.requestUrl || HARDCODED_ANALYZE_URL);
+    const translatorTypecheckOnly = (
+      stages.length === 0
+      && /\/v1\/(?:analyze|query)(?:\/)?$/.test(requestUrl)
+    );
     const semantic = pipeline?.semantic && typeof pipeline.semantic === "object"
       ? pipeline.semantic
       : null;
     const diagnostics = ensureArray(normalized?.diagnostics);
-    const compileSuccess = compile?.success === true;
-    const semanticFailed = semantic?.success === false;
+    const compileSuccess = this.resolveCompileSuccess(responsePayload || {}, diagnostics);
     const level = errorMessage || normalized?.hasError ? "error" : "success";
-    const sentenceLabel = this.formatSentenceLabel(sentenceEntry.text);
-    const sourceLabel = cacheHit ? "cache" : "aws";
-    const message = errorMessage
-      ? `${sourceLabel} · failed · ${sentenceLabel}`
-      : `${sourceLabel} · ${compileSuccess ? "compiled" : "review"} · ${sentenceLabel}`;
+    const sentenceSourceText = this.resolveActivitySentenceText(sentenceEntry, responsePayload);
+    const sentenceDisplayText = this.toActivityMathText(sentenceSourceText) || sentenceSourceText;
+    const sentenceLabel = this.formatSentenceLabel(sentenceSourceText);
+    const statusLabel = compileSuccess
+      ? (translatorTypecheckOnly ? "typechecked" : "compiled")
+      : "needs attention";
+    const message = `${statusLabel} · ${sentenceLabel}`;
 
     const detailLines = [
-      `Sentence`,
-      this.truncateActivityText(sentenceEntry.text, 500),
-      "",
-      `Chunk`,
-      String(sentenceEntry.chunkId || this.activeChunkId || "innermost"),
-      "",
-      `Pipeline`,
-      `url: ${String(request?.requestUrl || HARDCODED_ANALYZE_URL)}`,
-      `cache_hit: ${cacheHit ? "true" : "false"}`,
-      `inference_ms: ${Number.isFinite(sentenceEntry.inferenceMs) ? Math.round(sentenceEntry.inferenceMs) : "--"}`,
-      "",
-      "Result",
-      `overall_failed: ${level === "error" ? "true" : "false"}`,
-      `compile_failed: ${compileSuccess ? "false" : "true"}`,
-      `semantic_failed: ${semanticFailed ? "true" : "false"}`,
+      "Sentence",
+      this.truncateActivityText(sentenceDisplayText, 500),
     ];
-
     if (errorMessage) {
       detailLines.push("", "Error", this.truncateActivityText(errorMessage, 1200));
-      return {
-        message,
-        level,
-        detailText: detailLines.join("\n"),
-      };
     }
-
-    detailLines.push(
-      "",
-      "Compile",
-      `success: ${compileSuccess ? "true" : "false"}`,
-      `diagnostics: ${diagnostics.length}`
-    );
-
-    if (pipeline) {
-      const totalDurationMs = Number(pipeline?.total_duration_ms);
-      detailLines.push(
-        "",
-        "Pipeline trace",
-        `total_duration_ms: ${Number.isFinite(totalDurationMs) ? Math.round(totalDurationMs) : "--"}`,
-        `stages: ${stages.length}`
-      );
-      for (let index = 0; index < stages.length; index += 1) {
-        const stage = stages[index] || {};
-        const stageName = String(stage?.stage || `stage_${index + 1}`);
-        const attempted = stage?.attempted !== false;
-        const durationMs = Number(stage?.duration_ms);
-        const outcome = this.summarizePipelineOutcome(stage);
-        detailLines.push(
-          `${index + 1}. ${stageName} · ${outcome} · attempted=${attempted ? "true" : "false"} · duration_ms=${
-            Number.isFinite(durationMs) ? Math.round(durationMs) : "--"
-          }`
-        );
-        const detailsText = this.summarizePipelineDetails(stage?.details, 520);
-        if (detailsText) {
-          detailLines.push(`   details: ${detailsText}`);
-        }
-      }
-    } else {
-      detailLines.push("", "Pipeline trace", "unavailable");
-    }
-
-    if (semantic) {
-      detailLines.push(
-        "",
-        "Semantic validation",
-        `success: ${semantic?.success === true ? "true" : "false"}`,
-        `collapsed_to_false: ${semantic?.collapsed_to_false === true ? "true" : "false"}`,
-        `declaration_name: ${String(semantic?.declaration_name || "--")}`
-      );
-      const reasons = ensureArray(semantic?.reasons)
-        .map((reason) => String(reason || "").trim())
-        .filter(Boolean);
-      if (reasons.length > 0) {
-        detailLines.push("reasons:");
-        for (let idx = 0; idx < Math.min(reasons.length, 6); idx += 1) {
-          detailLines.push(`- ${this.truncateActivityText(reasons[idx], 260)}`);
-        }
-      }
-    }
-
-    const stdout = this.truncateActivityText(compile?.stdout, 1600);
-    const stderr = this.truncateActivityText(compile?.stderr, 1600);
-    const leanCode = this.truncateActivityText(responsePayload?.lean_code, 2200);
-    if (stdout) {
-      detailLines.push("", "stdout", stdout);
-    }
-    if (stderr) {
-      detailLines.push("", "stderr", stderr);
-    }
-    if (leanCode) {
-      detailLines.push("", "lean_code", leanCode);
+    if (!compileSuccess) {
+      detailLines.push("", "Compile", "success: false", `diagnostics: ${diagnostics.length}`);
     }
     if (diagnostics.length > 0) {
       const diagnosticText = diagnostics
@@ -4429,26 +5483,60 @@ class ZetaApp {
         .join("\n");
       detailLines.push("", "diagnostics", this.truncateActivityText(diagnosticText, 1400));
     }
+    if (semantic?.success === false) {
+      const reasons = ensureArray(semantic?.reasons)
+        .map((reason) => String(reason || "").trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      if (reasons.length > 0) {
+        detailLines.push("", "semantic");
+        for (const reason of reasons) {
+          detailLines.push(`- ${this.truncateActivityText(reason, 260)}`);
+        }
+      }
+    }
+    if (translatorTypecheckOnly && compileSuccess) {
+      detailLines.push(
+        "",
+        "Note",
+        "Lean typecheck ran, but theorem-proving semantic validation did not run."
+      );
+    }
+
+    const shouldIncludeDetail = level === "error";
+    if (shouldIncludeDetail) {
+      detailLines.push(
+        "",
+        "Request",
+        `url: ${requestUrl}`,
+        `cache_hit: ${cacheHit ? "true" : "false"}`,
+        `inference: ${this.formatInferenceDuration(sentenceEntry.inferenceMs)}`
+      );
+    }
 
     return {
       message,
       level,
-      detailText: detailLines.join("\n"),
+      detailText: shouldIncludeDetail ? detailLines.join("\n") : "",
     };
   }
 
+  buildActivityTimeLabel(ts = Date.now()) {
+    return new Date(ts).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
   addActivity(message, level = "info", undoAction = null, detailText = "") {
-    const now = new Date();
+    const now = Date.now();
     const entry = {
-      id: `act-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: `act-${now}-${Math.random().toString(36).slice(2, 6)}`,
       message,
       level,
       detailText: this.truncateActivityText(detailText, 7000),
-      timeLabel: now.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }),
+      timeLabel: this.buildActivityTimeLabel(now),
     };
 
     this.activityEntries.unshift(entry);
@@ -4465,6 +5553,40 @@ class ZetaApp {
 
     this.panel.setActivity(this.activityEntries, this.undoStack.length > 0);
     this.persistPanelSnapshot();
+    return entry.id;
+  }
+
+  updateActivityById(activityId, updates = {}, options = {}) {
+    const targetId = String(activityId || "").trim();
+    if (!targetId) {
+      return false;
+    }
+    const index = this.activityEntries.findIndex((entry) => entry?.id === targetId);
+    if (index === -1) {
+      return false;
+    }
+
+    const current = this.activityEntries[index] || {};
+    const next = { ...current };
+    if (typeof updates.message === "string" && updates.message.trim()) {
+      next.message = updates.message;
+    }
+    if (typeof updates.level === "string" && updates.level.trim()) {
+      next.level = updates.level;
+    }
+    if (typeof updates.detailText === "string") {
+      next.detailText = this.truncateActivityText(updates.detailText, 7000);
+    }
+    if (options.refreshTime) {
+      next.timeLabel = this.buildActivityTimeLabel();
+    } else if (typeof updates.timeLabel === "string" && updates.timeLabel.trim()) {
+      next.timeLabel = updates.timeLabel;
+    }
+
+    this.activityEntries[index] = next;
+    this.panel.setActivity(this.activityEntries, this.undoStack.length > 0);
+    this.persistPanelSnapshot();
+    return true;
   }
 
   clearActivityHistory() {
@@ -4485,7 +5607,17 @@ class ZetaApp {
     }
 
     if (action.type === "unignore") {
-      this.ignoredKeys.delete(action.issueKey);
+      const keysToRemove = [];
+      const explicitKeys = ensureArray(action.issueKeys)
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      keysToRemove.push(...explicitKeys);
+      if (String(action.issueKey || "").trim()) {
+        keysToRemove.push(String(action.issueKey).trim());
+      }
+      for (const key of keysToRemove) {
+        this.ignoredKeys.delete(key);
+      }
       await storageLocalSet({
         [IGNORED_KEY]: Array.from(this.ignoredKeys).slice(-1500),
       });
@@ -4552,6 +5684,21 @@ class ZetaApp {
       this.overlay.clear();
     }
     this.renderTabGhost();
+  }
+
+  isIssueIgnored(issue) {
+    if (!issue || typeof issue !== "object") {
+      return false;
+    }
+    const key = String(issue.key || "").trim();
+    if (key && this.ignoredKeys.has(key)) {
+      return true;
+    }
+    const originIssueKey = String(issue.originIssueKey || "").trim();
+    if (originIssueKey && this.ignoredKeys.has(originIssueKey)) {
+      return true;
+    }
+    return false;
   }
 
   computeHealthBreakdown(issues) {
@@ -4648,6 +5795,7 @@ class ZetaApp {
     if (!issue || !this.activeAdapter) {
       return;
     }
+    this.pinnedPopoverIssueKey = String(issue.key || "");
 
     const row = this.overlay.rectIssueMap.find((entry) => entry.issue.key === issue.key);
     if (row) {
@@ -4698,24 +5846,75 @@ class ZetaApp {
   }
 
   async ignoreIssue(issue) {
-    this.ignoredKeys.add(issue.key);
+    const removedKey = String(issue?.key || "");
+    const removedOriginKey = String(issue?.originIssueKey || "");
+    if (removedKey && this.pinnedPopoverIssueKey === removedKey) {
+      this.pinnedPopoverIssueKey = "";
+    }
+    if (removedKey) {
+      this.ignoredKeys.add(removedKey);
+    }
+    if (removedOriginKey) {
+      this.ignoredKeys.add(removedOriginKey);
+    }
     await storageLocalSet({
       [IGNORED_KEY]: Array.from(this.ignoredKeys).slice(-1500),
     });
+
+    const sentenceKey = String(issue?.sentenceKey || "");
+    const dropFromEntry = (entry) => {
+      if (!entry || typeof entry !== "object") {
+        return;
+      }
+      const shouldDrop = (candidate) => {
+        const candidateKey = String(candidate?.key || "").trim();
+        if (removedOriginKey && candidateKey === removedOriginKey) {
+          return true;
+        }
+        if (candidateKey && candidateKey === removedKey) {
+          return true;
+        }
+        return (
+          String(candidate?.message || "") === String(issue?.message || "") &&
+          String(candidate?.targetText || "") === String(issue?.targetText || "")
+        );
+      };
+      entry.issues = ensureArray(entry.issues).filter((candidate) => !shouldDrop(candidate));
+      entry.persistentIssues = ensureArray(entry.persistentIssues).filter((candidate) => !shouldDrop(candidate));
+    };
+    if (sentenceKey) {
+      dropFromEntry(this.sentenceCache.get(sentenceKey));
+    } else {
+      for (const entry of this.sentenceCache.values()) {
+        dropFromEntry(entry);
+      }
+    }
 
     if (!this.lastRun) {
       return;
     }
 
-    this.lastRun.issues = this.lastRun.issues.filter((item) => item.key !== issue.key);
+    this.lastRun.issues = this.lastRun.issues.filter((item) => {
+      if (!item) {
+        return false;
+      }
+      if (String(item.key || "") === removedKey) {
+        return false;
+      }
+      if (removedOriginKey && String(item.originIssueKey || "") === removedOriginKey) {
+        return false;
+      }
+      return true;
+    });
     this.focusedIssueIndex = clamp(this.focusedIssueIndex, -1, this.lastRun.issues.length - 1);
     this.renderState(this.lastRun);
     this.popover.close();
     this.panel.setStatus("idle", "Issue ignored.");
+    const undoKeys = [removedKey, removedOriginKey].filter(Boolean);
     this.addActivity(
       `Ignored suggestion: ${issue.message}`,
       "info",
-      { type: "unignore", issueKey: issue.key }
+      { type: "unignore", issueKey: removedKey, issueKeys: undoKeys }
     );
   }
 
@@ -4735,6 +5934,9 @@ class ZetaApp {
     }
 
     this.panel.setStatus("idle", "Replacement applied.");
+    if (String(issue?.key || "") === this.pinnedPopoverIssueKey) {
+      this.pinnedPopoverIssueKey = "";
+    }
     this.popover.close();
     this.addActivity(
       `Applied suggestion${issue.targetText ? ` for '${issue.targetText}'` : ""}.`,
@@ -4746,8 +5948,30 @@ class ZetaApp {
 
   syncPopoverWithCaret() {
     if (!this.lastRun || !this.activeAdapter) {
+      this.pinnedPopoverIssueKey = "";
       this.popover.close();
       return;
+    }
+
+    if (this.pinnedPopoverIssueKey) {
+      const pinnedIssue = ensureArray(this.lastRun.issues).find(
+        (item) => String(item?.key || "") === this.pinnedPopoverIssueKey
+      );
+      if (pinnedIssue) {
+        const pinnedRow = ensureArray(this.overlay.rectIssueMap).find(
+          (entry) => String(entry?.issue?.key || "") === this.pinnedPopoverIssueKey
+        );
+        if (pinnedRow) {
+          if (this.popover.currentIssue?.key === pinnedIssue.key) {
+            this.popover.position(pinnedRow.rect);
+          } else {
+            this.popover.open(pinnedIssue, pinnedRow.rect);
+          }
+        }
+        return;
+      } else {
+        this.pinnedPopoverIssueKey = "";
+      }
     }
 
     const snapshot = this.activeAdapter.getVisibleTextSnapshot();
@@ -4822,6 +6046,7 @@ class ZetaApp {
 
     this.detachGlobalListeners();
     this.popover.close();
+    this.pinnedPopoverIssueKey = "";
     this.overlay.remove();
     this.panel.remove();
     if (this.tabGhostElement && this.tabGhostElement.isConnected) {

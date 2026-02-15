@@ -18,10 +18,14 @@ class Settings(BaseModel):
 
     lean_command: str = "lean"
     lake_command: str = "lake"
+    elan_command: str = "elan"
     lake_project_dir: str | None = None
     lean_temp_dir: str | None = None
     elan_home: str | None = None
     require_lake_for_mathlib: bool = True
+    auto_configure_elan_toolchain: bool = True
+    elan_default_toolchain: str = "stable"
+    elan_toolchain_install_timeout_seconds: float = 180.0
     lean_timeout_seconds: float = 15.0
     compiler_output_max_chars: int = 20_000
 
@@ -56,10 +60,16 @@ def get_settings() -> Settings:
         modal_max_retries=_env("MODAL_MAX_RETRIES", "2"),
         lean_command=_env("LEAN_COMMAND", "lean"),
         lake_command=_env("LAKE_COMMAND", "lake"),
+        elan_command=_env("ELAN_COMMAND", "elan"),
         lake_project_dir=_env("LAKE_PROJECT_DIR"),
         lean_temp_dir=_env("LEAN_TEMP_DIR"),
         elan_home=_env("ELAN_HOME"),
         require_lake_for_mathlib=_env("REQUIRE_LAKE_FOR_MATHLIB", "true"),
+        auto_configure_elan_toolchain=_env("AUTO_CONFIGURE_ELAN_TOOLCHAIN", "true"),
+        elan_default_toolchain=_env("ELAN_DEFAULT_TOOLCHAIN", "stable"),
+        elan_toolchain_install_timeout_seconds=_env(
+            "ELAN_TOOLCHAIN_INSTALL_TIMEOUT_SECONDS", "180"
+        ),
         lean_timeout_seconds=_env("LEAN_TIMEOUT_SECONDS", "15"),
         compiler_output_max_chars=_env("COMPILER_OUTPUT_MAX_CHARS", "20000"),
         enable_llm_interpretation=_env("ENABLE_LLM_INTERPRETATION", "true"),

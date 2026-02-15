@@ -74,7 +74,13 @@
     updatedAt: 0,
   };
   const expandedGraphNodeIds = new Set();
+  const expandedPipelineStageIds = new Set();
   const previewCache = new Map();
+  let pipelineModalRoot = null;
+  let pipelineModalCard = null;
+  let pipelineModalTitle = null;
+  let pipelineModalMeta = null;
+  let pipelineModalBody = null;
   const nowTs = () => new Date().toISOString();
   const LATEX_PREVIEW_LIMIT = 160;
   const LATEX_PARSER = window.__zetaLatexParserSimple && typeof window.__zetaLatexParserSimple.parse === "function"
@@ -450,6 +456,312 @@
     return "idle";
   }
 
+  function formatInferenceDuration(valueMs) {
+    const ms = Number(valueMs);
+    if (!Number.isFinite(ms)) {
+      return "--";
+    }
+    if (ms > 1000) {
+      const seconds = ms / 1000;
+      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+    }
+    return `${Math.round(ms)} ms`;
+  }
+
+  function truncatePipelineText(value, maxLength = 520) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "";
+    }
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return `${text.slice(0, maxLength - 3)}...`;
+  }
+
+  function parseActivityKeyValueLines(lines) {
+    const output = {};
+    for (const line of Array.isArray(lines) ? lines : []) {
+      const text = String(line || "").trim();
+      if (!text) {
+        continue;
+      }
+      const match = text.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
+      if (!match) {
+        continue;
+      }
+      output[match[1]] = String(match[2] || "").trim();
+    }
+    return output;
+  }
+
+  function parseActivityPipelineTrace(detailText) {
+    const lines = String(detailText || "").split(/\r?\n/);
+    const sections = {};
+    let activeSection = "";
+    for (const rawLine of lines) {
+      const line = String(rawLine || "");
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (/^[A-Za-z][A-Za-z ]+$/.test(trimmed) && !trimmed.includes(":")) {
+        activeSection = trimmed;
+        if (!sections[activeSection]) {
+          sections[activeSection] = [];
+        }
+        continue;
+      }
+      if (!activeSection) {
+        continue;
+      }
+      sections[activeSection].push(trimmed);
+    }
+
+    const stageRegex =
+      /^\s*(\d+)\.\s+(.+?)\s+·\s+(ok|failed|skipped|unknown)\s+·\s+attempted=(true|false)\s+·\s+duration_ms=([0-9.]+|--)\s*$/i;
+    const stages = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const stageMatch = String(lines[index] || "").match(stageRegex);
+      if (!stageMatch) {
+        continue;
+      }
+      const details = [];
+      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+        const detailLine = String(lines[cursor] || "");
+        const trimmed = detailLine.trim();
+        if (!trimmed) {
+          continue;
+        }
+        if (stageRegex.test(detailLine)) {
+          break;
+        }
+        if (/^\s*\d+\./.test(detailLine) || /^[A-Za-z][A-Za-z ]+$/.test(trimmed)) {
+          break;
+        }
+        if (/^\s+details:\s*/.test(detailLine)) {
+          details.push(detailLine.replace(/^\s+details:\s*/, "").trim());
+          continue;
+        }
+        if (/^\s+/.test(detailLine)) {
+          details.push(trimmed);
+          continue;
+        }
+        break;
+      }
+      const durationRaw = String(stageMatch[5] || "--").trim();
+      const durationMs = durationRaw === "--" ? null : Number(durationRaw);
+      stages.push({
+        index: Number(stageMatch[1]) || stages.length + 1,
+        stage: String(stageMatch[2] || "").trim(),
+        outcome: String(stageMatch[3] || "unknown").toLowerCase(),
+        attempted: String(stageMatch[4] || "").toLowerCase() === "true",
+        durationMs: Number.isFinite(durationMs) ? durationMs : null,
+        details: details.join(" · "),
+      });
+    }
+
+    const pipeline = parseActivityKeyValueLines(sections.Pipeline);
+    const result = parseActivityKeyValueLines(sections.Result);
+    const compile = parseActivityKeyValueLines(sections.Compile);
+    const translator = parseActivityKeyValueLines(sections.Translator);
+    const pipelineTrace = parseActivityKeyValueLines(sections["Pipeline trace"]);
+
+    return {
+      sentence: String((sections.Sentence || [])[0] || ""),
+      chunk: String((sections.Chunk || [])[0] || ""),
+      pipeline,
+      result,
+      compile,
+      translator,
+      pipelineTrace,
+      stages,
+    };
+  }
+
+  function ensurePipelineModal() {
+    if (pipelineModalRoot) {
+      return;
+    }
+    pipelineModalRoot = document.createElement("div");
+    pipelineModalRoot.className = "zeta-pipeline-modal";
+    pipelineModalRoot.hidden = true;
+    pipelineModalRoot.innerHTML = `
+      <div class="zeta-pipeline-modal-backdrop" data-close-pipeline-modal="1"></div>
+      <section class="zeta-pipeline-modal-card" role="dialog" aria-modal="true" aria-label="Pipeline trace">
+        <header class="zeta-pipeline-modal-head">
+          <div>
+            <h3 class="zeta-pipeline-modal-title"></h3>
+            <p class="zeta-pipeline-modal-meta"></p>
+          </div>
+          <button type="button" class="zeta-pipeline-modal-close" data-close-pipeline-modal="1">Close</button>
+        </header>
+        <div class="zeta-pipeline-modal-body"></div>
+      </section>
+    `;
+    document.body.appendChild(pipelineModalRoot);
+    pipelineModalCard = pipelineModalRoot.querySelector(".zeta-pipeline-modal-card");
+    pipelineModalTitle = pipelineModalRoot.querySelector(".zeta-pipeline-modal-title");
+    pipelineModalMeta = pipelineModalRoot.querySelector(".zeta-pipeline-modal-meta");
+    pipelineModalBody = pipelineModalRoot.querySelector(".zeta-pipeline-modal-body");
+    if (pipelineModalCard) {
+      pipelineModalCard.setAttribute("tabindex", "-1");
+    }
+
+    pipelineModalRoot.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (target.closest("[data-close-pipeline-modal]")) {
+        closePipelineModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (String(event.key || "") !== "Escape") {
+        return;
+      }
+      if (!pipelineModalRoot || pipelineModalRoot.hidden) {
+        return;
+      }
+      closePipelineModal();
+    });
+  }
+
+  function closePipelineModal() {
+    if (!pipelineModalRoot) {
+      return;
+    }
+    pipelineModalRoot.hidden = true;
+    pipelineModalRoot.classList.remove("is-open");
+  }
+
+  function togglePipelineStage(stageId, body, toggle) {
+    if (!body || !toggle) {
+      return;
+    }
+    const nextExpanded = body.hidden;
+    body.hidden = !nextExpanded;
+    toggle.setAttribute("aria-expanded", String(nextExpanded));
+    if (nextExpanded) {
+      expandedPipelineStageIds.add(stageId);
+    } else {
+      expandedPipelineStageIds.delete(stageId);
+    }
+  }
+
+  function renderPipelineModal(entry, parsedTrace) {
+    ensurePipelineModal();
+    if (!pipelineModalRoot || !pipelineModalTitle || !pipelineModalMeta || !pipelineModalBody) {
+      return;
+    }
+    const title = String(entry?.message || "Pipeline trace");
+    const time = String(entry?.timeLabel || "");
+    pipelineModalTitle.textContent = title;
+    pipelineModalMeta.textContent = time || "No timestamp";
+    pipelineModalBody.replaceChildren();
+
+    const summaryItems = [];
+    if (parsedTrace.pipeline.url) {
+      summaryItems.push(`url: ${parsedTrace.pipeline.url}`);
+    }
+    if (parsedTrace.pipeline.inference) {
+      summaryItems.push(`inference: ${parsedTrace.pipeline.inference}`);
+    } else if (parsedTrace.pipeline.inference_ms) {
+      summaryItems.push(`inference_ms: ${parsedTrace.pipeline.inference_ms}`);
+    }
+    if (parsedTrace.result.compile_failed) {
+      summaryItems.push(`compile_failed: ${parsedTrace.result.compile_failed}`);
+    }
+    if (parsedTrace.result.semantic_failed) {
+      summaryItems.push(`semantic_failed: ${parsedTrace.result.semantic_failed}`);
+    }
+    if (parsedTrace.chunk) {
+      summaryItems.push(`chunk: ${parsedTrace.chunk}`);
+    }
+    if (parsedTrace.sentence) {
+      summaryItems.push(`sentence: ${truncatePipelineText(parsedTrace.sentence, 220)}`);
+    }
+
+    if (summaryItems.length > 0) {
+      const summary = document.createElement("p");
+      summary.className = "zeta-pipeline-summary";
+      summary.textContent = summaryItems.join(" · ");
+      pipelineModalBody.appendChild(summary);
+    }
+
+    if (!Array.isArray(parsedTrace.stages) || parsedTrace.stages.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "zeta-hint";
+      empty.textContent = "No structured pipeline stages were found for this activity.";
+      pipelineModalBody.appendChild(empty);
+      return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "zeta-pipeline-stage-list";
+    const traceKey = `${title}|${time}|${parsedTrace.chunk}`;
+    for (let index = 0; index < parsedTrace.stages.length; index += 1) {
+      const stage = parsedTrace.stages[index];
+      const stageId = `${traceKey}|${stage.index}|${stage.stage}`;
+      const card = document.createElement("article");
+      card.className = `zeta-pipeline-stage zeta-pipeline-stage--${stage.outcome || "unknown"}`;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "zeta-pipeline-stage-toggle";
+      toggle.setAttribute("aria-expanded", "false");
+      const name = document.createElement("strong");
+      name.className = "zeta-pipeline-stage-name";
+      name.textContent = `${stage.index}. ${stage.stage}`;
+      const meta = document.createElement("span");
+      meta.className = "zeta-pipeline-stage-meta";
+      const durationLabel = Number.isFinite(Number(stage.durationMs))
+        ? formatInferenceDuration(Number(stage.durationMs))
+        : "--";
+      meta.textContent = `${stage.outcome || "unknown"} · attempted=${stage.attempted ? "true" : "false"} · ${durationLabel}`;
+      toggle.append(name, meta);
+
+      const body = document.createElement("div");
+      body.className = "zeta-pipeline-stage-body";
+      body.hidden = true;
+      const details = document.createElement("p");
+      details.className = "zeta-pipeline-stage-details";
+      details.textContent = truncatePipelineText(stage.details || "No stage details available.", 800);
+      body.appendChild(details);
+
+      const isExpanded = expandedPipelineStageIds.has(stageId) || index === 0;
+      if (isExpanded) {
+        body.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+        expandedPipelineStageIds.add(stageId);
+      }
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePipelineStage(stageId, body, toggle);
+      });
+
+      card.append(toggle, body);
+      list.appendChild(card);
+    }
+
+    pipelineModalBody.appendChild(list);
+  }
+
+  function openPipelineModal(entry, detailText) {
+    const parsedTrace = parseActivityPipelineTrace(detailText);
+    renderPipelineModal(entry, parsedTrace);
+    if (!pipelineModalRoot || !pipelineModalCard) {
+      return;
+    }
+    pipelineModalRoot.hidden = false;
+    requestAnimationFrame(() => {
+      pipelineModalRoot.classList.add("is-open");
+      pipelineModalCard.focus();
+    });
+  }
+
   function renderTelemetry(telemetry) {
     let snapshotData;
     try {
@@ -462,7 +774,7 @@
     const updatedAt = Number(snapshotData.updatedAt);
 
     if (inferenceValue) {
-      inferenceValue.textContent = Number.isFinite(inferenceMs) ? `${Math.round(inferenceMs)} ms` : "--";
+      inferenceValue.textContent = formatInferenceDuration(inferenceMs);
     }
 
     if (!statusLabel) {
@@ -523,16 +835,19 @@
     renderHealthTooltip(score, breakdown, cached, pending);
 
     if (activityCount) {
-      activityCount.textContent = String(activity.length);
+      activityCount.textContent = `${activity.length} item${activity.length === 1 ? "" : "s"}`;
     }
     if (activityList) {
       activityList.replaceChildren();
-      for (const entry of activity) {
+      for (let activityIndex = 0; activityIndex < activity.length; activityIndex += 1) {
+        const entry = activity[activityIndex];
         const li = document.createElement("li");
         li.className = "zeta-activity-row";
         const message = String(entry?.message || "Activity");
         const time = String(entry?.timeLabel || "");
         const detailText = String(entry?.detailText || "").trim();
+        const parsedPipeline = detailText ? parseActivityPipelineTrace(detailText) : null;
+        const hasPipelineStages = !!(parsedPipeline && Array.isArray(parsedPipeline.stages) && parsedPipeline.stages.length > 0);
         const head = document.createElement("div");
         head.className = "zeta-activity-head";
         const strong = document.createElement("strong");
@@ -547,6 +862,8 @@
           li.classList.add("is-compact");
         }
         if (detailText) {
+          const actions = document.createElement("div");
+          actions.className = "zeta-activity-actions";
           const toggle = document.createElement("button");
           toggle.type = "button";
           toggle.className = "zeta-activity-toggle";
@@ -566,14 +883,34 @@
             event.stopPropagation();
             toggleExpanded();
           });
+          actions.appendChild(toggle);
+          if (hasPipelineStages) {
+            const pipelineButton = document.createElement("button");
+            pipelineButton.type = "button";
+            pipelineButton.className = "zeta-activity-toggle zeta-activity-pipeline-btn";
+            pipelineButton.textContent = "View pipeline";
+            pipelineButton.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openPipelineModal({
+                message,
+                timeLabel: time,
+                index: activityIndex,
+              }, detailText);
+            });
+            actions.appendChild(pipelineButton);
+          }
           li.addEventListener("click", (event) => {
             const target = event.target;
-            if (target instanceof Element && target.closest(".zeta-activity-detail")) {
+            if (
+              target instanceof Element
+              && target.closest(".zeta-activity-detail, .zeta-activity-actions, .zeta-activity-toggle")
+            ) {
               return;
             }
             toggleExpanded();
           });
-          li.append(toggle, pre);
+          li.append(actions, pre);
         }
         activityList.appendChild(li);
       }

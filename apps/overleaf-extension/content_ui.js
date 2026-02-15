@@ -4,6 +4,57 @@
   const zeta = window.__zetaContent || (window.__zetaContent = {});
   const { MAX_HIGHLIGHT_RECTS, ensureArray, normalizeSeverity, clamp } = zeta;
 
+  function formatInferenceDuration(valueMs) {
+    const ms = Number(valueMs);
+    if (!Number.isFinite(ms)) {
+      return "--";
+    }
+    if (ms > 1000) {
+      const seconds = ms / 1000;
+      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+    }
+    return `${Math.round(ms)} ms`;
+  }
+
+  function deriveReplacementFromSuggestion(suggestionText, targetText) {
+    const suggestion = String(suggestionText || "").trim();
+    const target = String(targetText || "").trim();
+    if (!suggestion || !target) {
+      return "";
+    }
+
+    const cleaned = suggestion
+      .replace(/^suggested fix:\s*/i, "")
+      .replace(/^try this rewrite(?: next)?:\s*/i, "")
+      .trim();
+    const patterns = [
+      /^did you mean\s+(.+?)\?\s*$/i,
+      /^replace with\s+(.+?)\.?\s*$/i,
+      /^use\s+(.+?)\s+instead\.?\s*$/i,
+      /^rewrite as\s+(.+?)\.?\s*$/i,
+    ];
+    let candidate = "";
+    for (const pattern of patterns) {
+      const match = cleaned.match(pattern);
+      if (match && match[1]) {
+        candidate = String(match[1]).trim();
+        break;
+      }
+    }
+    if (!candidate) {
+      return "";
+    }
+
+    candidate = candidate
+      .replace(/^["'`]+/, "")
+      .replace(/["'`]+$/, "")
+      .trim();
+    if (!candidate || candidate === target || candidate.length > 260) {
+      return "";
+    }
+    return candidate;
+  }
+
 class ZetaOverlay {
   constructor() {
     this.layer = document.createElement("div");
@@ -140,14 +191,33 @@ class ZetaPopover {
     const list = document.createElement("div");
     list.className = "zeta-suggestion-list";
 
-    if (issue.replacement) {
+    const suggestionText = String(issue?.suggestion || issue?.suggestedFix || "").trim();
+    let resolvedReplacement = String(issue?.replacement || "").trim();
+    if (!resolvedReplacement && suggestionText && issue?.targetText) {
+      resolvedReplacement = deriveReplacementFromSuggestion(suggestionText, issue.targetText);
+    }
+    if (suggestionText) {
+      const note = document.createElement("div");
+      note.className = "zeta-suggestion-note";
+      const label = document.createElement("strong");
+      label.textContent = "Suggested fix";
+      const body = document.createElement("span");
+      body.textContent = suggestionText;
+      note.append(label, body);
+      list.appendChild(note);
+    }
+
+    if (resolvedReplacement) {
       const applyBtn = document.createElement("button");
       applyBtn.type = "button";
       applyBtn.className = "zeta-suggestion-option";
-      applyBtn.innerHTML = `<strong>Apply replacement</strong><span>${issue.replacement}</span>`;
+      applyBtn.innerHTML = `<strong>Apply replacement</strong><span>${resolvedReplacement}</span>`;
       applyBtn.addEventListener("click", (event) => {
         event.preventDefault();
-        this.onApply(issue);
+        this.onApply({
+          ...issue,
+          replacement: resolvedReplacement,
+        });
         this.close();
       });
       list.appendChild(applyBtn);
@@ -207,6 +277,9 @@ class ZetaPopover {
 
   handleOutside(event) {
     if (!this.element) {
+      return;
+    }
+    if (event?.__zetaKeepPopover) {
       return;
     }
     const target = event.target;
@@ -557,7 +630,7 @@ class ZetaPanel {
   }
 
   setInferenceTime(lastMs, pendingCount = 0) {
-    const msLabel = Number.isFinite(lastMs) ? `${Math.round(lastMs)} ms` : "--";
+    const msLabel = formatInferenceDuration(lastMs);
     const queueLabel = pendingCount > 0 ? ` · ${pendingCount} queued` : "";
     this.refs.inferenceText.textContent = `inference ${msLabel}${queueLabel}`;
   }

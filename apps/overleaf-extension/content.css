@@ -230,6 +230,28 @@
   gap: 8px;
 }
 
+.zeta-suggestion-note {
+  border: 1px solid var(--popover-border);
+  background: color-mix(in srgb, var(--popover-bg) 90%, #f6efe5 10%);
+  padding: 8px;
+}
+
+.zeta-suggestion-note strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--popover-text);
+}
+
+.zeta-suggestion-note span {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--popover-muted);
+  white-space: pre-wrap;
+}
+
 .zeta-suggestion-option {
   border: 1px solid var(--popover-border);
   border-radius: 9px;
