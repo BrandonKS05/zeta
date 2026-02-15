@@ -20,7 +20,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v3"
+APP_VERSION = "2026-02-14-mathlib-fastcache-v4"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -107,6 +107,24 @@ Rules:
 2) Keep semantics as close as possible to the original intent.
 3) If diagnostics suggest missing types/binders, add explicit binders.
 4) Do not include proofs (`by`, `sorry`) or declarations.
+"""
+
+FINAL_FEEDBACK_SYSTEM_PROMPT = """You are a Lean 4 tutoring assistant.
+You will receive:
+- Original natural-language input
+- Final Lean check status and diagnostics
+- Existing heuristic feedback
+- Optional thinking-mode iteration history
+
+Return JSON only with keys:
+- final_feedback: list of 1-4 concise, actionable user-facing suggestions
+- summary: one short sentence
+
+Rules:
+1) No markdown/code fences.
+2) If final Lean is valid, focus on confirmation and optional improvement ideas.
+3) If invalid, prioritize the highest-impact fixes grounded in diagnostics.
+4) Do not invent imports or theorem names not implied by context.
 """
 
 LEAN_DECL_RE = re.compile(
@@ -226,6 +244,8 @@ VLLM_GPU_MEMORY_UTILIZATION = _env_float("VLLM_GPU_MEMORY_UTILIZATION", 0.9)
 VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 4096)
 VLLM_MAX_NUM_SEQS = _env_int("VLLM_MAX_NUM_SEQS", 8)
 VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", False)
+ENABLE_FINAL_FEEDBACK_LLM = _env_bool("ENABLE_FINAL_FEEDBACK_LLM", True)
+FINAL_FEEDBACK_MAX_NEW_TOKENS = _env_int("FINAL_FEEDBACK_MAX_NEW_TOKENS", 224)
 
 
 def _resolve_secret(secret_name_env: str, secret_value_env: str) -> modal.Secret | None:
@@ -346,6 +366,7 @@ class AnalyzeResponse(BaseModel):
     is_valid_lean: bool = False
     cache_hit: bool = False
     model_output: str | None = None
+    final_feedback: list[str] = Field(default_factory=list)
     latency_ms: int = 0
     mode: Literal["fast", "thinking"] = "fast"
     iteration_count: int = 1
@@ -425,6 +446,7 @@ def _analyze_cache_key(request: AnalyzeRequest) -> str:
             "lean_timeout_seconds": request.lean_timeout_seconds,
             "skip_lean_check": request.skip_lean_check,
             "include_raw_model_output": request.include_raw_model_output,
+            "enable_final_feedback_llm": ENABLE_FINAL_FEEDBACK_LLM,
             "mode": request.mode,
             "max_iters": request.max_iters if request.mode == "thinking" else None,
             "include_iteration_history": (
@@ -774,6 +796,132 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _shorten_for_prompt(text: str, max_chars: int = 280) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."
+
+
+def _generate_final_feedback_output(request: AnalyzeRequest, response: AnalyzeResponse) -> str | None:
+    import torch
+
+    diagnostics_payload = [
+        {
+            "severity": diag.severity,
+            "line": diag.line,
+            "column": diag.column,
+            "message": _shorten_for_prompt(diag.message, 320),
+        }
+        for diag in response.diagnostics
+    ]
+    prompt_payload = {
+        "input_text": _shorten_for_prompt(request.text, 600),
+        "mode": response.mode,
+        "status": response.status,
+        "is_valid_lean": response.is_valid_lean,
+        "statement_type": _shorten_for_prompt(response.statement_type or "", 320),
+        "notes": _shorten_for_prompt(response.notes, 320),
+        "diagnostics": diagnostics_payload,
+        "iteration_count": response.iteration_count,
+        "iteration_history": response.iteration_history or [],
+        "existing_feedback": response.feedback,
+    }
+    user_prompt = (
+        "Validation outcome payload:\n"
+        f"{json.dumps(prompt_payload, ensure_ascii=False)}\n\n"
+        "Return only JSON with final_feedback and summary."
+    )
+
+    runtime = _load_runtime()
+    tokenizer = runtime.tokenizer
+    model = runtime.model
+
+    if getattr(tokenizer, "chat_template", None):
+        prompt = tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": FINAL_FEEDBACK_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        prompt = f"{FINAL_FEEDBACK_SYSTEM_PROMPT}\n\n{user_prompt}\n\nJSON:"
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    kwargs: dict[str, Any] = {
+        **inputs,
+        "max_new_tokens": FINAL_FEEDBACK_MAX_NEW_TOKENS,
+        "do_sample": False,
+        "use_cache": True,
+        "pad_token_id": tokenizer.pad_token_id,
+    }
+    if tokenizer.eos_token_id is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
+
+    with torch.inference_mode():
+        outputs = model.generate(**kwargs)
+
+    input_tokens = inputs["input_ids"].shape[1]
+    generated = outputs[0][input_tokens:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def _summarize_final_feedback_with_llm(
+    request: AnalyzeRequest,
+    response: AnalyzeResponse,
+) -> list[str]:
+    if not ENABLE_FINAL_FEEDBACK_LLM:
+        return []
+
+    raw_output = _generate_final_feedback_output(request, response)
+    if not raw_output:
+        return []
+
+    payload = _extract_json(raw_output)
+    if payload is None:
+        return []
+
+    feedback_items: list[str] = []
+    raw_feedback = payload.get("final_feedback")
+    if isinstance(raw_feedback, list):
+        feedback_items.extend(str(item).strip() for item in raw_feedback if str(item).strip())
+    elif isinstance(raw_feedback, str) and raw_feedback.strip():
+        feedback_items.append(raw_feedback.strip())
+
+    fallback_feedback = payload.get("feedback")
+    if isinstance(fallback_feedback, list):
+        feedback_items.extend(str(item).strip() for item in fallback_feedback if str(item).strip())
+
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        feedback_items.append(summary)
+
+    deduped = list(dict.fromkeys(item for item in feedback_items if item))
+    return deduped[:4]
+
+
+def _apply_final_feedback_summary(request: AnalyzeRequest, response: AnalyzeResponse) -> AnalyzeResponse:
+    if request.skip_lean_check or response.status == "runtime_error":
+        return response
+
+    try:
+        final_feedback = _summarize_final_feedback_with_llm(request, response)
+    except Exception:  # noqa: BLE001
+        return response
+
+    if not final_feedback:
+        return response
+
+    response.final_feedback = final_feedback
+    for item in final_feedback:
+        rendered = f"LLM final feedback: {item}"
+        if rendered not in response.feedback:
+            response.feedback.append(rendered)
+    return response
 
 
 def _strip_code_fences(text: str) -> str:
@@ -1616,6 +1764,7 @@ def analyze_rpc(request: dict[str, Any]) -> dict[str, Any]:
         response.mode = "fast"
         response.iteration_count = 1
         response.iteration_history = None
+    response = _apply_final_feedback_summary(parsed, response)
     payload = response.model_dump()
     payload["cache_hit"] = False
     _cache_put(_analyze_cache, key, payload, ANALYZE_CACHE_MAX_ENTRIES)
