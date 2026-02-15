@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -32,6 +33,55 @@ _INTERPRET_DIAGNOSTICS_MAX_CHARS = 2_500
 
 def _endpoint_url(settings: Settings) -> str:
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+
+def _should_enforce_json_mode(endpoint: str) -> bool:
+    """Use strict JSON mode only for OpenAI Chat Completions."""
+    parsed = urlsplit(endpoint)
+    return parsed.netloc.lower() == "api.openai.com"
+
+
+def _interpret_json_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "lean_interpretation",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["summary", "items", "suggestions"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["error", "source"],
+                            "properties": {
+                                "error": {"type": "string"},
+                                "probable_cause": {"type": ["string", "null"]},
+                                "suggested_fix": {"type": ["string", "null"]},
+                                "source": {
+                                    "type": "string",
+                                    "enum": ["latex", "lean", "both", "unknown"],
+                                },
+                                "latex_start": {"type": ["integer", "null"]},
+                                "latex_end": {"type": ["integer", "null"]},
+                                "latex_excerpt": {"type": ["string", "null"]},
+                                "lean_line": {"type": ["integer", "null"]},
+                                "lean_column": {"type": ["integer", "null"]},
+                                "replacement": {"type": ["string", "null"]},
+                                "confidence": {"type": ["number", "null"]},
+                            },
+                        },
+                    },
+                    "suggestions": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    }
 
 
 def _as_int(value: Any) -> int | None:
@@ -247,6 +297,19 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
     return content if isinstance(content, str) else None
 
 
+def _fallback_interpretation(
+    *,
+    nl_input: str,
+    compile_result: CompileResult,
+    summary: str = "Lean compiler errors detected.",
+) -> Interpretation:
+    return _normalize_interpretation(
+        {"summary": summary, "items": [], "suggestions": []},
+        nl_input=nl_input,
+        compile_result=compile_result,
+    )
+
+
 async def interpret_errors(
     code: str,
     compile_result: CompileResult,
@@ -299,6 +362,8 @@ async def interpret_errors(
             {"role": "user", "content": user_prompt},
         ],
     }
+    if _should_enforce_json_mode(endpoint):
+        payload["response_format"] = _interpret_json_response_format()
     if settings.llm_max_completion_tokens > 0:
         payload["max_completion_tokens"] = settings.llm_max_completion_tokens
 
@@ -338,11 +403,22 @@ async def interpret_errors(
 
             content = _extract_message_content(data)
             if content is None:
-                raise LLMClientError("LLM response missing message content")
+                logger.warning("llm_interpretation_missing_content fallback_to_compile")
+                return _fallback_interpretation(
+                    nl_input=nl_input,
+                    compile_result=compile_result,
+                )
 
             parsed = extract_json_object(content)
             if parsed is None:
-                raise LLMClientError("LLM message content was not valid JSON")
+                logger.warning(
+                    "llm_interpretation_non_json_content fallback_to_compile content_prefix=%s",
+                    truncate_text(content, 200),
+                )
+                return _fallback_interpretation(
+                    nl_input=nl_input,
+                    compile_result=compile_result,
+                )
 
             return _normalize_interpretation(
                 parsed,

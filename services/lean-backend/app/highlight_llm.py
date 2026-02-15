@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -40,6 +41,62 @@ def _endpoint_url(settings: Settings) -> str:
     if settings.llm_endpoint_url:
         return settings.llm_endpoint_url
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+
+def _should_enforce_json_mode(endpoint: str) -> bool:
+    parsed = urlsplit(endpoint)
+    return parsed.netloc.lower() == "api.openai.com"
+
+
+def _highlight_json_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "lean_highlight_resolution",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["highlights", "unresolved_items"],
+                "properties": {
+                    "highlights": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "item_index",
+                                "chunk_id",
+                                "start_in_chunk",
+                                "end_in_chunk",
+                                "source",
+                                "confidence",
+                            ],
+                            "properties": {
+                                "item_index": {"type": "integer"},
+                                "chunk_id": {"type": "string"},
+                                "start_in_chunk": {"type": "integer"},
+                                "end_in_chunk": {"type": "integer"},
+                                "source": {
+                                    "type": "string",
+                                    "enum": [
+                                        "latex_span",
+                                        "latex_excerpt",
+                                        "quoted_text",
+                                        "replacement_text",
+                                        "keyword",
+                                        "llm",
+                                    ],
+                                },
+                                "confidence": {"type": "number"},
+                            },
+                        },
+                    },
+                    "unresolved_items": {"type": "array", "items": {"type": "integer"}},
+                },
+            },
+        },
+    }
 
 
 def _as_int(value: Any) -> int | None:
@@ -300,6 +357,8 @@ async def resolve_highlights_with_llm(
             {"role": "user", "content": _build_prompt(payload)},
         ],
     }
+    if _should_enforce_json_mode(endpoint):
+        request_payload["response_format"] = _highlight_json_response_format()
 
     timeout = httpx.Timeout(settings.llm_highlight_timeout_seconds)
 

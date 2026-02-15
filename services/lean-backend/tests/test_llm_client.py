@@ -129,8 +129,79 @@ def test_interpret_errors_includes_completion_cap_and_limits_diagnostics(
     asyncio.run(_run())
 
     assert captured_payload.get("max_completion_tokens") == 180
+    response_format = captured_payload.get("response_format")
+    assert isinstance(response_format, dict)
+    assert response_format.get("type") == "json_schema"
+    schema = response_format.get("json_schema")
+    assert isinstance(schema, dict)
+    assert schema.get("name") == "lean_interpretation"
     messages = captured_payload.get("messages")
     assert isinstance(messages, list) and len(messages) >= 2
     prompt = messages[1]["content"]
     assert "diag_7" in prompt
     assert "diag_8" not in prompt
+
+
+def test_interpret_errors_falls_back_when_content_not_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json, headers):
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Here is analysis:\n- cause: unknown identifier\n- fix: import module"
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("app.llm_client.httpx.AsyncClient", _FakeAsyncClient)
+
+    compile_result = CompileResult(
+        success=False,
+        stdout="",
+        stderr="Main.lean:4:5: error: unknown identifier 'PositivityExt'",
+        diagnostics=[
+            Diagnostic(
+                severity="error",
+                message="unknown identifier 'PositivityExt'",
+                line=4,
+                column=5,
+            )
+        ],
+    )
+    settings = Settings(
+        enable_llm_interpretation=True,
+        llm_model="gpt-5-nano",
+        llm_base_url="https://api.openai.com/v1",
+        llm_max_completion_tokens=180,
+        llm_timeout_seconds=10,
+        llm_max_retries=0,
+    )
+
+    async def _run() -> None:
+        interpretation = await interpret_errors(
+            code="def bad : PositivityExt := by sorry",
+            compile_result=compile_result,
+            nl_input="For all real numbers x, x + 1 = x.",
+            settings=settings,
+        )
+        assert interpretation.summary == "Lean compiler errors detected."
+        assert interpretation.items
+        assert interpretation.items[0].error == "unknown identifier 'PositivityExt'"
+
+    asyncio.run(_run())
