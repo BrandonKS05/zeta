@@ -193,12 +193,15 @@ For low-latency UI suggestions, call `/v1/generate` (or set `skip_lean_check=tru
 - Mathlib is auto-enabled when imports or generated symbols require it (`Real`, `Differentiable`, etc.).
 - Warmup now pre-initializes Mathlib so first real Mathlib query is faster.
 - Mathlib bootstrap runs one-time `lake update` and `lake exe cache get` into `/cache/lean/mathlib_checker`, then reuses cache.
+- Optional Mathlib prebuild list is configurable via `MATHLIB_PREBUILD_MODULES` (comma-separated modules); default prebuilds include `Mathlib.Probability.Filtration` and measure-theory modules.
+- If Lean reports missing `.olean` files for Mathlib modules, runtime now runs `lake build <module>` on-demand and retries the Lean check once.
 - Added in-memory caches for:
   - full analyze responses (request-level cache)
   - model output (prompt-level cache)
   - Lean check results (statement-level cache, reused across theorem names)
 - Default generation length reduced to `max_new_tokens=128` for faster statement generation.
 - You can keep warm containers for low p95 latency via env:
+  - `GPU_FUNCTION_TIMEOUT_SECONDS` (increase above `900` for slow first-time Mathlib bootstrap)
   - `GPU_MIN_CONTAINERS`, `GPU_BUFFER_CONTAINERS`, `GPU_MAX_CONTAINERS`
   - `API_MIN_CONTAINERS`, `API_MAX_CONTAINERS`
 

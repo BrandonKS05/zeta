@@ -56,6 +56,39 @@ def test_parse_lean_diagnostics_with_error_codes() -> None:
     assert "Unknown identifier" in diagnostics[0].message
 
 
+def test_extract_missing_olean_modules_parses_mathlib_only() -> None:
+    diagnostics = [
+        app.LeanDiagnostic(
+            severity="error",
+            message=(
+                "object file '/tmp/Mathlib/Probability/Filtration.olean' "
+                "of module Mathlib.Probability.Filtration does not exist"
+            ),
+        ),
+        app.LeanDiagnostic(
+            severity="error",
+            message=(
+                "object file '/tmp/Init/Prelude.olean' "
+                "of module Init.Prelude does not exist"
+            ),
+        ),
+    ]
+    modules = app._extract_missing_olean_modules("", diagnostics)
+    assert modules == ["Mathlib.Probability.Filtration"]
+
+
+def test_sanitize_mathlib_modules_dedupes_and_filters() -> None:
+    modules = app._sanitize_mathlib_modules(
+        [
+            "Mathlib.Data.Real.Basic",
+            " Init.Prelude ",
+            "Mathlib.Data.Real.Basic",
+            "Mathlib.Probability.Filtration",
+        ]
+    )
+    assert modules == ["Mathlib.Data.Real.Basic", "Mathlib.Probability.Filtration"]
+
+
 def test_analyze_cache_key_distinguishes_skip_lean_check() -> None:
     req_full = app.AnalyzeRequest(text="n + 0 = n", skip_lean_check=False)
     req_fast = app.AnalyzeRequest(text="n + 0 = n", skip_lean_check=True)

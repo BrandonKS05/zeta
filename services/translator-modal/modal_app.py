@@ -7,6 +7,7 @@ from copy import deepcopy
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -19,7 +20,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v2"
+APP_VERSION = "2026-02-14-mathlib-fastcache-v3"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -35,6 +36,26 @@ MATHLIB_PROJECT_DIR = Path("/cache/lean/mathlib_checker")
 MATHLIB_MARKER_FILE = MATHLIB_PROJECT_DIR / ".mathlib_ready"
 MATHLIB_GIT_URL = "https://github.com/leanprover-community/mathlib4.git"
 MATHLIB_REVISION = os.environ.get("MATHLIB_REVISION")
+MATHLIB_BOOTSTRAP_TOOLCHAIN = os.environ.get("MATHLIB_BOOTSTRAP_TOOLCHAIN", "stable")
+MATHLIB_PREBUILD_MODULES_DEFAULT = (
+    "Mathlib.Data.Real.Basic",
+    "Mathlib.Probability.Filtration",
+    "Mathlib.MeasureTheory.Measure.Space",
+    "Mathlib.MeasureTheory.MeasurableSpace.Defs",
+)
+_mathlib_prebuild_modules_env = os.environ.get("MATHLIB_PREBUILD_MODULES")
+if _mathlib_prebuild_modules_env:
+    MATHLIB_PREBUILD_MODULES = tuple(
+        item.strip() for item in _mathlib_prebuild_modules_env.split(",") if item.strip()
+    )
+else:
+    MATHLIB_PREBUILD_MODULES = MATHLIB_PREBUILD_MODULES_DEFAULT
+MATHLIB_BUILD_TIMEOUT_SECONDS = int(os.environ.get("MATHLIB_BUILD_TIMEOUT_SECONDS", "600"))
+MATHLIB_PREBUILD_STRICT = os.environ.get("MATHLIB_PREBUILD_STRICT", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 MATHLIB_IMPORT = "Mathlib"
 MATHLIB_IDENTIFIER_TO_IMPORT = (
     ("Real", "Mathlib.Data.Real.Basic"),
@@ -68,6 +89,23 @@ Rules:
 5) Prefer conservative formalizations when ambiguous.
 """
 
+REWRITE_SYSTEM_PROMPT = """You are an expert Lean 4 refiner.
+You will be given:
+- A current Lean statement type candidate
+- Lean compiler diagnostics
+
+Return JSON only with keys:
+- revised_lean_statement_type: Lean proposition/type only (no theorem/lemma/axiom keywords)
+- feedback: list of short natural-language suggestions about what changed
+- reason: short explanation
+
+Rules:
+1) No markdown/code fences.
+2) Keep semantics as close as possible to the original intent.
+3) If diagnostics suggest missing types/binders, add explicit binders.
+4) Do not include proofs (`by`, `sorry`) or declarations.
+"""
+
 LEAN_DECL_RE = re.compile(
     r"^(theorem|lemma|example|axiom)\s+([A-Za-z_][A-Za-z0-9_']*)?\s*:\s*(.*)$",
     re.IGNORECASE | re.DOTALL,
@@ -77,6 +115,7 @@ LEAN_DIAGNOSTIC_RE = re.compile(
     r"(?P<severity>error|warning|info|information)(?:\([^)]+\))?: "
     r"(?P<message>.+)$"
 )
+LEAN_MISSING_OLEAN_MODULE_RE = re.compile(r"of module (?P<module>[A-Za-z0-9_.']+) does not exist")
 LEAN_IMPORT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.']*$")
 LEAN_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_']*$")
 LEAN_UNKNOWN_IDENTIFIER_RE = re.compile(r"Unknown identifier `([^`]+)`", re.IGNORECASE)
@@ -173,7 +212,7 @@ api_secret = _resolve_secret("GRAMMAR_API_SECRET_NAME", "API_KEY")
 gpu_function_kwargs: dict[str, Any] = {
     "image": inference_image,
     "gpu": "L4",
-    "timeout": 900,
+    "timeout": _env_int("GPU_FUNCTION_TIMEOUT_SECONDS", 900),
     "startup_timeout": 1800,
     "scaledown_window": 600,
     "volumes": {"/cache": hf_cache},
@@ -212,6 +251,7 @@ _cache_lock = Lock()
 _analyze_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _model_output_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _lean_check_cache: OrderedDict[str, tuple[float, tuple[bool, list[dict[str, Any]], str]]] = OrderedDict()
+_mathlib_runtime_probe_ok = False
 
 
 @dataclass
@@ -550,6 +590,63 @@ def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str
     return text
 
 
+def _generate_rewrite_output(statement_type: str, diagnostics: list["LeanDiagnostic"]) -> str | None:
+    import torch
+
+    if not diagnostics:
+        return None
+
+    diagnostic_lines = [
+        f"- line={diag.line} col={diag.column} severity={diag.severity}: {diag.message}"
+        for diag in diagnostics
+        if diag.severity == "error"
+    ]
+    if not diagnostic_lines:
+        diagnostic_lines = [f"- {diag.message}" for diag in diagnostics]
+
+    user_prompt = (
+        "Current Lean statement type candidate:\n"
+        f"{statement_type}\n\n"
+        "Compiler diagnostics:\n"
+        f"{chr(10).join(diagnostic_lines)}\n\n"
+        "Return only JSON with revised_lean_statement_type, feedback, and reason."
+    )
+
+    runtime = _load_runtime()
+    tokenizer = runtime.tokenizer
+    model = runtime.model
+
+    if getattr(tokenizer, "chat_template", None):
+        prompt = tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        prompt = f"{REWRITE_SYSTEM_PROMPT}\n\n{user_prompt}\n\nJSON:"
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    kwargs: dict[str, Any] = {
+        **inputs,
+        "max_new_tokens": 192,
+        "do_sample": False,
+        "use_cache": True,
+        "pad_token_id": tokenizer.pad_token_id,
+    }
+    if tokenizer.eos_token_id is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
+
+    with torch.inference_mode():
+        outputs = model.generate(**kwargs)
+
+    input_tokens = inputs["input_ids"].shape[1]
+    generated = outputs[0][input_tokens:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
 def _extract_json(text: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(text)
@@ -663,43 +760,197 @@ def _mathlib_lakefile_contents() -> str:
     )
 
 
+def _format_subprocess_failure(exc: subprocess.CalledProcessError) -> str:
+    stderr = (exc.stderr or "").strip()
+    stdout = (exc.stdout or "").strip()
+    fragments = [part for part in [stderr, stdout] if part]
+    if fragments:
+        return "\n".join(fragments)
+    return f"process exited with status {exc.returncode}"
+
+
+def _sanitize_mathlib_modules(modules: list[str] | tuple[str, ...]) -> list[str]:
+    sanitized: list[str] = []
+    for module in modules:
+        candidate = module.strip()
+        if not candidate:
+            continue
+        if not LEAN_IMPORT_RE.fullmatch(candidate):
+            continue
+        if candidate != MATHLIB_IMPORT and not candidate.startswith(f"{MATHLIB_IMPORT}."):
+            continue
+        sanitized.append(candidate)
+    return list(dict.fromkeys(sanitized))
+
+
+def _prebuild_mathlib_modules(
+    project_dir: Path,
+    modules: list[str] | tuple[str, ...],
+    *,
+    strict: bool,
+) -> list[str]:
+    built_modules: list[str] = []
+    for module in _sanitize_mathlib_modules(modules):
+        command = [LAKE_BIN, "build", module]
+        try:
+            subprocess.run(
+                command,
+                cwd=project_dir.as_posix(),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=MATHLIB_BUILD_TIMEOUT_SECONDS,
+            )
+            built_modules.append(module)
+        except subprocess.TimeoutExpired as exc:
+            message = f"Timed out while running `{' '.join(command)}`."
+            if strict:
+                raise RuntimeError(message) from exc
+            print(f"Warning: {message}")
+        except subprocess.CalledProcessError as exc:
+            details = _format_subprocess_failure(exc)
+            message = f"`{' '.join(command)}` failed: {details}"
+            if strict:
+                raise RuntimeError(message) from exc
+            print(f"Warning: {message}")
+    return built_modules
+
+
+def _extract_missing_olean_modules(output: str, diagnostics: list["LeanDiagnostic"]) -> list[str]:
+    candidates: list[str] = []
+    for diagnostic in diagnostics:
+        if diagnostic.severity != "error":
+            continue
+        for match in LEAN_MISSING_OLEAN_MODULE_RE.finditer(diagnostic.message):
+            candidates.append(match.group("module"))
+    for match in LEAN_MISSING_OLEAN_MODULE_RE.finditer(output):
+        candidates.append(match.group("module"))
+    return _sanitize_mathlib_modules(candidates)
+
+
+def _sync_project_toolchain_to_mathlib(project_dir: Path) -> bool:
+    root_toolchain_path = project_dir / "lean-toolchain"
+    mathlib_toolchain_path = project_dir / ".lake" / "packages" / "mathlib" / "lean-toolchain"
+    if not mathlib_toolchain_path.exists():
+        return False
+    mathlib_toolchain = mathlib_toolchain_path.read_text(encoding="utf-8").strip()
+    if not mathlib_toolchain:
+        return False
+    current_toolchain = (
+        root_toolchain_path.read_text(encoding="utf-8").strip() if root_toolchain_path.exists() else ""
+    )
+    if current_toolchain == mathlib_toolchain:
+        return False
+    root_toolchain_path.write_text(f"{mathlib_toolchain}\n", encoding="utf-8")
+    return True
+
+
+def _verify_mathlib_project(project_dir: Path, timeout_seconds: int = 90) -> None:
+    probe_file = project_dir / ".mathlib_probe.lean"
+    probe_file.write_text(
+        "import Mathlib.Data.Real.Basic\n\n#check (0 : Real)\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [LAKE_BIN, "env", LEAN_BIN, probe_file.as_posix()],
+        cwd=project_dir.as_posix(),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+
+
 def _ensure_mathlib_project() -> Path:
+    global _mathlib_runtime_probe_ok
     with _mathlib_lock:
-        if MATHLIB_MARKER_FILE.exists():
+        if _mathlib_runtime_probe_ok and MATHLIB_MARKER_FILE.exists():
             return MATHLIB_PROJECT_DIR
+
+        def _validate_existing_marker() -> bool:
+            if not MATHLIB_MARKER_FILE.exists():
+                return False
+            try:
+                _verify_mathlib_project(MATHLIB_PROJECT_DIR)
+            except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                return False
+            return True
+
+        if _validate_existing_marker():
+            _mathlib_runtime_probe_ok = True
+            return MATHLIB_PROJECT_DIR
+
+        if MATHLIB_PROJECT_DIR.exists():
+            shutil.rmtree(MATHLIB_PROJECT_DIR, ignore_errors=True)
+        _mathlib_runtime_probe_ok = False
+
         try:
             hf_cache.reload()
         except Exception:  # noqa: BLE001
             # Reload can fail if other /cache files are open (e.g. loaded model weights).
             # For a warm container, local filesystem state is already usable.
             pass
-        if MATHLIB_MARKER_FILE.exists():
+        if _validate_existing_marker():
+            _mathlib_runtime_probe_ok = True
             return MATHLIB_PROJECT_DIR
 
         MATHLIB_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
-        (MATHLIB_PROJECT_DIR / "lean-toolchain").write_text("stable\n", encoding="utf-8")
+        (MATHLIB_PROJECT_DIR / "lean-toolchain").write_text(
+            f"{MATHLIB_BOOTSTRAP_TOOLCHAIN}\n", encoding="utf-8"
+        )
         (MATHLIB_PROJECT_DIR / "lakefile.lean").write_text(_mathlib_lakefile_contents(), encoding="utf-8")
 
-        subprocess.run(
-            [LAKE_BIN, "update"],
-            cwd=MATHLIB_PROJECT_DIR.as_posix(),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            [LAKE_BIN, "exe", "cache", "get"],
-            cwd=MATHLIB_PROJECT_DIR.as_posix(),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            subprocess.run(
+                [LAKE_BIN, "update"],
+                cwd=MATHLIB_PROJECT_DIR.as_posix(),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=240,
+            )
+            if _sync_project_toolchain_to_mathlib(MATHLIB_PROJECT_DIR):
+                subprocess.run(
+                    [LAKE_BIN, "update"],
+                    cwd=MATHLIB_PROJECT_DIR.as_posix(),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=480,
+                )
+            subprocess.run(
+                [LAKE_BIN, "exe", "cache", "get"],
+                cwd=MATHLIB_PROJECT_DIR.as_posix(),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=480,
+            )
+            prebuild_modules = _sanitize_mathlib_modules(MATHLIB_PREBUILD_MODULES)
+            if prebuild_modules:
+                _prebuild_mathlib_modules(
+                    MATHLIB_PROJECT_DIR,
+                    prebuild_modules,
+                    strict=MATHLIB_PREBUILD_STRICT,
+                )
+            _verify_mathlib_project(MATHLIB_PROJECT_DIR)
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Lean toolchain binary not found: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            command = " ".join(exc.cmd) if isinstance(exc.cmd, list) else str(exc.cmd)
+            raise RuntimeError(f"Mathlib bootstrap timed out while running `{command}`.") from exc
+        except subprocess.CalledProcessError as exc:
+            command = " ".join(exc.cmd) if isinstance(exc.cmd, list) else str(exc.cmd)
+            details = _format_subprocess_failure(exc)
+            raise RuntimeError(f"Mathlib bootstrap failed while running `{command}`: {details}") from exc
 
         MATHLIB_MARKER_FILE.write_text("ready\n", encoding="utf-8")
+        _mathlib_runtime_probe_ok = True
         try:
             hf_cache.commit()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Keep serving traffic even if commit fails, but surface this in app logs.
+            print(f"Warning: failed to persist Mathlib cache volume: {exc}")
         return MATHLIB_PROJECT_DIR
 
 
@@ -730,47 +981,68 @@ def _run_lean_check(
 
         command = [LEAN_BIN, check_file.as_posix()]
         cwd = None
+        project_dir: Path | None = None
         if use_mathlib:
             try:
                 project_dir = _ensure_mathlib_project()
-            except subprocess.CalledProcessError as exc:
-                message = (
-                    (exc.stderr or "").strip()
-                    or (exc.stdout or "").strip()
-                    or f"Failed to initialize Mathlib project: {exc}"
-                )
+            except Exception as exc:  # noqa: BLE001
+                message = f"Failed to initialize Mathlib project: {exc}"
                 return False, [LeanDiagnostic(severity="error", message=message)], message
             command = [LAKE_BIN, "env", LEAN_BIN, check_file.as_posix()]
             cwd = project_dir.as_posix()
 
-        try:
-            proc = subprocess.run(
-                command,
-                cwd=cwd,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-        except FileNotFoundError:
-            message = f"Required binary not found while running `{command[0]}`."
-            return False, [LeanDiagnostic(severity="error", message=message)], message
-        except subprocess.TimeoutExpired:
-            message = f"Lean check timed out after {timeout_seconds}s."
-            return False, [LeanDiagnostic(severity="error", message=message)], message
-
-        output = "\n".join(part for part in [proc.stdout, proc.stderr] if part).strip()
-        diagnostics = _parse_lean_diagnostics(output)
-
-        has_error = any(item.severity == "error" for item in diagnostics)
-        if proc.returncode != 0 and not diagnostics:
-            diagnostics = [
-                LeanDiagnostic(
-                    severity="error",
-                    message=output or f"`lean` exited with status {proc.returncode}.",
+        retried_missing_module_build = False
+        while True:
+            try:
+                proc = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
                 )
-            ]
-            has_error = True
+            except FileNotFoundError:
+                message = f"Required binary not found while running `{command[0]}`."
+                return False, [LeanDiagnostic(severity="error", message=message)], message
+            except subprocess.TimeoutExpired:
+                message = f"Lean check timed out after {timeout_seconds}s."
+                return False, [LeanDiagnostic(severity="error", message=message)], message
+
+            output = "\n".join(part for part in [proc.stdout, proc.stderr] if part).strip()
+            diagnostics = _parse_lean_diagnostics(output)
+
+            has_error = any(item.severity == "error" for item in diagnostics)
+            if proc.returncode != 0 and not diagnostics:
+                diagnostics = [
+                    LeanDiagnostic(
+                        severity="error",
+                        message=output or f"`lean` exited with status {proc.returncode}.",
+                    )
+                ]
+                has_error = True
+
+            if (
+                use_mathlib
+                and project_dir is not None
+                and has_error
+                and not retried_missing_module_build
+            ):
+                missing_modules = _extract_missing_olean_modules(output, diagnostics)
+                if missing_modules:
+                    try:
+                        _prebuild_mathlib_modules(project_dir, missing_modules, strict=True)
+                    except Exception as exc:  # noqa: BLE001
+                        diagnostics.append(
+                            LeanDiagnostic(
+                                severity="error",
+                                message=f"On-demand Mathlib module build failed: {exc}",
+                            )
+                        )
+                    else:
+                        retried_missing_module_build = True
+                        continue
+            break
 
         result = (not has_error and proc.returncode == 0, diagnostics, output)
         _cache_put(
@@ -836,6 +1108,47 @@ def _collect_bound_identifiers(statement_type: str) -> set[str]:
     return bound
 
 
+def _rewrite_with_llm(
+    statement_type: str,
+    diagnostics: list[LeanDiagnostic],
+) -> tuple[str | None, list[str]]:
+    if not diagnostics:
+        return None, []
+
+    try:
+        raw_output = _generate_rewrite_output(statement_type, diagnostics)
+    except Exception:  # noqa: BLE001 - fallback to heuristic rewrite
+        return None, []
+
+    if not raw_output:
+        return None, []
+
+    payload = _extract_json(raw_output)
+    if payload is None:
+        return None, []
+
+    revised_candidate = str(
+        payload.get("revised_lean_statement_type")
+        or payload.get("lean_statement_type")
+        or payload.get("statement_type")
+        or ""
+    ).strip()
+    revised_statement = _normalize_statement_type(revised_candidate) if revised_candidate else None
+
+    feedback: list[str] = []
+    raw_feedback = payload.get("feedback")
+    if isinstance(raw_feedback, list):
+        feedback.extend(str(item).strip() for item in raw_feedback if str(item).strip())
+    elif isinstance(raw_feedback, str) and raw_feedback.strip():
+        feedback.append(raw_feedback.strip())
+
+    reason = str(payload.get("reason") or "").strip()
+    if reason:
+        feedback.append(reason)
+
+    return revised_statement, list(dict.fromkeys(feedback))
+
+
 def _refine_statement_type(
     *,
     statement_type: str,
@@ -843,6 +1156,16 @@ def _refine_statement_type(
 ) -> tuple[str, list[str]]:
     candidate = _normalize_statement_type(statement_type)
     rewrite_notes: list[str] = []
+
+    llm_rewrite, llm_feedback = _rewrite_with_llm(candidate, diagnostics)
+    if llm_rewrite and llm_rewrite != candidate:
+        if llm_feedback:
+            rewrite_notes.extend(f"LLM suggestion: {item}" for item in llm_feedback)
+        else:
+            rewrite_notes.append("LLM suggestion: revised Lean statement candidate.")
+        candidate = llm_rewrite
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        return candidate, rewrite_notes
 
     expanded, expanded_changed = _expand_untyped_forall_groups(candidate)
     if expanded_changed:
