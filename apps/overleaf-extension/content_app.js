@@ -176,8 +176,8 @@ class ZetaApp {
 
     this.panel = new ZetaPanel({
       onTogglePanel: (open) => this.togglePanel(open),
-      onRunNow: () => this.runAnalysis("manual", true),
-      onRegenerate: () => this.runAnalysis("regenerate", true),
+      onRunNow: () => this.requestAnalysis("manual", true),
+      onRegenerate: () => this.requestAnalysis("regenerate", true),
       onUndoLast: () => this.undoLastAction(),
       onClearHistory: () => this.clearActivityHistory(),
       onScopeChange: (scope) => this.updateSettings({ scope: normalizeScope(scope) }, true),
@@ -196,6 +196,9 @@ class ZetaApp {
     this.scheduledTimer = null;
     this.snapshotSyncTimer = null;
     this.activeRequestId = 0;
+    this.analysisRunInProgress = false;
+    this.pendingAnalysisReason = "";
+    this.pendingAnalysisForce = false;
     this.lastAnalyzedSignature = "";
     this.lastRun = null;
     this.focusedIssueIndex = -1;
@@ -514,7 +517,7 @@ class ZetaApp {
 
     const run = async () => {
       if (action === "refresh-checker") {
-        this.runAnalysis("popup-macro", true);
+        this.requestAnalysis("popup-macro", true);
         this.addActivity("Macro: refresh checker.", "info");
         return;
       }
@@ -945,7 +948,7 @@ class ZetaApp {
         action: "refresh-checker",
       });
       this.markShortcutTriggered("Alt+Shift+R");
-      this.runAnalysis("shortcut-refresh", true);
+      this.requestAnalysis("shortcut-refresh", true);
       return;
     }
 
@@ -969,7 +972,7 @@ class ZetaApp {
         action: "refresh-checker",
       });
       this.markShortcutTriggered("Ctrl/Cmd+Enter");
-      this.runAnalysis("shortcut", true);
+      this.requestAnalysis("shortcut", true);
     }
   }
 
@@ -2717,6 +2720,42 @@ class ZetaApp {
     });
   }
 
+  requestAnalysis(reason, force = false) {
+    const nextReason = String(reason || "scheduled");
+    const nextForce = !!force;
+
+    if (this.analysisRunInProgress) {
+      this.pendingAnalysisReason = nextReason;
+      this.pendingAnalysisForce = this.pendingAnalysisForce || nextForce;
+      return;
+    }
+
+    this.analysisRunInProgress = true;
+    Promise.resolve()
+      .then(() => this.runAnalysis(nextReason, nextForce))
+      .catch((error) => {
+        const message = String(error?.message || error || "Analysis failed.");
+        logTrace("analysis_run_failed", {
+          reason: nextReason,
+          message,
+        });
+        this.panel.setStatus("error", `Analysis failed: ${message}`);
+        this.addActivity(`Analysis failed: ${message}`, "error");
+      })
+      .finally(() => {
+        this.analysisRunInProgress = false;
+        if (!this.pendingAnalysisReason) {
+          this.pendingAnalysisForce = false;
+          return;
+        }
+        const queuedReason = this.pendingAnalysisReason;
+        const queuedForce = this.pendingAnalysisForce;
+        this.pendingAnalysisReason = "";
+        this.pendingAnalysisForce = false;
+        this.requestAnalysis(queuedReason, queuedForce);
+      });
+  }
+
   scheduleAnalysis(reason, immediate = false) {
     if (!this.activeAdapter) {
       return;
@@ -2730,7 +2769,7 @@ class ZetaApp {
     const delay = immediate ? 0 : modeToDebounce(this.settings.mode);
     this.scheduledTimer = window.setTimeout(() => {
       this.scheduledTimer = null;
-      this.runAnalysis(reason, immediate);
+      this.requestAnalysis(reason, immediate);
     }, delay);
   }
 

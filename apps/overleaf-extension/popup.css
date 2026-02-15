@@ -434,7 +434,7 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
 
 .zeta-activity-row {
   padding: 10px 11px !important;
-  min-height: 0;
+  min-height: 86px;
   max-height: none;
   overflow: visible;
   display: flex;
@@ -442,6 +442,7 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   gap: 7px;
   cursor: pointer;
   transition: background 120ms ease;
+  box-sizing: border-box;
 }
 
 .zeta-activity-row:hover {
@@ -486,7 +487,7 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
 }
 
 .zeta-activity-row.is-compact {
-  min-height: 0;
+  min-height: 64px;
   max-height: none;
   padding-top: 9px !important;
   padding-bottom: 9px !important;
@@ -508,6 +509,8 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   font-size: 11px;
   font-family: inherit;
   padding: 5px 8px;
+  min-height: 28px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -516,6 +519,7 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  min-height: 28px;
 }
 
 .zeta-activity-pipeline-btn {
@@ -770,7 +774,8 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   max-height: none;
   overflow: auto;
   gap: 8px;
-  padding-right: 2px;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
 }
 
 .zeta-panel[data-panel-content="assistant"] {
