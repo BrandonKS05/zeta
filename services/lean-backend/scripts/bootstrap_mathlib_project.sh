@@ -69,7 +69,31 @@ run_lake_update() {
   return 1
 }
 
+sync_project_toolchain_to_mathlib() {
+  local mathlib_toolchain_file=".lake/packages/mathlib/lean-toolchain"
+  if [[ ! -f "${mathlib_toolchain_file}" ]]; then
+    return 0
+  fi
+
+  local mathlib_toolchain
+  local project_toolchain
+  mathlib_toolchain="$(tr -d '\r\n' < "${mathlib_toolchain_file}")"
+  project_toolchain="$(tr -d '\r\n' < lean-toolchain || true)"
+
+  if [[ -z "${mathlib_toolchain}" ]]; then
+    return 0
+  fi
+
+  if [[ "${project_toolchain}" != "${mathlib_toolchain}" ]]; then
+    echo "Syncing project toolchain to mathlib toolchain: ${mathlib_toolchain}"
+    printf "%s\n" "${mathlib_toolchain}" > lean-toolchain
+    rm -f lake-manifest.json
+    run_lake_update
+  fi
+}
+
 run_lake_update
+sync_project_toolchain_to_mathlib
 lake exe cache get
 
 IFS=',' read -r -a modules <<< "${MATHLIB_PREBUILD_MODULES}"
