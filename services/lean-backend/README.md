@@ -6,11 +6,14 @@ Minimal, production-leaning FastAPI backend for NL theorem/proof -> Lean generat
 
 - `POST /v1/lean/solve`
   - Calls Modal endpoint to generate Lean code.
-  - For Modal endpoints ending with `/v1/analyze`, request payload is sent as:
+  - For Modal endpoints ending with `/v1/analyze` or `/v1/generate`, request payload is sent as:
     - `text` <- `nl_input`
     - `theorem_name` <- `context.theorem_name` (or fallback `generated_theorem`)
     - `imports` <- `context.imports` (default `["Std"]`)
     - `temperature` <- `context.temperature` (default `0.0`)
+    - `mode` <- `context.mode` (`fast` or `thinking`), with auto-`thinking` when `max_iters > 1`
+    - `max_iters` <- top-level request `max_iters` when mode is `thinking`
+    - optional pass-through: `include_iteration_history`, `include_raw_model_output` from `context`
   - Compiles Lean code locally (`lean` or `lake env lean`).
   - Parses compiler diagnostics into structured objects.
   - Optionally calls an LLM to interpret Lean compiler errors into frontend-friendly guidance.
@@ -66,6 +69,9 @@ services/lean-backend/
   - `REQUIRE_LAKE_FOR_MATHLIB` (default `true`; reject Mathlib imports when no `LAKE_PROJECT_DIR`)
   - `LEAN_TIMEOUT_SECONDS` (default `15`)
   - `COMPILER_OUTPUT_MAX_CHARS` (default `20000`)
+
+Note on toolchain persistence:
+- Set `ELAN_HOME` to a persistent mounted path (default in docker-compose: `/lean-state/elan`) so required Lean toolchains (for example `v4.28.0-rc1`) are downloaded once and reused across container restarts/redeploys.
 - LLM interpretation:
   - `ENABLE_LLM_INTERPRETATION` (default `true`)
   - `ENABLE_LLM_HIGHLIGHTS` (default `true`)
@@ -142,7 +148,7 @@ Recommended AWS setup:
 2. Bootstrap Mathlib project once:
    - `./scripts/bootstrap_mathlib_project.sh /opt/lean-state/mathlib-project`
 3. Configure env:
-   - `MODAL_ENDPOINT_URL=https://...modal.run/v1/analyze`
+   - `MODAL_ENDPOINT_URL=https://...modal.run/v1/generate`
    - `LAKE_PROJECT_DIR=/opt/lean-state/mathlib-project`
    - `LEAN_TEMP_DIR=/opt/lean-state/tmp`
    - `LEAN_TIMEOUT_SECONDS=30` (optional for heavier imports)

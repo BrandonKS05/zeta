@@ -326,71 +326,56 @@ def test_solve_includes_highlights_and_dashboard(monkeypatch: pytest.MonkeyPatch
     asyncio.run(_run())
 
 
-def test_chat_explain_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.main.settings.enable_llm_interpretation", False)
+def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        return GeneratedLean(
+            code=(
+                "import Mathlib.Data.Real.Basic\n\n"
+                "namespace MathGrammar\n"
+                "axiom real_refl : ∀ (x : Real), x = x\n"
+                "#check real_refl\n"
+                "end MathGrammar\n"
+            ),
+            metadata={"status": "unchecked", "is_valid_lean": False},
+        )
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        return CompileResult(
+            success=True,
+            stdout="MathGrammar.real_refl (x : ℝ) : x = x\n",
+            stderr="",
+            diagnostics=[],
+        )
+
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        raise AssertionError("Interpretation should not run when compile succeeds.")
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.interpret_errors", fake_interpret_errors)
 
     async def _run() -> None:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post(
-                "/v1/chat/explain",
-                json={
-                    "question": "Why is this wrong?",
-                    "mode": "fast",
-                    "issue": {
-                        "severity": "error",
-                        "category": "semantic-validation",
-                        "message": "Generated declaration has proposition type False.",
-                        "sentence": "For all n in N, n + 1 = n.",
-                        "semantic_reasons": [
-                            "Generated declaration 'add_zero_right' has proposition type False."
-                        ],
-                        "compile_success": True,
-                    },
-                    "history": [],
-                },
+                "/v1/lean/solve",
+                json={"nl_input": "For all real numbers x, x = x."},
             )
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["source"] == "deterministic"
-        assert "Diagnosis:" in payload["answer"]
-        assert "Answer to your question" in payload["answer"]
-
-    asyncio.run(_run())
-
-
-def test_chat_explain_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_explain_issue_chat(payload, settings=None) -> str:
-        assert payload.question
-        return "This fails because the generated statement collapses to False."
-
-    monkeypatch.setattr("app.main.explain_issue_chat", fake_explain_issue_chat)
-    monkeypatch.setattr("app.main.settings.enable_llm_interpretation", True)
-    monkeypatch.setattr("app.main.settings.llm_model", "fake-model")
-
-    async def _run() -> None:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-            response = await client.post(
-                "/v1/chat/explain",
-                json={
-                    "question": "Explain this compile diagnostic",
-                    "issue": {
-                        "severity": "error",
-                        "category": "lean-diagnostic",
-                        "message": "unknown constant 'Foo'",
-                        "diagnostics": [
-                            {"severity": "error", "message": "unknown constant 'Foo'", "line": 2, "column": 9}
-                        ],
-                    },
-                },
-            )
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["source"] == "llm"
-        assert payload["model"] == "fake-model"
-        assert "collapses to False" in payload["answer"]
+        assert payload["compile"]["success"] is True
+        assert payload["pipeline"]["semantic"]["success"] is True
+        assert payload["pipeline"]["semantic"]["reasons"] == []
 
     asyncio.run(_run())

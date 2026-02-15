@@ -35,6 +35,45 @@ def test_build_payload_for_analyze_endpoint_matches_expected_shape() -> None:
     }
 
 
+def test_build_payload_for_analyze_endpoint_forwards_thinking_mode() -> None:
+    payload = _build_modal_payload(
+        prompt="For all real numbers x, x = x.",
+        context_payload={
+            "theorem_name": "real_refl",
+            "imports": ["Mathlib.Data.Real.Basic"],
+            "temperature": 0.0,
+            "mode": "thinking",
+            "include_iteration_history": True,
+            "include_raw_model_output": False,
+        },
+        max_iters=4,
+        endpoint_url="https://example.modal.run/v1/analyze",
+    )
+
+    assert payload == {
+        "text": "For all real numbers x, x = x.",
+        "theorem_name": "real_refl",
+        "imports": ["Mathlib.Data.Real.Basic"],
+        "temperature": 0.0,
+        "mode": "thinking",
+        "max_iters": 4,
+        "include_iteration_history": True,
+        "include_raw_model_output": False,
+    }
+
+
+def test_build_payload_auto_enables_thinking_for_multiple_iters() -> None:
+    payload = _build_modal_payload(
+        prompt="For all n, n = n.",
+        context_payload={"theorem_name": "nat_refl"},
+        max_iters=3,
+        endpoint_url="https://example.modal.run/v1/analyze",
+    )
+
+    assert payload["mode"] == "thinking"
+    assert payload["max_iters"] == 3
+
+
 def test_build_payload_for_generate_endpoint_matches_expected_shape() -> None:
     payload = _build_modal_payload(
         prompt=r"For all $n \\in \\mathbb{N}$, we have $n + 0 = n$.",

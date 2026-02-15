@@ -187,6 +187,7 @@ python query_http.py \
 - `diagnostics` from Lean compiler output
 - `is_valid_lean` boolean
 - `feedback` list (human-readable correction guidance)
+- optional `final_feedback` list (final LLM-authored summary suggestions from the completed validation pass)
 - `mode` (`fast` or `thinking`)
 - `iteration_count` (always `1` in fast mode)
 - optional `iteration_history` when `include_iteration_history=true` in thinking mode
@@ -214,6 +215,7 @@ For low-latency UI suggestions, call `/v1/generate` (or set `skip_lean_check=tru
 - Mathlib bootstrap runs one-time `lake update` and `lake exe cache get` into `/cache/lean/mathlib_checker`, then reuses cache.
 - Optional Mathlib prebuild list is configurable via `MATHLIB_PREBUILD_MODULES` (comma-separated modules); default prebuilds include `Mathlib.Probability.Filtration` and measure-theory modules.
 - If Lean reports missing `.olean` files for Mathlib modules, runtime now runs `lake build <module>` on-demand and retries the Lean check once.
+- Final response feedback now includes an LLM-authored summary (`final_feedback`) by default; disable with `ENABLE_FINAL_FEEDBACK_LLM=0` if you need lower latency.
 - Added in-memory caches for:
   - full analyze responses (request-level cache)
   - model output (prompt-level cache)

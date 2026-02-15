@@ -119,6 +119,52 @@ def test_refine_statement_type_binds_unknown_identifiers() -> None:
     assert any("missing `Nat` binders" in note for note in rewrite_notes)
 
 
+def test_apply_final_feedback_summary_appends_llm_feedback(monkeypatch) -> None:
+    def fake_summarize(request: app.AnalyzeRequest, response: app.AnalyzeResponse) -> list[str]:
+        return ["Use explicit binders for free variables.", "Looks valid in Lean."]
+
+    monkeypatch.setattr(app, "_summarize_final_feedback_with_llm", fake_summarize)
+    request = app.AnalyzeRequest(text="For all x, x = x.", mode="fast")
+    response = _resp(
+        status="ok",
+        input_text=request.text,
+        normalized_text=request.text,
+        is_valid_lean=True,
+        statement_type="∀ x : Nat, x = x",
+        feedback=["Generated a Lean statement type candidate from natural language input."],
+    )
+
+    updated = app._apply_final_feedback_summary(request, response)
+
+    assert updated.final_feedback == [
+        "Use explicit binders for free variables.",
+        "Looks valid in Lean.",
+    ]
+    assert any(item.startswith("LLM final feedback: ") for item in updated.feedback)
+
+
+def test_apply_final_feedback_summary_skips_for_skip_lean_check(monkeypatch) -> None:
+    called = {"summarize": 0}
+
+    def fake_summarize(request: app.AnalyzeRequest, response: app.AnalyzeResponse) -> list[str]:
+        called["summarize"] += 1
+        return ["unused"]
+
+    monkeypatch.setattr(app, "_summarize_final_feedback_with_llm", fake_summarize)
+    request = app.AnalyzeRequest(text="For all x, x = x.", skip_lean_check=True)
+    response = _resp(
+        status="unchecked",
+        input_text=request.text,
+        normalized_text=request.text,
+        is_valid_lean=False,
+    )
+
+    updated = app._apply_final_feedback_summary(request, response)
+
+    assert called["summarize"] == 0
+    assert updated.final_feedback == []
+
+
 def test_analyze_with_iterations_succeeds_on_second_attempt(monkeypatch) -> None:
     calls = {"analyze": 0, "evaluate": 0}
 
