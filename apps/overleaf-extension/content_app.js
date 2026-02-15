@@ -1860,6 +1860,15 @@ class ZetaApp {
             if (typeof backup.endpoint === "string" && backup.endpoint.trim()) {
               lines.push(`backup llm endpoint: ${backup.endpoint}`);
             }
+            if (typeof backup.status === "number" && backup.status > 0) {
+              lines.push(`backup llm status: ${backup.status}`);
+            }
+            if (typeof backup.http_error_body === "string" && backup.http_error_body.trim()) {
+              lines.push(`backup llm error body: ${backup.http_error_body.slice(0, 280)}`);
+            }
+            if (typeof backup.endpoint_retry === "string" && backup.endpoint_retry.trim()) {
+              lines.push(`backup llm retry endpoint: ${backup.endpoint_retry}`);
+            }
           }
           const upstreamKeys = Array.isArray(debug.upstream_keys)
             ? debug.upstream_keys.join(", ")

@@ -612,6 +612,56 @@ def _extract_json_object_from_text(text: str) -> dict[str, Any] | None:
         return None
 
 
+def _normalize_autocomplete_model_name(raw_model: Any) -> str:
+    model = str(raw_model or "").strip()
+    lowered = model.lower()
+    if lowered in {"gpt-5.2", "gpt5", "gpt-5"}:
+        # Legacy alias used in older configs.
+        return "gpt-5-2025-08-07"
+    return model
+
+
+def _is_openai_gpt5_model(model_name: str) -> bool:
+    lowered = model_name.strip().lower()
+    return bool(lowered) and (lowered.startswith("gpt-5") or "gpt-5" in lowered)
+
+
+def _extract_responses_text(data: dict[str, Any]) -> str:
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+    if isinstance(output_text, list):
+        parts = [part.strip() for part in output_text if isinstance(part, str) and part.strip()]
+        if parts:
+            return "\n".join(parts)
+
+    output = data.get("output")
+    if isinstance(output, list):
+        fragments: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in {"text", "output_text"}:
+                item_text = item.get("text")
+                if isinstance(item_text, str):
+                    fragments.append(item_text)
+            content = item.get("content")
+            if isinstance(content, str):
+                fragments.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") in {"text", "output_text"}:
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            fragments.append(text)
+        if fragments:
+            return "\n".join([fragment for fragment in fragments if fragment]).strip()
+
+    return ""
+
+
 async def _llm_autocomplete_candidates(
     request_payload: dict[str, Any],
     *,
@@ -628,9 +678,9 @@ async def _llm_autocomplete_candidates(
         debug["reason"] = "missing_llm_api_key"
         return [], debug
     model_name = (
-        str(settings.autocomplete_llm_fallback_model or "").strip()
-        or str(settings.llm_model or "").strip()
-        or "gpt-5.2"
+        _normalize_autocomplete_model_name(settings.autocomplete_llm_fallback_model)
+        or _normalize_autocomplete_model_name(settings.llm_model)
+        or "gpt-5-2025-08-07"
     )
     debug["model"] = model_name
 
@@ -652,12 +702,39 @@ async def _llm_autocomplete_candidates(
     imports_text = ", ".join([str(item).strip() for item in (imports or ["Std"]) if str(item).strip()]) or "Std"
     max_candidates = max(1, min(int(request_payload.get("max_candidates") or 3), 5))
 
-    endpoint = settings.llm_endpoint_url or f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+    base_url = settings.llm_base_url.rstrip("/")
+    configured_endpoint = str(settings.llm_endpoint_url or "").strip()
+    endpoint = configured_endpoint or f"{base_url}/chat/completions"
     use_responses_api = endpoint.rstrip("/").endswith("/responses")
-    if not settings.llm_endpoint_url:
-        base = settings.llm_base_url.rstrip("/")
-        use_responses_api = "api.openai.com" in base and model_name.lower().startswith("gpt-5")
-        endpoint = f"{base}/responses" if use_responses_api else f"{base}/chat/completions"
+
+    openai_base = "api.openai.com" in base_url
+    gpt5_model = _is_openai_gpt5_model(model_name)
+
+    if configured_endpoint:
+        configured_parts = urlsplit(configured_endpoint)
+        configured_host = configured_parts.netloc.lower()
+        if configured_host == "api.openai.com" and gpt5_model and not use_responses_api:
+            configured_path = configured_parts.path.rstrip("/")
+            if configured_path.endswith("/chat/completions"):
+                responses_path = f"{configured_path[: -len('/chat/completions')]}/responses"
+            elif configured_path.endswith("/v1"):
+                responses_path = f"{configured_path}/responses"
+            else:
+                responses_path = "/v1/responses"
+            endpoint = urlunsplit(
+                (
+                    configured_parts.scheme,
+                    configured_parts.netloc,
+                    responses_path,
+                    configured_parts.query,
+                    configured_parts.fragment,
+                )
+            )
+            use_responses_api = True
+            debug["endpoint_rewritten"] = True
+    else:
+        use_responses_api = openai_base and gpt5_model
+        endpoint = f"{base_url}/responses" if use_responses_api else f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.llm_api_key}"}
     debug["endpoint"] = endpoint
     debug["api"] = "responses" if use_responses_api else "chat_completions"
@@ -677,10 +754,8 @@ async def _llm_autocomplete_candidates(
     if use_responses_api:
         payload = {
             "model": model_name,
-            "input": [
-                {"role": "system", "content": [{"type": "text", "text": system}]},
-                {"role": "user", "content": [{"type": "text", "text": user}]},
-            ],
+            "instructions": system,
+            "input": user,
             "max_output_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
         }
     else:
@@ -697,9 +772,36 @@ async def _llm_autocomplete_candidates(
     debug["attempted"] = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(endpoint, json=payload, headers=headers)
+        if response.status_code >= 400 and use_responses_api and response.status_code == 400:
+            # Some deployments reject Responses API payloads; retry once with Chat Completions.
+            chat_endpoint = f"{base_url}/chat/completions"
+            chat_payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": min(float(request_payload.get("temperature") or 0.35), 0.6),
+                "max_completion_tokens": min(max(64, settings.llm_max_completion_tokens or 128), 256),
+            }
+            debug["api_retry"] = "chat_completions"
+            debug["endpoint_retry"] = chat_endpoint
+            chat_response = await client.post(chat_endpoint, json=chat_payload, headers=headers)
+            if chat_response.status_code < 400:
+                response = chat_response
+                use_responses_api = False
+                debug["api"] = "chat_completions"
+                debug["endpoint"] = chat_endpoint
+            else:
+                debug["reason"] = "http_error"
+                debug["status"] = int(chat_response.status_code)
+                debug["http_error_body"] = (chat_response.text or "")[:300]
+                return [], debug
+
         if response.status_code >= 400:
             debug["reason"] = "http_error"
             debug["status"] = int(response.status_code)
+            debug["http_error_body"] = (response.text or "")[:300]
             return [], debug
         try:
             data = response.json()
@@ -711,17 +813,7 @@ async def _llm_autocomplete_candidates(
         return [], debug
     content = ""
     if use_responses_api:
-        if isinstance(data.get("output_text"), str):
-            content = data.get("output_text") or ""
-        if not content and isinstance(data.get("output"), list):
-            fragments: list[str] = []
-            for item in data.get("output") or []:
-                if not isinstance(item, dict):
-                    continue
-                for c in item.get("content") or []:
-                    if isinstance(c, dict) and isinstance(c.get("text"), str):
-                        fragments.append(c.get("text") or "")
-            content = "\n".join([frag for frag in fragments if frag]).strip()
+        content = _extract_responses_text(data)
     else:
         choices = data.get("choices")
         if isinstance(choices, list) and choices:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 import pytest
 
 from app.modal_client import (
     ModalClientError,
+    _llm_autocomplete_candidates,
     _build_modal_payload,
     _normalize_generated_payload,
     _resolve_modal_endpoint,
@@ -260,3 +262,117 @@ def test_generate_lean_sends_both_authorization_and_x_api_key_headers(
     assert captured_headers.get("Authorization") == "Bearer test-api-key"
     assert captured_headers.get("x-api-key") == "test-api-key"
     assert captured_url == "https://example.modal.run/v1/generate"
+
+
+def test_llm_autocomplete_rewrites_openai_gpt5_chat_endpoint_to_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json, headers):
+            nonlocal captured
+            captured = {
+                "url": str(url),
+                "json": dict(json or {}),
+                "headers": dict(headers or {}),
+            }
+            return httpx.Response(200, json={"output_text": "{\"candidates\": [\" + 0 = n\"]}"})
+
+    monkeypatch.setattr("app.modal_client.httpx.AsyncClient", _FakeAsyncClient)
+
+    settings = Settings(
+        llm_api_key="test-api-key",
+        llm_base_url="https://api.openai.com/v1",
+        llm_endpoint_url="https://api.openai.com/v1/chat/completions",
+        llm_model="gpt-5-2025-08-07",
+        autocomplete_llm_fallback_enabled=True,
+        autocomplete_llm_fallback_model="",
+        autocomplete_llm_fallback_timeout_seconds=5,
+        llm_max_completion_tokens=180,
+    )
+
+    async def _run() -> None:
+        candidates, debug = await _llm_autocomplete_candidates(
+            {
+                "text": "theorem demo : Nat := by\n  exact 0",
+                "cursor_offset": 18,
+                "imports": ["Std"],
+            },
+            settings=settings,
+        )
+        assert candidates == ["+ 0 = n"]
+        assert debug.get("success") is True
+        assert debug.get("api") == "responses"
+        assert debug.get("endpoint") == "https://api.openai.com/v1/responses"
+
+    asyncio.run(_run())
+
+    assert captured["url"] == "https://api.openai.com/v1/responses"
+    assert captured["json"].get("model") == "gpt-5-2025-08-07"
+    assert captured["json"].get("max_output_tokens") == 180
+    assert "max_completion_tokens" not in captured["json"]
+    assert isinstance(captured["json"].get("instructions"), str)
+    assert isinstance(captured["json"].get("input"), str)
+
+
+def test_llm_autocomplete_extracts_output_text_from_responses_output_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json, headers):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {"type": "output_text", "text": "{\"candidates\": [\"by\\n\"]}"}
+                            ],
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("app.modal_client.httpx.AsyncClient", _FakeAsyncClient)
+
+    settings = Settings(
+        llm_api_key="test-api-key",
+        llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-5-2025-08-07",
+        autocomplete_llm_fallback_enabled=True,
+        autocomplete_llm_fallback_model="",
+        autocomplete_llm_fallback_timeout_seconds=5,
+    )
+
+    async def _run() -> None:
+        candidates, debug = await _llm_autocomplete_candidates(
+            {
+                "text": "theorem demo : True :=",
+                "cursor_offset": 21,
+            },
+            settings=settings,
+        )
+        assert candidates == ["by"]
+        assert debug.get("success") is True
+
+    asyncio.run(_run())
