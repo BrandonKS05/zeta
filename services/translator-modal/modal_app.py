@@ -549,6 +549,16 @@ class CompleteRequest(BaseModel):
             return len(text)
         return value
 
+    @field_validator("context")
+    @classmethod
+    def _validate_context_str(cls, value: Any) -> str | None:
+        """Ensure context is always str | None so .strip() and string ops never see a dict."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return None
+
 
 class CompletionCandidate(BaseModel):
     completion: str

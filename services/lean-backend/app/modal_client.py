@@ -405,16 +405,25 @@ def _build_herald_autocomplete_payload(
     request_payload: dict[str, Any],
     system_prompt: str,
 ) -> dict[str, Any]:
-    """Build payload for Herald POST / (V1 Translate). Herald should accept system_prompt and use it for autocomplete."""
+    """Build payload for Herald POST / (V1 Translate). Herald should accept system_prompt and use it for autocomplete.
+    We send context as a dict so serve.py can do context.get('theorem_name', 'unnamed') without AttributeError;
+    the document text is in context['document']."""
     text = request_payload.get("text") or ""
     cursor = request_payload.get("cursor_offset")
     if cursor is None or (isinstance(text, str) and cursor > len(text)):
         cursor = len(text) if isinstance(text, str) else 0
     prefix = text[:cursor] if isinstance(text, str) and isinstance(cursor, int) else text
+    raw_context = request_payload.get("context")
+    context_str = raw_context if isinstance(raw_context, str) else ""
+    context_payload: dict[str, Any] = {
+        "theorem_name": "unnamed",
+        "imports": list(request_payload.get("imports") or ["Std"]),
+        "document": context_str,
+    }
     return {
         "text": text,
         "cursor_offset": cursor,
-        "context": request_payload.get("context") or "",
+        "context": context_payload,
         "system_prompt": system_prompt,
         "max_new_tokens": min(int(request_payload.get("max_new_tokens") or 24), 64),
         "temperature": float(request_payload.get("temperature") or 0.35),
