@@ -851,8 +851,16 @@ class ZetaApp {
       return;
     }
     if (this.autocompleteInFlight) {
-      this.cancelAutocompleteNow();
-      this.renderTabGhost();
+      // Selection events can fire frequently while typing/cursor updates.
+      // Keep the current request alive and queue a follow-up instead of canceling.
+      this.autocompleteQueuedReason = "selection";
+      if (this.lastRun) {
+        this.syncPopoverWithCaret();
+      }
+      return;
+    }
+    if (this.activeAutocomplete) {
+      this.clearAutocompleteSuggestion();
     }
     if (this.lastRun) {
       this.syncPopoverWithCaret();
@@ -1451,10 +1459,9 @@ class ZetaApp {
       return null;
     }
 
-    const textStart = caretOffset > AUTOCOMPLETE_MAX_TEXT_WINDOW
-      ? caretOffset - AUTOCOMPLETE_MAX_TEXT_WINDOW
-      : 0;
-    const textEnd = Math.min(sourceText.length, caretOffset + 120);
+    const paragraph = this.resolveAutocompleteParagraphBounds(sourceText, caretOffset);
+    const textStart = paragraph.start;
+    const textEnd = paragraph.end;
     const textWindow = sourceText.slice(textStart, textEnd);
     const localCursorOffset = caretOffset - textStart;
 
@@ -1487,11 +1494,12 @@ class ZetaApp {
   }
 
   async requestAutocomplete(endpointUrl, context, reason, options = {}) {
-    const maxNewTokens = 24;
-    const temperature = 0.1;
+    const maxNewTokens = 64;
+    const temperature = 0.35;
+    const cursorOffset = this.resolveAutocompleteCursorOffset(context);
     const requestBody = {
       text: context.textWindow,
-      cursor_offset: context.localCursorOffset,
+      cursor_offset: cursorOffset,
       context: context.contextWindow,
       imports: ["Std"],
       max_candidates: 3,
@@ -1501,6 +1509,7 @@ class ZetaApp {
       zeta_meta: {
         reason,
         scope: "document",
+        original_cursor_offset: Number(context.localCursorOffset) || 0,
       },
     };
     const cacheKey = shortHash(`${endpointUrl}:${JSON.stringify(requestBody)}`);
@@ -1602,9 +1611,10 @@ class ZetaApp {
   buildAutocompleteSentDetail(context, endpointUrl, reasonLabel) {
     const textWindow = String(context.textWindow || "");
     const contextWindow = String(context.contextWindow || "");
-    const cursorOffset = Number(context.localCursorOffset) || 0;
-    const maxNewTokens = 24;
-    const temperature = 0.1;
+    const originalCursorOffset = Number(context.localCursorOffset) || 0;
+    const cursorOffset = this.resolveAutocompleteCursorOffset(context);
+    const maxNewTokens = 64;
+    const temperature = 0.35;
     const textSnippet = textWindow.slice(Math.max(0, cursorOffset - 50), cursorOffset + 70).replace(/\n/g, "↵").slice(0, 160);
     const contextTail = contextWindow.slice(-160).replace(/\n/g, "↵").slice(0, 180);
     const lines = [
@@ -1615,10 +1625,69 @@ class ZetaApp {
       `context: ${contextWindow.length} chars`,
       `context (tail): ${contextTail || "(empty)"}`,
       `params: max_new_tokens=${maxNewTokens}, temperature=${temperature}, max_candidates=3, imports=Std`,
+      `cursor_adjustment: original=${originalCursorOffset}, sent=${cursorOffset}`,
       "",
       `reason: ${reasonLabel} · prefix (${String(context.prefixText || "").length} chars): ${String(context.prefixText || "").slice(-80)}`,
     ];
     return lines.join("\n");
+  }
+
+  resolveAutocompleteCursorOffset(context) {
+    const textWindow = String(context?.textWindow || "");
+    let cursorOffset = clamp(Number(context?.localCursorOffset) || 0, 0, textWindow.length);
+    if (!textWindow) {
+      return 0;
+    }
+
+    const prefix = textWindow.slice(0, cursorOffset);
+    const suffix = textWindow.slice(cursorOffset);
+
+    // If the caret lands right before an inline math equality chunk, shift to after "=".
+    // This avoids asking completion at "...have " when the intended position is "...a^2 + b^2 = ".
+    const inlineMathEquality = suffix.match(/^\s*\$[^\n$]{0,160}=\s*/);
+    if (inlineMathEquality && /\bhave\s*$/i.test(prefix)) {
+      cursorOffset = clamp(cursorOffset + inlineMathEquality[0].length, 0, textWindow.length);
+    }
+    return cursorOffset;
+  }
+
+  resolveAutocompleteParagraphBounds(sourceText, caretOffset) {
+    const text = String(sourceText || "");
+    const caret = clamp(Number(caretOffset) || 0, 0, text.length);
+    if (!text) {
+      return { start: 0, end: 0 };
+    }
+
+    // Paragraphs are separated by blank lines (allowing spaces/tabs).
+    const separatorRe = /\n[ \t]*\n/g;
+    let start = 0;
+    let end = text.length;
+    let match;
+
+    while ((match = separatorRe.exec(text)) !== null) {
+      const sepStart = match.index;
+      const sepEnd = match.index + match[0].length;
+
+      if (caret < sepStart) {
+        end = sepStart;
+        break;
+      }
+      start = sepEnd;
+    }
+
+    return {
+      start: clamp(start, 0, text.length),
+      end: clamp(end, Math.max(0, start), text.length),
+    };
+  }
+
+  resolveAutocompleteSuppressionKey(context) {
+    if (context && typeof context.signature === "string" && context.signature.trim()) {
+      return context.signature.trim();
+    }
+    const sentenceBoundary = Number(context?.sentenceBoundary) || 0;
+    const cursor = Number(context?.localCursorOffset) || 0;
+    return `sb:${sentenceBoundary}:cur:${cursor}`;
   }
 
   extractAutocompleteCandidates(payload, context) {
@@ -1742,7 +1811,8 @@ class ZetaApp {
       this.clearAutocompleteSuggestion();
       return;
     }
-    if (this.autocompleteGeneratedSentenceBoundaries.includes(context.sentenceBoundary)) {
+    const suppressionKey = this.resolveAutocompleteSuppressionKey(context);
+    if (reasonLabel !== "manual" && this.autocompleteGeneratedSentenceBoundaries.includes(suppressionKey)) {
       return;
     }
 
@@ -1823,7 +1893,7 @@ class ZetaApp {
         message: rawMessage,
       });
     } else {
-      this.autocompleteGeneratedSentenceBoundaries.push(context.sentenceBoundary);
+      this.autocompleteGeneratedSentenceBoundaries.push(suppressionKey);
       if (this.autocompleteGeneratedSentenceBoundaries.length > 100) {
         this.autocompleteGeneratedSentenceBoundaries.shift();
       }
@@ -1958,7 +2028,23 @@ class ZetaApp {
     }
 
     const snapshot = this.activeAdapter.getVisibleTextSnapshot();
-    const rect = this.activeAdapter.getCaretClientRect(snapshot);
+    let rect = this.activeAdapter.getCaretClientRect(snapshot);
+    let usingFallbackRect = false;
+    if (!rect) {
+      const rootRect = this.activeAdapter?.root?.getBoundingClientRect?.();
+      if (
+        rootRect &&
+        Number.isFinite(rootRect.left) &&
+        Number.isFinite(rootRect.top) &&
+        Number.isFinite(rootRect.right) &&
+        Number.isFinite(rootRect.bottom) &&
+        rootRect.width > 0 &&
+        rootRect.height > 0
+      ) {
+        rect = rootRect;
+        usingFallbackRect = true;
+      }
+    }
     if (!rect) {
       element.classList.add("is-hidden");
       return;
@@ -2016,7 +2102,7 @@ class ZetaApp {
       Math.max(0, candidates.length - 1)
     );
     this.activeAutocomplete.selectedIndex = selectedIndex;
-    const showTopK = !!this.settings.autocompleteShowTopK;
+    const showTopK = !!this.settings.autocompleteShowTopK || usingFallbackRect;
     element.classList.remove("is-thinking-mode");
     element.classList.toggle("is-inline-mode", !showTopK);
     element.classList.toggle("is-topk-mode", showTopK);
@@ -3730,6 +3816,13 @@ class ZetaApp {
   }
 
   resolveCaretOffsetInScope(snapshot, adapter) {
+    const snapshotCaret = snapshot && Number.isInteger(snapshot.caretOffset)
+      ? snapshot.caretOffset
+      : null;
+    if (Number.isInteger(snapshotCaret)) {
+      return clamp(snapshotCaret, 0, String(snapshot?.text || "").length);
+    }
+
     let caret = null;
 
     try {
