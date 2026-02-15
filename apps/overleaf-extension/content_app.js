@@ -5594,8 +5594,21 @@ class ZetaApp {
     const highlightRanges = ensureArray(response.highlights?.highlights);
     const coveredInterpretationIndices = new Set();
 
-    if (highlightRanges.length > 0) {
-      for (const range of highlightRanges) {
+    // Use at most one highlight per interpretation item (pick best by confidence) so we don't show
+    // duplicate or boilerplate spans (e.g. "we have", \mathbb{N}) when backend sends multiple
+    const rangesByItem = new Map();
+    for (const range of highlightRanges) {
+      const itemIndex = Number.isInteger(range?.item_index) ? range.item_index : 0;
+      const existing = rangesByItem.get(itemIndex);
+      const conf = Number.isFinite(range?.confidence) ? range.confidence : 0;
+      if (!existing || (Number.isFinite(existing.confidence) ? existing.confidence : 0) < conf) {
+        rangesByItem.set(itemIndex, range);
+      }
+    }
+    const oneRangePerItem = Array.from(rangesByItem.values());
+
+    if (oneRangePerItem.length > 0) {
+      for (const range of oneRangePerItem) {
         const itemIndex = Number.isInteger(range?.item_index) ? range.item_index : null;
         if (itemIndex !== null) {
           coveredInterpretationIndices.add(itemIndex);
@@ -5659,9 +5672,27 @@ class ZetaApp {
         continue;
       }
       const item = interpretationItems[itemIndex];
-      const start = Number.isInteger(item.latex_start) ? item.latex_start : null;
-      const end = Number.isInteger(item.latex_end) ? item.latex_end : null;
+      let start = Number.isInteger(item.latex_start) ? item.latex_start : null;
+      let end = Number.isInteger(item.latex_end) ? item.latex_end : null;
       const excerpt = item.latex_excerpt || null;
+      // Backend may send global offsets; scopeText is chunk text, so use local span only
+      if (start !== null && end !== null && end > start && end <= scopeText.length) {
+        start = clamp(start, 0, scopeText.length);
+        end = clamp(end, 0, scopeText.length);
+      } else if (excerpt && typeof excerpt === "string" && excerpt.trim()) {
+        const needle = excerpt.trim();
+        const idx = scopeText.indexOf(needle);
+        if (idx !== -1) {
+          start = idx;
+          end = idx + needle.length;
+        } else {
+          start = null;
+          end = null;
+        }
+      } else {
+        start = null;
+        end = null;
+      }
       const targetText =
         start !== null && end !== null && end > start
           ? scopeText.slice(start, end)

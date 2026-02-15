@@ -304,6 +304,53 @@ def _normalize_highlight_payload(
         highlights.append(resolved)
         by_item_index.setdefault(item_index, []).append(resolved)
 
+    # Keep at most one highlight per item: prefer span that matches latex_excerpt, then best confidence
+    def _is_boilerplate(t: str) -> bool:
+        if not t or not t.strip():
+            return True
+        s = t.strip()
+        lower = s.lower()
+        if lower == "we have" or lower.startswith("we have ") or s == "we have":
+            return True
+        # Only \mathbb{N} or similar symbol (no formula)
+        if "\\mathbb" in s and "=" not in s and "≥" not in s and "≤" not in s and "+" not in s:
+            return True
+        if len(s) <= 4 and "=" not in s and "≥" not in s and "≤" not in s:
+            return True
+        return False
+
+    chosen_highlights: list[HighlightRange] = []
+    for item_index, item in enumerate(payload.interpretation.items):
+        ranges = by_item_index.get(item_index, [])
+        if not ranges:
+            continue
+        # Filter out boilerplate spans
+        non_boilerplate = [r for r in ranges if not _is_boilerplate(r.text)]
+        candidates = non_boilerplate if non_boilerplate else ranges
+        excerpt = (item.latex_excerpt or "").strip().strip("$")
+        best = None
+        best_score = -1.0
+        for r in candidates:
+            score = 0.0
+            if excerpt and excerpt in r.text:
+                score += 10.0
+            if r.source == "latex_excerpt":
+                score += 2.0
+            score += r.confidence
+            # Prefer shorter span when excerpt is contained (more precise)
+            if excerpt and excerpt in r.text:
+                score -= len(r.text) * 0.001
+            if score > best_score:
+                best_score = score
+                best = r
+        if best is not None:
+            chosen_highlights.append(best)
+
+    highlights = chosen_highlights
+    by_item_index = {}
+    for r in chosen_highlights:
+        by_item_index.setdefault(r.item_index, []).append(r)
+
     unresolved_hint_raw = data.get("unresolved_items")
     unresolved_hint: set[int] = set()
     if isinstance(unresolved_hint_raw, list):
@@ -379,8 +426,10 @@ def _build_prompt(payload: HighlightResolveRequest) -> str:
         "Return JSON only with keys: highlights (array), unresolved_items (array of item indexes).\n"
         "Each highlight object must include: item_index, chunk_id, start_in_chunk, end_in_chunk, source, confidence.\n"
         "Rules:\n"
+        "- Return at most ONE highlight per item. The span must be the wrong formula/claim only (e.g. 'n + 2 \\geq n + 3' or 'a - b = b - a').\n"
+        "- Do NOT highlight surrounding text like 'we have' or symbols like \\mathbb{N}.\n"
         "- Use 0-based start_in_chunk and end_in_chunk (end exclusive).\n"
-        "- Choose the shortest exact span that should be highlighted.\n"
+        "- Choose the shortest exact span that contains the wrong formula.\n"
         "- If uncertain, omit the highlight and put item index into unresolved_items.\n"
         "- source should be one of: latex_span, latex_excerpt, quoted_text, replacement_text, keyword, llm.\n\n"
         f"Chunks:\n{truncate_text(json.dumps(chunks_payload, ensure_ascii=False), 18_000)}\n\n"
