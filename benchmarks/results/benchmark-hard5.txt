@@ -1,0 +1,121 @@
+Benchmark: 5 cases (2 correct, 3 incorrect)
+  GPT model   : gpt-4.1  ($2.0/1M in, $8.0/1M out)
+  Pipeline URL: https://tree26--herald-math-grammarly-api.modal.run  (~$0.76/GPU-hr)
+
+[ 1/5] T novel-true-n5-div-120                             GPT:F(X) 4690ms $0.0069  Pipe:F(X) 15565ms $0.0033
+[ 2/5] F novel-false-xyz-inequality                        GPT:F(ok) 3309ms $0.0025  Pipe:F(ok) 31163ms $0.0066
+[ 3/5] T novel-true-coprime-sum-sq                         GPT:ERR  Pipe:F(X) 16081ms $0.0034
+[ 4/5] F novel-false-a3-eq-a                               GPT:F(ok) 3322ms $0.0030  Pipe:F(ok) 30487ms $0.0064
+[ 5/5] F novel-false-ff-eq-n2                              GPT:F(ok) 3400ms $0.0037  Pipe:F(ok) 12005ms $0.0025
+
+==========================================================================================
+COMPARISON TABLE
+==========================================================================================
+Case                                         Exp    GPT      GPT$  GPTms   Pipe     Pipe$ Pipems
+------------------------------------------------------------------------------------------------
+novel-true-n5-div-120                          T    F X   $0.0069   4690    F X   $0.0033  15565
+novel-false-xyz-inequality                     F   F ok   $0.0025   3309   F ok   $0.0066  31163
+novel-true-coprime-sum-sq                      T    ERR                     F X   $0.0034  16081
+novel-false-a3-eq-a                            F   F ok   $0.0030   3322   F ok   $0.0064  30487
+novel-false-ff-eq-n2                           F   F ok   $0.0037   3400   F ok   $0.0025  12005
+
+==========================================================================================
+AGGREGATE
+==========================================================================================
+
+  GPT gpt-4.1:
+    Accuracy    : 3/4 (75.0%)
+    Avg latency : 67733 ms
+    Med latency : 3400 ms
+    Total cost  : $0.016172
+    Avg cost/q  : $0.004043
+
+  Herald pipeline:
+    Accuracy    : 3/5 (60.0%)
+    Avg latency : 21060 ms
+    Med latency : 16081 ms
+    Total cost  : $0.022230  (est. GPU upper bound)
+    Avg cost/q  : $0.004446
+
+  Total wall time: 444.0s
+
+==========================================================================================
+DETAILED RESULTS
+==========================================================================================
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-n5-div-120  (expected: CORRECT)
+  For all integers $n$, the expression $n^5 - 5n^3 + 4n$ is divisible by $120$.
+  GPT: is_correct=False  confidence=high  (4690ms, $0.0069)
+       reasoning: To check divisibility by 120, we must check divisibility by 8, 3, and 5. For n=0, the expression is 0, which is divisible by 120. For n=1, the expression is 1 -
+       The statement is false; it fails for n=11 and likely for other values as well. Always check a range of values for divisibility claims.
+       counterexample: n=11: 161051 - 6655 + 44 = 144440, which is not divisible by 120.
+       [error] The statement is false for n=11, as 161051 - 6655 + 44 = 144440, which is not divisible by 120.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (15565ms, $0.0033)
+       type: ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       decl: axiom n5_minus_5n3_plus_4n_div_120 : ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Direct consequence of a well-known identity in number theory, the totient function applied to 5.
+       feedback: LLM final feedback: This statement is indeed true and can be proven using well-known identities in number theory, specif
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-xyz-inequality  (expected: INCORRECT)
+  For all positive reals $x, y, z$ satisfying $xyz = 1$, we have $x^2 + y^2 + z^2 \ge x + y + z + 3$.
+  Ground truth: Fails at x=y=z=1: LHS=3, RHS=3+3=6. 3 < 6.
+  GPT: is_correct=False  confidence=high  (3309ms, $0.0025)
+       reasoning: Let x = y = z = 1, which satisfies xyz = 1. Then x^2 + y^2 + z^2 = 3, and x + y + z + 3 = 6. Thus, 3 < 6, so the inequality fails for this case. Therefore, the 
+       The statement is false, as it does not hold for all positive reals x, y, z with xyz = 1.
+       counterexample: x = 1, y = 1, z = 1
+       [error] The inequality fails for x = y = z = 1, which is a valid choice under the given constraints.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31163ms, $0.0066)
+       type: { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2 ≥ x + y + z + 3", "ass
+       decl: axiom xyz_ineq_wrong : { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the provided diagnostics and revise the inequality to fix the timeout error.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-coprime-sum-sq  (expected: CORRECT)
+  For all positive integers $a$ and $b$, if $\gcd(a, b) = 1$, then $\gcd(a^2 + b^2, ab) = 1$.
+  GPT: ERROR – HTTPSConnectionPool(host='api.openai.com', port=443): Read timed out. (read timeout=180)
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (16081ms, $0.0034)
+       type: ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       decl: axiom coprime_sum_sq_prod : ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: a and b are positive integers; gcd(a, b) = 1
+       feedback: Model notes: The coprimality of a and b implies that there are no common prime factors between a and b. The statement th
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-a3-eq-a  (expected: INCORRECT)
+  For all $n \times n$ real matrices $A$, if $A^3 = A$, then $A^2 = I$ or $A = 0$.
+  Ground truth: Counterexample: A = diag(1,0). A^3 = A but A^2 = A ≠ I and A ≠ 0.
+  GPT: is_correct=False  confidence=high  (3322ms, $0.0030)
+       reasoning: The statement claims that if a real matrix A satisfies A^3 = A, then either A^2 = I or A = 0. However, there exist real matrices (e.g., nontrivial idempotent ma
+       The statement is false; there are matrices with A^3 = A that are neither the identity nor the zero matrix, nor do they square to the identity.
+       counterexample: [[1,0],[0,0]]
+       [error] The statement ignores the existence of nontrivial idempotent matrices (A^2 = A ≠ 0, I) that satisfy A^3 = A.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30487ms, $0.0064)
+       type: ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       decl: axiom a3_eq_a_wrong : ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; A is an n x n real matrix
+       feedback: Model notes: Assumes the matrix A is over the real numbers and is square with dimension n.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-ff-eq-n2  (expected: INCORRECT)
+  For all functions $f: \mathbb{N} \to \mathbb{N}$ satisfying $f(f(n)) = n + 2$ for all $n$, we have $f(0) = 1$.
+  Ground truth: f(0)=1 is not forced. Alternative: f maps evens to evens+2 and odds to odds+2 shifted, e.g. f(0)=2, f(2)=4, ..., f(1)=3, f(3)=5, ...
+  GPT: is_correct=False  confidence=high  (3400ms, $0.0037)
+       reasoning: Suppose f(f(n)) = n + 2 for all n ∈ ℕ. Let a = f(0). Then f(f(0)) = 2, so f(a) = 2. Also, f(f(a)) = a + 2, but f(f(a)) = f(2) = a + 2. However, there is no guar
+       The statement is false; the functional equation does not uniquely determine f(0) to be 1.
+       counterexample: Let f(n) = n + 2 for all n ∈ ℕ. Then f(f(n)) = f(n + 2) = n + 4, which is not n + 2, so adjust: Let f(0) = 2, f(2) = 4, 
+       [error] The statement assumes uniqueness of f(0), but the functional equation allows multiple possible values for f(0).
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (12005ms, $0.0025)
+       type: ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       decl: axiom ff_n_plus_2_f0 : ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: f is a function from natural numbers to natural numbers
+       feedback: Model notes: The function f satisfies the property that for all natural numbers n, f applied twice to n equals n plus 2.
+
+JSON report : /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-20260215T111044Z.json
+Console log : pipe output to /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-latest.txt via tee

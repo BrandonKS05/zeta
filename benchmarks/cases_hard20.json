@@ -1,0 +1,222 @@
+[
+  {
+    "id": "novel-true-n5-div-120",
+    "text": "For all integers $n$, the expression $n^5 - 5n^3 + 4n$ is divisible by $120$.",
+    "context": "Number theory, divisibility.",
+    "theorem_name": "n5_minus_5n3_plus_4n_div_120",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "Factors as n(n-1)(n+1)(n-2)(n+2), product of 5 consecutive integers, always divisible by 5!=120."
+  },
+  {
+    "id": "novel-false-xyz-inequality",
+    "text": "For all positive reals $x, y, z$ satisfying $xyz = 1$, we have $x^2 + y^2 + z^2 \\ge x + y + z + 3$.",
+    "context": "Inequalities, optimization.",
+    "theorem_name": "xyz_ineq_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Fails at x=y=z=1: LHS=3, RHS=3+3=6. 3 < 6.",
+    "difficulty": "hard",
+    "notes": "Looks plausible (x^2 >= x for large x) but fails at the symmetric point."
+  },
+  {
+    "id": "novel-true-coprime-sum-sq",
+    "text": "For all positive integers $a$ and $b$, if $\\gcd(a, b) = 1$, then $\\gcd(a^2 + b^2, ab) = 1$.",
+    "context": "Number theory, coprimality.",
+    "theorem_name": "coprime_sum_sq_prod",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "If p | a^2+b^2 and p | ab, then p | a or p | b; WLOG p|a => p|b^2 => p|b, contradicting gcd=1."
+  },
+  {
+    "id": "novel-false-a3-eq-a",
+    "text": "For all $n \\times n$ real matrices $A$, if $A^3 = A$, then $A^2 = I$ or $A = 0$.",
+    "context": "Linear algebra.",
+    "theorem_name": "a3_eq_a_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Counterexample: A = diag(1,0). A^3 = A but A^2 = A != I and A != 0.",
+    "difficulty": "hard",
+    "notes": "A(A^2-I)=0 means eigenvalues in {-1,0,1}, but A can mix them (e.g. a projection)."
+  },
+  {
+    "id": "novel-false-ff-eq-n2",
+    "text": "For all functions $f: \\mathbb{N} \\to \\mathbb{N}$ satisfying $f(f(n)) = n + 2$ for all $n$, we have $f(0) = 1$.",
+    "context": "Discrete math, functional equations.",
+    "theorem_name": "ff_n_plus_2_f0",
+    "imports": ["Std"],
+    "expected_correct": false,
+    "error_description": "f(0)=1 is not forced. Alternative: f(0)=2, f(2)=4, f(4)=6,... and f(1)=3, f(3)=5,... also satisfies f(f(n))=n+2.",
+    "difficulty": "hard",
+    "notes": "Multiple valid constructions exist. f(0)=1 is one but f(0)=2 also works."
+  },
+  {
+    "id": "novel-true-sum-reciprocals-div",
+    "text": "For all positive integers $n$, the number $n \\cdot \\text{lcm}(1, 2, \\ldots, n) \\cdot \\sum_{k=1}^{n} \\frac{1}{k}$ is an integer.",
+    "context": "Number theory, harmonic numbers.",
+    "theorem_name": "harmonic_lcm_integer",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "lcm(1..n) * (1/k) is an integer for each k<=n, so the whole sum times lcm is an integer, times n still integer."
+  },
+  {
+    "id": "novel-false-product-convergent-series",
+    "text": "For all real-valued sequences $\\{a_n\\}$ and $\\{b_n\\}$, if $\\sum_{n=1}^{\\infty} a_n$ and $\\sum_{n=1}^{\\infty} b_n$ both converge, then $\\sum_{n=1}^{\\infty} a_n b_n$ converges.",
+    "context": "Real analysis, series.",
+    "theorem_name": "prod_convergent_series_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Counterexample: a_n = b_n = (-1)^n / sqrt(n). Both converge by alternating series test, but a_n*b_n = 1/n and sum 1/n diverges.",
+    "difficulty": "hard",
+    "notes": "True if both converge absolutely (by Cauchy product), but fails for conditional convergence."
+  },
+  {
+    "id": "novel-true-squares-mod8",
+    "text": "For all odd integers $n$, the expression $n^2 - 1$ is divisible by $8$.",
+    "context": "Number theory, modular arithmetic.",
+    "theorem_name": "odd_sq_minus_1_div_8",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "medium",
+    "notes": "n=2k+1, n^2-1=4k^2+4k=4k(k+1). Since k(k+1) is always even, 4k(k+1) is divisible by 8."
+  },
+  {
+    "id": "novel-false-sum-consecutive-prime",
+    "text": "For all positive integers $n \\ge 2$, the sum $1 + 2 + 3 + \\cdots + n$ is never a perfect square.",
+    "context": "Number theory.",
+    "theorem_name": "triangular_not_square_wrong",
+    "imports": ["Std"],
+    "expected_correct": false,
+    "error_description": "n=8: sum = 36 = 6^2. Also n=49: sum = 1225 = 35^2.",
+    "difficulty": "hard",
+    "notes": "Triangular numbers that are perfect squares exist. The equation n(n+1)/2 = m^2 has infinitely many solutions."
+  },
+  {
+    "id": "novel-true-prod-consec-even",
+    "text": "For all positive integers $n$, the product of any $n$ consecutive integers is divisible by $n!$.",
+    "context": "Combinatorics, number theory.",
+    "theorem_name": "prod_consec_div_factorial",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "This is because C(m+n-1, n) = m(m+1)...(m+n-1)/n! is always an integer (binomial coefficient)."
+  },
+  {
+    "id": "novel-false-eigenvalue-sum-trace",
+    "text": "For all $3 \\times 3$ real matrices $A$, if all eigenvalues of $A$ are real and positive, then all entries of $A$ are non-negative.",
+    "context": "Linear algebra.",
+    "theorem_name": "pos_eigenvals_nonneg_entries_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Counterexample: A = [[2,-1,0],[-1,2,-1],[0,-1,2]] (tridiagonal). Eigenvalues are 2, 2-sqrt(2), 2+sqrt(2), all positive, but A has negative entries.",
+    "difficulty": "hard",
+    "notes": "Positive eigenvalues say nothing about the sign of individual entries. Only Perron-Frobenius goes the other direction."
+  },
+  {
+    "id": "novel-true-gcd-fibonacci-like",
+    "text": "For all positive integers $m$ and $n$, if $a_k = 2^k - 1$ for all $k \\ge 1$, then $\\gcd(a_m, a_n) = a_{\\gcd(m,n)}$.",
+    "context": "Number theory, Mersenne numbers.",
+    "theorem_name": "gcd_mersenne",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "gcd(2^m-1, 2^n-1) = 2^gcd(m,n)-1. Standard but not famous by name. Proof via the identity 2^a-1 | 2^b-1 iff a | b."
+  },
+  {
+    "id": "novel-false-injective-composition",
+    "text": "For all functions $f: \\mathbb{R} \\to \\mathbb{R}$ and $g: \\mathbb{R} \\to \\mathbb{R}$, if $g \\circ f$ is injective, then $g$ is injective.",
+    "context": "Set theory, functions.",
+    "theorem_name": "comp_inj_implies_g_inj_wrong",
+    "imports": ["Std"],
+    "expected_correct": false,
+    "error_description": "g circ f injective implies f is injective, NOT g. Counterexample: f(x)=e^x (range is (0,inf)), g(x)=x^2. g circ f = e^{2x} is injective, but g is not injective.",
+    "difficulty": "medium",
+    "notes": "Common confusion: g circ f injective => f injective. The claim about g is false."
+  },
+  {
+    "id": "novel-true-polynomial-int-values",
+    "text": "For all polynomials $p(x)$ with integer coefficients, if $p(0)$ and $p(1)$ are both odd, then $p$ has no integer roots.",
+    "context": "Algebra, number theory.",
+    "theorem_name": "poly_odd_no_int_roots",
+    "imports": ["Std"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "If r is an integer root, r is even => p(r) = p(0) mod 2 = odd (contradiction since p(r)=0). r is odd => p(r) = p(1) mod 2 = odd (contradiction). So no integer root exists."
+  },
+  {
+    "id": "novel-false-derivative-zero-set",
+    "text": "For all differentiable functions $f: [0,1] \\to \\mathbb{R}$, if $f(0) = f(1) = 0$ and $f$ is not identically zero, then the set $\\{x \\in (0,1) : f'(x) = 0\\}$ is finite.",
+    "context": "Real analysis, derivatives.",
+    "theorem_name": "derivative_zero_set_finite_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Counterexample: f(x) = x(1-x)sin(1/x(1-x)) for x in (0,1), f(0)=f(1)=0. Differentiable, not identically zero, but f' = 0 at infinitely many points.",
+    "difficulty": "hard",
+    "notes": "Even smooth functions with f(0)=f(1)=0 can have infinitely many critical points. Rolle only guarantees at least one."
+  },
+  {
+    "id": "novel-false-group-order-element",
+    "text": "For all finite groups $G$ and all integers $d$ dividing $|G|$, there exists an element $g \\in G$ with order exactly $d$.",
+    "context": "Abstract algebra, group theory.",
+    "theorem_name": "divisor_order_exists_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Counterexample: Z/2Z x Z/2Z has order 4 and 4 divides |G|=4, but no element has order 4 (all non-identity elements have order 2).",
+    "difficulty": "hard",
+    "notes": "True for cyclic groups by Lagrange converse, but false in general. The Klein four-group is the classic counterexample."
+  },
+  {
+    "id": "novel-true-matrix-trace-power",
+    "text": "For all $2 \\times 2$ real matrices $A$, we have $\\text{tr}(A^2) = \\text{tr}(A)^2 - 2\\det(A)$.",
+    "context": "Linear algebra.",
+    "theorem_name": "trace_sq_formula",
+    "imports": ["Mathlib"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "By Cayley-Hamilton, A^2 - tr(A)*A + det(A)*I = 0, so A^2 = tr(A)*A - det(A)*I. Taking trace: tr(A^2) = tr(A)*tr(A) - det(A)*tr(I) = tr(A)^2 - 2*det(A)."
+  },
+  {
+    "id": "novel-false-convergent-rearrangement",
+    "text": "For all convergent series $\\sum a_n$ of real numbers and all bijections $\\sigma: \\mathbb{N} \\to \\mathbb{N}$, the rearranged series $\\sum a_{\\sigma(n)}$ converges to the same sum.",
+    "context": "Real analysis, series.",
+    "theorem_name": "rearrangement_same_sum_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "Only true for absolutely convergent series. Riemann rearrangement theorem: any conditionally convergent series can be rearranged to converge to any value.",
+    "difficulty": "hard",
+    "notes": "The alternating harmonic series sum (-1)^n/n converges but can be rearranged to any real number."
+  },
+  {
+    "id": "novel-true-floor-sum-identity",
+    "text": "For all positive integers $n$ and all reals $x$, $\\lfloor nx \\rfloor = \\lfloor x \\rfloor + \\lfloor x + \\frac{1}{n} \\rfloor + \\lfloor x + \\frac{2}{n} \\rfloor + \\cdots + \\lfloor x + \\frac{n-1}{n} \\rfloor$.",
+    "context": "Number theory, floor function.",
+    "theorem_name": "hermite_floor_identity",
+    "imports": ["Mathlib"],
+    "expected_correct": true,
+    "error_description": null,
+    "difficulty": "hard",
+    "notes": "Hermite's identity. Both sides are integer-valued step functions that agree on [0,1/n) and have matching jumps."
+  },
+  {
+    "id": "novel-false-symmetric-positive-definite",
+    "text": "For all $n \\times n$ real symmetric matrices $A$ and $B$, if $A$ and $B$ are positive definite, then $AB$ is positive definite.",
+    "context": "Linear algebra.",
+    "theorem_name": "prod_pos_def_wrong",
+    "imports": ["Mathlib"],
+    "expected_correct": false,
+    "error_description": "AB need not be symmetric, so 'positive definite' doesn't even apply in the standard sense. Even if we check eigenvalues: A=[[2,1],[1,2]], B=[[2,-1],[-1,2]], both PD but AB=[[3,0],[0,3]]... actually that works. Try A=[[1,0],[0,2]], B=[[2,1],[1,1]]. AB=[[2,1],[2,2]], not symmetric. The product of PD symmetric matrices is not in general symmetric, hence not PD.",
+    "difficulty": "hard",
+    "notes": "The product of two symmetric PD matrices is not generally symmetric, so PD doesn't apply. A+B is PD, but AB is not guaranteed."
+  }
+]

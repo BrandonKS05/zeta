@@ -1,0 +1,378 @@
+Benchmark: 20 cases (9 correct, 11 incorrect)
+  GPT model   : gpt-4.1  ($2.0/1M in, $8.0/1M out)
+  Pipeline URL: https://tree26--herald-math-grammarly-api.modal.run  (~$0.76/GPU-hr)
+
+[ 1/20] T novel-true-n5-div-120                             GPT:F(X) 46487ms $0.0315  Pipe:F(X) 14661ms $0.0031
+[ 2/20] F novel-false-xyz-inequality                        GPT:F(ok) 2944ms $0.0027  Pipe:F(ok) 30614ms $0.0065
+[ 3/20] T novel-true-coprime-sum-sq                         GPT:F(X) 16229ms $0.0176  Pipe:F(X) 12581ms $0.0027
+[ 4/20] F novel-false-a3-eq-a                               GPT:F(ok) 4837ms $0.0034  Pipe:F(ok) 30766ms $0.0065
+[ 5/20] F novel-false-ff-eq-n2                              GPT:F(ok) 3447ms $0.0035  Pipe:F(ok) 11898ms $0.0025
+[ 6/20] T novel-true-sum-reciprocals-div                    GPT:F(X) 8396ms $0.0038  Pipe:F(X) 11306ms $0.0024
+[ 7/20] F novel-false-product-convergent-series             GPT:F(ok) 10080ms $0.0070  Pipe:F(ok) 31296ms $0.0066
+[ 8/20] T novel-true-squares-mod8                           GPT:F(X) 4029ms $0.0043  Pipe:F(X) 10837ms $0.0023
+[ 9/20] F novel-false-sum-consecutive-prime                 GPT:F(ok) 2941ms $0.0031  Pipe:F(ok) 11839ms $0.0025
+[10/20] T novel-true-prod-consec-even                       GPT:T(ok) 2870ms $0.0019  Pipe:F(X) 9924ms $0.0021
+[11/20] F novel-false-eigenvalue-sum-trace                  GPT:F(ok) 3144ms $0.0030  Pipe:F(ok) 35731ms $0.0075
+[12/20] T novel-true-gcd-fibonacci-like                     GPT:T(ok) 3334ms $0.0025  Pipe:F(X) 12194ms $0.0026
+[13/20] F novel-false-injective-composition                 GPT:F(ok) 6375ms $0.0035  Pipe:F(ok) 33324ms $0.0070
+[14/20] T novel-true-polynomial-int-values                  GPT:ERR  Pipe:F(X) 10818ms $0.0023
+[15/20] F novel-false-derivative-zero-set                   GPT:F(ok) 3437ms $0.0032  Pipe:F(ok) 30309ms $0.0064
+[16/20] F novel-false-group-order-element                   GPT:F(ok) 2510ms $0.0028  Pipe:F(ok) 30706ms $0.0065
+[17/20] T novel-true-matrix-trace-power                     GPT:F(X) 5772ms $0.0042  Pipe:F(X) 30740ms $0.0065
+[18/20] F novel-false-convergent-rearrangement              GPT:F(ok) 5251ms $0.0028  Pipe:F(ok) 30944ms $0.0065
+[19/20] T novel-true-floor-sum-identity                     GPT:ERR  Pipe:F(X) 30044ms $0.0063
+[20/20] F novel-false-symmetric-positive-definite           GPT:F(ok) 3584ms $0.0037  Pipe:F(ok) 31228ms $0.0066
+
+==========================================================================================
+COMPARISON TABLE
+==========================================================================================
+Case                                         Exp    GPT      GPT$  GPTms   Pipe     Pipe$ Pipems
+------------------------------------------------------------------------------------------------
+novel-true-n5-div-120                          T    F X   $0.0315  46487    F X   $0.0031  14661
+novel-false-xyz-inequality                     F   F ok   $0.0027   2944   F ok   $0.0065  30614
+novel-true-coprime-sum-sq                      T    F X   $0.0176  16229    F X   $0.0027  12581
+novel-false-a3-eq-a                            F   F ok   $0.0034   4837   F ok   $0.0065  30766
+novel-false-ff-eq-n2                           F   F ok   $0.0035   3447   F ok   $0.0025  11898
+novel-true-sum-reciprocals-div                 T    F X   $0.0038   8396    F X   $0.0024  11306
+novel-false-product-convergent-series          F   F ok   $0.0070  10080   F ok   $0.0066  31296
+novel-true-squares-mod8                        T    F X   $0.0043   4029    F X   $0.0023  10837
+novel-false-sum-consecutive-prime              F   F ok   $0.0031   2941   F ok   $0.0025  11839
+novel-true-prod-consec-even                    T   T ok   $0.0019   2870    F X   $0.0021   9924
+novel-false-eigenvalue-sum-trace               F   F ok   $0.0030   3144   F ok   $0.0075  35731
+novel-true-gcd-fibonacci-like                  T   T ok   $0.0025   3334    F X   $0.0026  12194
+novel-false-injective-composition              F   F ok   $0.0035   6375   F ok   $0.0070  33324
+novel-true-polynomial-int-values               T    ERR                     F X   $0.0023  10818
+novel-false-derivative-zero-set                F   F ok   $0.0032   3437   F ok   $0.0064  30309
+novel-false-group-order-element                F   F ok   $0.0028   2510   F ok   $0.0065  30706
+novel-true-matrix-trace-power                  T    F X   $0.0042   5772    F X   $0.0065  30740
+novel-false-convergent-rearrangement           F   F ok   $0.0028   5251   F ok   $0.0065  30944
+novel-true-floor-sum-identity                  T    ERR                     F X   $0.0063  30044
+novel-false-symmetric-positive-definite        F   F ok   $0.0037   3584   F ok   $0.0066  31228
+
+==========================================================================================
+AGGREGATE
+==========================================================================================
+
+  GPT gpt-4.1:
+    Accuracy    : 13/18 (72.2%)
+    Avg latency : 24794 ms
+    Med latency : 4837 ms
+    Total cost  : $0.104614
+    Avg cost/q  : $0.005812
+
+  Herald pipeline:
+    Accuracy    : 11/20 (55.0%)
+    Avg latency : 22588 ms
+    Med latency : 30309 ms
+    Total cost  : $0.095371  (est. GPU upper bound)
+    Avg cost/q  : $0.004769
+
+  Total wall time: 947.7s
+
+==========================================================================================
+DETAILED RESULTS
+==========================================================================================
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-n5-div-120  (expected: CORRECT)
+  For all integers $n$, the expression $n^5 - 5n^3 + 4n$ is divisible by $120$.
+  GPT: is_correct=False  confidence=high  (46487ms, $0.0315)
+       reasoning: To check divisibility by 120, we must check divisibility by 8, 3, and 5. For n=1, the expression is 1 - 5 + 4 = 0, which is divisible by 120. For n=2, it is 32 
+       The statement is a proven theorem; the expression is divisible by 120 for all integers n.
+       [info] The statement is actually true; all tested values and modular checks confirm divisibility by 120 for all integers n.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (14661ms, $0.0031)
+       type: ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       decl: axiom n5_minus_5n3_plus_4n_div_120 : ∀ n : Int, 120 ∣ n^5 - 5*n^3 + 4*n
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Direct consequence of a well-known identity in number theory, the totient function applied to 5.
+       feedback: LLM final feedback: This statement is indeed true and can be proven using well-known identities in number theory, specif
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-xyz-inequality  (expected: INCORRECT)
+  For all positive reals $x, y, z$ satisfying $xyz = 1$, we have $x^2 + y^2 + z^2 \ge x + y + z + 3$.
+  Ground truth: Fails at x=y=z=1: LHS=3, RHS=3+3=6. 3 < 6.
+  GPT: is_correct=False  confidence=high  (2944ms, $0.0027)
+       reasoning: Let x = y = z = 1, which satisfies xyz = 1. Then x^2 + y^2 + z^2 = 3, and x + y + z + 3 = 6. Thus, 3 ≥ 6 is false. Therefore, the inequality does not hold for a
+       The statement is false, as it fails for the simple case x = y = z = 1. Always check boundary or symmetric cases for such inequalities.
+       counterexample: x = 1, y = 1, z = 1: 3 ≥ 6 is false.
+       [error] The statement fails for x = y = z = 1, a valid case under the given conditions.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30614ms, $0.0065)
+       type: { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2 ≥ x + y + z + 3", "ass
+       decl: axiom xyz_ineq_wrong : { "lean_statement_type": "∀ x y z : Real, x > 0 ∧ y > 0 ∧ z > 0 ∧ x * y * z = 1 → x^2 + y^2 + z^2
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the provided diagnostics and revise the inequality to fix the timeout error.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-coprime-sum-sq  (expected: CORRECT)
+  For all positive integers $a$ and $b$, if $\gcd(a, b) = 1$, then $\gcd(a^2 + b^2, ab) = 1$.
+  GPT: is_correct=False  confidence=high  (16229ms, $0.0176)
+       reasoning: Let a = 2, b = 1. Then gcd(2,1) = 1, but a^2 + b^2 = 4 + 1 = 5, ab = 2, so gcd(5,2) = 1. However, try a = 2, b = 3: gcd(2,3) = 1, a^2 + b^2 = 4 + 9 = 13, ab = 6
+       The statement is false; for example, a = 10, b = 11 yields gcd(221, 110) = 11.
+       counterexample: a = 10, b = 11: gcd(10,11) = 1, a^2 + b^2 = 221, ab = 110, gcd(221,110) = 11
+       [error] The statement is false: there exist coprime positive integers a, b such that gcd(a^2 + b^2, ab) > 1.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (12581ms, $0.0027)
+       type: ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       decl: axiom coprime_sum_sq_prod : ∀ a b : Nat, Nat.Coprime a b → Nat.Coprime (a^2 + b^2) (a * b)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: a and b are positive integers; gcd(a, b) = 1
+       feedback: Model notes: The coprimality of a and b implies that there are no common prime factors between a and b. The statement th
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-a3-eq-a  (expected: INCORRECT)
+  For all $n \times n$ real matrices $A$, if $A^3 = A$, then $A^2 = I$ or $A = 0$.
+  Ground truth: Counterexample: A = diag(1,0). A^3 = A but A^2 = A != I and A != 0.
+  GPT: is_correct=False  confidence=high  (4837ms, $0.0034)
+       reasoning: The statement claims that if a real matrix A satisfies A^3 = A, then either A^2 = I or A = 0. However, there exist real matrices (e.g., nontrivial idempotent ma
+       The statement is false because there are matrices (such as nontrivial idempotents) that satisfy A^3 = A but do not satisfy either A^2 = I or A = 0.
+       counterexample: A = [[1,0],[0,0]]: A^3 = A, A^2 = A ≠ I, A ≠ 0.
+       [error] The statement ignores the existence of nontrivial idempotent matrices (A^2 = A ≠ I, 0) that satisfy A^3 = A.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30766ms, $0.0065)
+       type: ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       decl: axiom a3_eq_a_wrong : ∀ (A : Matrix (Fin n) (Fin n) Real), A ^ 3 = A → A ^ 2 = 1 ∨ A = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; A is an n x n real matrix
+       feedback: Model notes: Assumes the matrix A is over the real numbers and is square with dimension n.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-ff-eq-n2  (expected: INCORRECT)
+  For all functions $f: \mathbb{N} \to \mathbb{N}$ satisfying $f(f(n)) = n + 2$ for all $n$, we have $f(0) = 1$.
+  Ground truth: f(0)=1 is not forced. Alternative: f(0)=2, f(2)=4, f(4)=6,... and f(1)=3, f(3)=5,... also satisfies f(f(n))=n+2.
+  GPT: is_correct=False  confidence=high  (3447ms, $0.0035)
+       reasoning: Suppose f(f(n)) = n + 2 for all n ∈ ℕ. Let’s compute f(f(0)) = 2, so f(f(0)) = 2. Let f(0) = a, then f(a) = 2. Similarly, f(f(a)) = a + 2, but f(f(a)) = f(2) = 
+       The statement is false; the functional equation does not uniquely determine f(0) to be 1.
+       counterexample: Let f(0) = 2, f(2) = 4, f(4) = 0, f(1) = 3, f(3) = 5, f(5) = 1, and so on, cycling mod 6. This satisfies f(f(n)) = n + 2
+       [error] The statement claims uniqueness of f(0), but the functional equation does not force f(0) = 1.
+  Pipeline: valid_lean=True  status=ok  verdict=INCORRECT  (11898ms, $0.0025)
+       type: ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       decl: axiom ff_n_plus_2_f0 : ∀ (f : Nat → Nat), (∀ n, f (f n) = n + 2) → f 0 = 1
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: f is a function from natural numbers to natural numbers
+       feedback: Model notes: The function f satisfies the property that for all natural numbers n, f applied twice to n equals n plus 2.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-sum-reciprocals-div  (expected: CORRECT)
+  For all positive integers $n$, the number $n \cdot \text{lcm}(1, 2, \ldots, n) \cdot \sum_{k=1}^{n} \frac{1}{k}$ is an i
+  GPT: is_correct=False  confidence=high  (8396ms, $0.0038)
+       reasoning: The statement claims that for all positive integers n, the product n * lcm(1,2,...,n) * H_n (where H_n is the nth harmonic number) is always an integer. However
+       The statement is false; the product is not always an integer for all positive integers n.
+       counterexample: For n=3: 3 * 6 * (1 + 1/2 + 1/3) = 18 * (1.833...) = 33, which is not an integer.
+       [error] The statement is false for n=3 and many other values.
+       [error] The harmonic number H_n is not generally such that lcm(1,...,n) * H_n is an integer.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11306ms, $0.0024)
+       type: ∀ n : Nat, 0 < n → ∃ k : Int, (n : Rat) * (Finset.range n).lcm id * (∑ k in Finset.range n, (1 : Rat) / k) = k
+       decl: axiom harmonic_lcm_integer : ∀ n : Nat, 0 < n → ∃ k : Int, (n : Rat) * (Finset.range n).lcm id * (∑ k in Finset.range n,
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model notes: Assumes the existence of an integer representation for the given expression.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-product-convergent-series  (expected: INCORRECT)
+  For all real-valued sequences $\{a_n\}$ and $\{b_n\}$, if $\sum_{n=1}^{\infty} a_n$ and $\sum_{n=1}^{\infty} b_n$ both c
+  Ground truth: Counterexample: a_n = b_n = (-1)^n / sqrt(n). Both converge by alternating series test, but a_n*b_n = 1/n and sum 1/n diverges.
+  GPT: is_correct=False  confidence=high  (10080ms, $0.0070)
+       reasoning: The statement is false. The convergence of two real series does not guarantee the convergence of the series formed by their termwise product. A standard counter
+       The statement is false; convergence of two series does not guarantee convergence of the series of their termwise product.
+       counterexample: Let a_n = b_n = (-1)^n / \sqrt{n}. Both series converge by the alternating series test, but a_n b_n = 1/n, whose series 
+       [error] The statement is false: the convergence of two series does not imply the convergence of the series of their termwise pro
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31296ms, $0.0066)
+       type: { "lean_statement_type": "theorem", "assumptions": [ "∀ (a b : Nat → Real), Summable a ∧ Summable b" ], "notes": "For an
+       decl: axiom prod_convergent_series_wrong : { "lean_statement_type": "theorem", "assumptions": [ "∀ (a b : Nat → Real), Summabl
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the generated theorem statement and revise the wording/notation to ensure it accurately repr
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-squares-mod8  (expected: CORRECT)
+  For all odd integers $n$, the expression $n^2 - 1$ is divisible by $8$.
+  GPT: is_correct=False  confidence=high  (4029ms, $0.0043)
+       reasoning: Let n be an odd integer, so n = 2k + 1 for some integer k. Then n^2 - 1 = (2k + 1)^2 - 1 = 4k^2 + 4k = 4k(k + 1). Since k and k + 1 are consecutive integers, on
+       The statement is a proven theorem: for all odd integers n, n^2 - 1 is divisible by 8.
+       [info] Initial confusion about divisibility, but the statement holds for all odd integers.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (10837ms, $0.0023)
+       type: ∀ n : Nat, Odd n → 8 ∣ (n ^ 2 - 1)
+       decl: axiom odd_sq_minus_1_div_8 : ∀ n : Nat, Odd n → 8 ∣ (n ^ 2 - 1)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a natural number; n is odd
+       feedback: Model notes: This statement is a formalization of the property that for all odd integers, the expression n^2 - 1 is divi
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-sum-consecutive-prime  (expected: INCORRECT)
+  For all positive integers $n \ge 2$, the sum $1 + 2 + 3 + \cdots + n$ is never a perfect square.
+  Ground truth: n=8: sum = 36 = 6^2. Also n=49: sum = 1225 = 35^2.
+  GPT: is_correct=False  confidence=high  (2941ms, $0.0031)
+       reasoning: The sum $1 + 2 + 	dots + n = n(n+1)/2$. For $n=1$, the sum is 1, a perfect square, but the statement is for $n \ge 2$. For $n=8$, the sum is $8 \times 9 / 2 = 3
+       The statement is false; there are values of $n \ge 2$ for which the sum is a perfect square, such as $n=8$.
+       counterexample: n = 8: 1 + 2 + ... + 8 = 36 = 6^2
+       [error] The statement is false because there exist positive integers $n \ge 2$ for which the sum is a perfect square (e.g., $n=8
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (11839ms, $0.0025)
+       type: ∀ n : Nat, 2 ≤ n → ¬ (∃ k : Nat, ∑ i in Finset.range n, i = k^2)
+       decl: axiom triangular_not_square_wrong : ∀ n : Nat, 2 ≤ n → ¬ (∃ k : Nat, ∑ i in Finset.range n, i = k^2)
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: Nat.lt_two_eq_zero_false; Nat.succ_pos; Nat.add_lt_add_left
+       feedback: Model notes: Direct proof by calculating the sum and using properties of natural numbers.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-prod-consec-even  (expected: CORRECT)
+  For all positive integers $n$, the product of any $n$ consecutive integers is divisible by $n!$.
+  GPT: is_correct=True  confidence=high  (2870ms, $0.0019)
+       reasoning: Given any n consecutive integers, their product is always divisible by n! because the product can be written as (k+1)(k+2)...(k+n) for some integer k, and this 
+       This is a well-known and proven theorem in combinatorics and number theory.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (9924ms, $0.0021)
+       type: ∀ n : Nat, ∏ i in Finset.range n, (i + 1) % n! = 0
+       decl: axiom prod_consec_div_factorial : ∀ n : Nat, ∏ i in Finset.range n, (i + 1) % n! = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: n is a positive integer
+       feedback: Model notes: The product of any n consecutive integers is divisible by n! for all positive integers n.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-eigenvalue-sum-trace  (expected: INCORRECT)
+  For all $3 \times 3$ real matrices $A$, if all eigenvalues of $A$ are real and positive, then all entries of $A$ are non
+  Ground truth: Counterexample: A = [[2,-1,0],[-1,2,-1],[0,-1,2]] (tridiagonal). Eigenvalues are 2, 2-sqrt(2), 2+sqrt(2), all positive, but A has negative entries.
+  GPT: is_correct=False  confidence=high  (3144ms, $0.0030)
+       reasoning: The statement claims that if a real 3x3 matrix has all real, positive eigenvalues, then all its entries must be non-negative. This is false: for example, the id
+       The statement is incorrect; positive eigenvalues do not guarantee all entries are non-negative.
+       counterexample: A = \begin{pmatrix} 2 & 1 & 0 \\ 0 & 2 & -1 \\ 0 & 0 & 3 \end{pmatrix} has eigenvalues 2, 2, 3 (all positive), but entry
+       [error] The implication from positive eigenvalues to non-negative entries is false.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (35731ms, $0.0075)
+       type: { "lean_statement_type": "∀ (A : Matrix (Fin 3) (Fin 3) Real), (∀ (λ : Real), λ ∈ A.eigenvalues → 0 < λ) → ∀ (i j : Fin 
+       decl: axiom pos_eigenvals_nonneg_entries_wrong : { "lean_statement_type": "∀ (A : Matrix (Fin 3) (Fin 3) Real), (∀ (λ : Real),
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the statement 'For all $3 \times 3$ real matrices $A$, if all eigenvalues of $A$ are real an
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-gcd-fibonacci-like  (expected: CORRECT)
+  For all positive integers $m$ and $n$, if $a_k = 2^k - 1$ for all $k \ge 1$, then $\gcd(a_m, a_n) = a_{\gcd(m,n)}$.
+  GPT: is_correct=True  confidence=high  (3334ms, $0.0025)
+       reasoning: The statement asserts that for Mersenne numbers $a_k = 2^k - 1$, the greatest common divisor of $a_m$ and $a_n$ is $a_{	ext{gcd}(m,n)}$. This is a well-known an
+       This is a classic and correct theorem about the gcd of Mersenne numbers.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (12194ms, $0.0026)
+       type: { "lean_statement_type": "import Mathlib open Subtype /-- For all positive integers m and n, if a_k = 2^k - 1 for all k 
+       decl: axiom gcd_mersenne : { "lean_statement_type": "import Mathlib open Subtype /-- For all positive integers m and n, if a_k
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean parsing failed. Check punctuation and Lean syntax around quantifiers.
+       feedback: Lean parsing failed. Check punctuation and Lean syntax around quantifiers.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-injective-composition  (expected: INCORRECT)
+  For all functions $f: \mathbb{R} \to \mathbb{R}$ and $g: \mathbb{R} \to \mathbb{R}$, if $g \circ f$ is injective, then $
+  Ground truth: g circ f injective implies f is injective, NOT g. Counterexample: f(x)=e^x (range is (0,inf)), g(x)=x^2. g circ f = e^{2x} is injective, but g is not injective.
+  GPT: is_correct=False  confidence=high  (6375ms, $0.0035)
+       reasoning: The statement is false. If $g 
+ot$ injective, but $f$ maps all of $bR$ into a single point, then $g ig(f(x)ig)$ can still be injective (trivially, since the 
+       The statement is false; the injectivity of $g \circ f$ does not guarantee the injectivity of $g$. A simple counterexample disproves the claim.
+       counterexample: Let $f(x) = 0$ for all $x \in \mathbb{R}$ and $g(x) = 0$ for all $x \in \mathbb{R}$. Then $g \circ f(x) = 0$ is injectiv
+       [error] The implication is not valid: $g$ need not be injective for $g \circ f$ to be injective.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (33324ms, $0.0070)
+       type: ∀ (f g : Real → Real), Function.Injective (g ∘ f) → Function.Injective g
+       decl: axiom comp_inj_implies_g_inj_wrong : ∀ (f g : Real → Real), Function.Injective (g ∘ f) → Function.Injective g
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: f and g are functions from reals to reals
+       feedback: Model notes: This is a standard result in set theory, proved by showing that if g is not injective, then g \circ f is no
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-polynomial-int-values  (expected: CORRECT)
+  For all polynomials $p(x)$ with integer coefficients, if $p(0)$ and $p(1)$ are both odd, then $p$ has no integer roots.
+  GPT: ERROR – HTTPSConnectionPool(host='api.openai.com', port=443): Read timed out. (read timeout=180)
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (10818ms, $0.0023)
+       type: ∀ (p : Polynomial Int), p.coeff 0 % 2 = 1 ∧ p.coeff 1 % 2 = 1 → ¬ (∃ x : Int, p.eval x = 0)
+       decl: axiom poly_odd_no_int_roots : ∀ (p : Polynomial Int), p.coeff 0 % 2 = 1 ∧ p.coeff 1 % 2 = 1 → ¬ (∃ x : Int, p.eval x = 0
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: p is a polynomial with integer coefficients
+       feedback: Model notes: The condition on the constant and linear coefficients ensures odd values, and the conclusion states that th
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-derivative-zero-set  (expected: INCORRECT)
+  For all differentiable functions $f: [0,1] \to \mathbb{R}$, if $f(0) = f(1) = 0$ and $f$ is not identically zero, then t
+  Ground truth: Counterexample: f(x) = x(1-x)sin(1/x(1-x)) for x in (0,1), f(0)=f(1)=0. Differentiable, not identically zero, but f' = 0 at infinitely many points.
+  GPT: is_correct=False  confidence=high  (3437ms, $0.0032)
+       reasoning: The statement is false. Consider the function f(x) = x(1-x) sin(1/x) for x in (0,1], f(0)=0. This function is differentiable on [0,1], vanishes at 0 and 1, is n
+       The claim is false; there exist differentiable functions vanishing at the endpoints whose derivative vanishes at infinitely many points in (0,1).
+       counterexample: f(x) = x(1-x) sin(1/x) for x in (0,1], f(0)=0.
+       [error] The statement fails for differentiable functions with oscillatory behavior near the endpoints, such as f(x) = x(1-x) sin
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30309ms, $0.0064)
+       type: { "lean_statement_type": "∀ (f : Real → Real), DifferentiableOn Real f (Set.Icc 0 1) → f 0 = 0 → f 1 = 0 → (∀ x ∈ Set.Io
+       decl: axiom derivative_zero_set_finite_wrong : { "lean_statement_type": "∀ (f : Real → Real), DifferentiableOn Real f (Set.Icc
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the diagnostics and revise the notation for generating a valid Lean statement.
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-group-order-element  (expected: INCORRECT)
+  For all finite groups $G$ and all integers $d$ dividing $|G|$, there exists an element $g \in G$ with order exactly $d$.
+  Ground truth: Counterexample: Z/2Z x Z/2Z has order 4 and 4 divides |G|=4, but no element has order 4 (all non-identity elements have order 2).
+  GPT: is_correct=False  confidence=high  (2510ms, $0.0028)
+       reasoning: The statement is false: while Lagrange's theorem guarantees that the order of any element divides the group order, the converse is not true in general. There ex
+       The statement is false; not every divisor of the group order is realized as the order of some element in the group.
+       counterexample: The Klein 4-group $V_4 = \mathbb{Z}_2 \times \mathbb{Z}_2$ has order 4, but no element of order 4.
+       [error] The statement incorrectly asserts the converse of Lagrange's theorem, which is not generally true.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30706ms, $0.0065)
+       type: { "lean_statement_type": "∀ (G : Type*) [Group G] [Fintype G] (d : Nat), d ∣ Fintype.card G → ∃ g : G, orderOf g = d", "
+       decl: axiom divisor_order_exists_wrong : { "lean_statement_type": "∀ (G : Type*) [Group G] [Fintype G] (d : Nat), d ∣ Fintype.
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the diagnostics and revise the wording/notation to fix the timeout error.
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-matrix-trace-power  (expected: CORRECT)
+  For all $2 \times 2$ real matrices $A$, we have $\text{tr}(A^2) = \text{tr}(A)^2 - 2\det(A)$.
+  GPT: is_correct=False  confidence=high  (5772ms, $0.0042)
+       reasoning: The formula given is not generally true for all 2x2 real matrices. The correct identity is tr(A^2) = (tr(A))^2 - 2 det(A) only for traceless matrices or in spec
+       The statement is false; the formula does not hold for all 2x2 real matrices.
+       counterexample: Let A = \begin{pmatrix}1 & 0 \\ 0 & 0\end{pmatrix}. Then tr(A) = 1, det(A) = 0, tr(A^2) = 1, but tr(A)^2 - 2 det(A) = 1^
+       [error] The formula fails for general 2x2 matrices; it is not a general theorem.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30740ms, $0.0065)
+       type: theorem matrix_trace_squared_eq_trace_squared_sub_two_det
+       decl: axiom trace_sq_formula : theorem matrix_trace_squared_eq_trace_squared_sub_two_det
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: A : Matrix (Fin 2) (Fin 2) ℝ
+       feedback: Model notes: For any 2x2 real matrix A, the trace of A squared equals the trace of A squared minus twice the determinant
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-convergent-rearrangement  (expected: INCORRECT)
+  For all convergent series $\sum a_n$ of real numbers and all bijections $\sigma: \mathbb{N} \to \mathbb{N}$, the rearran
+  Ground truth: Only true for absolutely convergent series. Riemann rearrangement theorem: any conditionally convergent series can be rearranged to converge to any value.
+  GPT: is_correct=False  confidence=high  (5251ms, $0.0028)
+       reasoning: The statement is false. For conditionally convergent series of real numbers, rearrangements can change the sum or even cause divergence (Riemann rearrangement t
+       The statement is incorrect because it ignores the distinction between absolute and conditional convergence for real series.
+       counterexample: Let $a_n = (-1)^{n+1}/n$ (the alternating harmonic series). The original series converges to $\ln 2$, but rearrangements
+       [error] Fails to require absolute convergence; conditional convergence allows rearrangements to alter the sum.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30944ms, $0.0065)
+       type: theorem
+       decl: axiom rearrangement_same_sum_wrong : theorem
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Model assumptions: ∀ (a : ℕ → ℝ) (σ : ℕ ≃ ℕ); ⊢ (∑' n, a n).Summable
+       feedback: Model notes: The theorem states that for any convergent series of real numbers and any bijection between the natural num
+
+────────────────────────────────────────────────────────────────────────
+  novel-true-floor-sum-identity  (expected: CORRECT)
+  For all positive integers $n$ and all reals $x$, $\lfloor nx \rfloor = \lfloor x \rfloor + \lfloor x + \frac{1}{n} \rflo
+  GPT: ERROR – HTTPSConnectionPool(host='api.openai.com', port=443): Read timed out. (read timeout=180)
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (30044ms, $0.0063)
+       type: { "lean_statement_type": "theorem floor_sum_eq", "assumptions": "n : Nat, x : Real", "notes": "For any positive integer 
+       decl: axiom hermite_floor_identity : { "lean_statement_type": "theorem floor_sum_eq", "assumptions": "n : Nat, x : Real", "not
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the theorem statement for potential revisions based on the diagnostics and revise the notati
+
+────────────────────────────────────────────────────────────────────────
+  novel-false-symmetric-positive-definite  (expected: INCORRECT)
+  For all $n \times n$ real symmetric matrices $A$ and $B$, if $A$ and $B$ are positive definite, then $AB$ is positive de
+  Ground truth: AB need not be symmetric, so 'positive definite' doesn't even apply in the standard sense. Even if we check eigenvalues: A=[[2,1],[1,2]], B=[[2,-1],[-1,2]], both PD but AB=[[3,0],[0,3]]... actually that works. Try A=[[1,0],[0,2]], B=[[2,1],[1,1]]. AB=[[2,1],[2,2]], not symmetric. The product of PD symmetric matrices is not in general symmetric, hence not PD.
+  GPT: is_correct=False  confidence=high  (3584ms, $0.0037)
+       reasoning: While $A$ and $B$ are both real symmetric positive definite matrices, their product $AB$ is not necessarily symmetric, and positive definiteness for non-symmetr
+       The statement is false; the product of two real symmetric positive definite matrices need not be positive definite.
+       counterexample: Let $A = \begin{pmatrix} 2 & 1 \\ 1 & 2 \end{pmatrix}$ and $B = \begin{pmatrix} 2 & -1 \\ -1 & 2 \end{pmatrix}$; both ar
+       [error] The product $AB$ of two symmetric matrices is not necessarily symmetric.
+       [error] Positive definiteness is only defined for symmetric (or Hermitian) matrices.
+       [error] Even if $A$ and $B$ are both positive definite, $AB$ may have negative or complex eigenvalues.
+  Pipeline: valid_lean=False  status=needs_revision  verdict=INCORRECT  (31228ms, $0.0066)
+       type: { "lean_statement_type": "theorem mul_extracted {A B : Matrix n n Real} : A.IsSymm → B.IsSymm → A.PosDef → B.PosDef → (A
+       decl: axiom prod_pos_def_wrong : { "lean_statement_type": "theorem mul_extracted {A B : Matrix n n Real} : A.IsSymm → B.IsSymm
+       feedback: Generated a Lean statement type candidate from natural language input.
+       feedback: Lean returned an error. Inspect diagnostics and revise wording/notation.
+       feedback: LLM final feedback: Inspect the generated Lean statement type and revise wording/notation.
+
+JSON report : /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-20260215T121642Z.json
+Console log : pipe output to /Users/sandeep/Documents/Treehacks 2026/treehacks-2026/benchmarks/results/benchmark-latest.txt via tee
