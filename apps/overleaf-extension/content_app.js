@@ -1536,6 +1536,28 @@ class ZetaApp {
     };
   }
 
+  buildAutocompleteSentDetail(context, endpointUrl, reasonLabel) {
+    const textWindow = String(context.textWindow || "");
+    const contextWindow = String(context.contextWindow || "");
+    const cursorOffset = Number(context.localCursorOffset) || 0;
+    const maxNewTokens = this.settings.mode === "accurate" ? 24 : 16;
+    const temperature = this.settings.mode === "accurate" ? 0.2 : 0.35;
+    const textSnippet = textWindow.slice(Math.max(0, cursorOffset - 50), cursorOffset + 70).replace(/\n/g, "↵").slice(0, 160);
+    const contextTail = contextWindow.slice(-160).replace(/\n/g, "↵").slice(0, 180);
+    const lines = [
+      "Sent to model:",
+      `endpoint: ${endpointUrl}`,
+      `text: ${textWindow.length} chars, cursor_offset: ${cursorOffset}`,
+      `text (around cursor): ${textSnippet || "(empty)"}`,
+      `context: ${contextWindow.length} chars`,
+      `context (tail): ${contextTail || "(empty)"}`,
+      `params: max_new_tokens=${maxNewTokens}, temperature=${temperature}, max_candidates=3, imports=Std`,
+      "",
+      `reason: ${reasonLabel} · prefix (${String(context.prefixText || "").length} chars): ${String(context.prefixText || "").slice(-80)}`,
+    ];
+    return lines.join("\n");
+  }
+
   extractAutocompleteCandidates(payload, context) {
     if (!payload || typeof payload !== "object") {
       return [];
@@ -1668,7 +1690,7 @@ class ZetaApp {
     this.activeAutocomplete = null;
     this.renderTabGhost();
 
-    const autocompleteDetail = `reason: ${reasonLabel} · prefix (${String(context.prefixText || "").length} chars): ${String(context.prefixText || "").slice(-80)}`;
+    const autocompleteDetail = this.buildAutocompleteSentDetail(context, endpointUrl, reasonLabel);
     const liveActivityId = this.addActivity(
       "Autocomplete: fetching…",
       "info",
@@ -1712,11 +1734,16 @@ class ZetaApp {
         }
       }
       const endpointForLog = String(error?.endpointUrl || endpointUrl || "");
-      this.updateActivityById(
+      const failedMessage = `Autocomplete: failed${status ? ` (${status})` : ""}`;
+      const detailText = `${autocompleteDetail}\n${rawMessage.slice(0, 300)}`;
+      const updated = this.updateActivityById(
         liveActivityId,
-        { message: `Autocomplete: failed${status ? ` (${status})` : ""}`, detailText: `${autocompleteDetail}\n${rawMessage.slice(0, 300)}` },
+        { message: failedMessage, detailText },
         { refreshTime: true }
       );
+      if (!updated) {
+        this.addActivity(failedMessage, "error", null, detailText);
+      }
       if (status === 404) {
         this.autocompleteBackoffUntil = Date.now() + 60_000;
         this.reportAutocompleteErrorOnce(
@@ -1761,9 +1788,12 @@ class ZetaApp {
           lines.push(`why no suggestion: ${reasons.join(", ")}`);
         }
         const whyMessage = Array.isArray(reasons) && reasons.length > 0
-          ? `Autocomplete: no suggestion — reason: ${reasons[0]}`
-          : `Autocomplete: no suggestion — reason: ${reasonLabel} (backend gave no reason)`;
-        this.updateActivityById(liveActivityId, { message: whyMessage, detailText: lines.join("\n") }, { refreshTime: true });
+          ? `Autocomplete: no suggestion — ${reasons[0]}`
+          : `Autocomplete: no suggestion — ${reasonLabel} (backend gave no reason)`;
+        const updated = this.updateActivityById(liveActivityId, { message: whyMessage, detailText: lines.join("\n") }, { refreshTime: true });
+        if (!updated) {
+          this.addActivity(whyMessage, "info", null, lines.join("\n"));
+        }
         return;
       }
       const timings = result?.payload?.timings_ms;
@@ -6103,9 +6133,12 @@ class ZetaApp {
     };
 
     const newKey = this.getActivityTitleKey(message);
-    this.activityEntries = this.activityEntries.filter(
-      (e) => this.getActivityTitleKey(e?.message) !== newKey
-    );
+    const isAutocompleteFetching = typeof message === "string" && message.startsWith("Autocomplete: fetching");
+    if (!isAutocompleteFetching) {
+      this.activityEntries = this.activityEntries.filter(
+        (e) => this.getActivityTitleKey(e?.message) !== newKey
+      );
+    }
     this.activityEntries.push(entry);
     this.sortActivityEntriesLatestToEarliest();
     if (this.activityEntries.length > 60) {

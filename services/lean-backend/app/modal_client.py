@@ -472,6 +472,12 @@ async def complete_autocomplete(
         )
     use_herald = _is_herald_root_endpoint(settings.modal_endpoint_url)
     complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
+    logger.info(
+        "modal_autocomplete_request configured=%s resolved_url=%s use_herald=%s",
+        settings.modal_endpoint_url,
+        complete_url,
+        use_herald,
+    )
     herald_system = (system_prompt or getattr(settings, "modal_complete_system_prompt", None) or HERALD_AUTOCOMPLETE_SYSTEM_PROMPT).strip()
     if use_herald:
         payload = _build_herald_autocomplete_payload(request_payload, herald_system)
