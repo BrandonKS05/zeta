@@ -37,11 +37,8 @@ def _endpoint_url(settings: Settings) -> str:
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 
 
-def _token_limit_key(endpoint: str) -> str:
-    """OpenAI uses 'max_tokens'; some other providers use 'max_completion_tokens'."""
-    parsed = urlsplit(endpoint)
-    if parsed.netloc.lower() == "api.openai.com":
-        return "max_tokens"
+def _token_limit_key(_endpoint: str) -> str:
+    """Use max_completion_tokens (OpenAI and others now support/require this)."""
     return "max_completion_tokens"
 
 
