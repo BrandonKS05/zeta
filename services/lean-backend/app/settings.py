@@ -11,6 +11,7 @@ class Settings(BaseModel):
     log_level: str = "INFO"
 
     modal_endpoint_url: str | None = None
+    modal_autocomplete_endpoint_url: str | None = "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/"
     modal_api_key: str | None = None
     modal_use_generate_endpoint: bool = True
     modal_timeout_seconds: float = 20.0
@@ -56,6 +57,10 @@ def get_settings() -> Settings:
         app_name=_env("APP_NAME", "lean-backend"),
         log_level=_env("LOG_LEVEL", "INFO"),
         modal_endpoint_url=_env("MODAL_ENDPOINT_URL"),
+        modal_autocomplete_endpoint_url=_env(
+            "MODAL_AUTOCOMPLETE_ENDPOINT_URL",
+            "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/",
+        ),
         modal_api_key=_env("MODAL_API_KEY"),
         modal_use_generate_endpoint=_env("MODAL_USE_GENERATE_ENDPOINT", "true"),
         modal_timeout_seconds=_env("MODAL_TIMEOUT_SECONDS", "20"),

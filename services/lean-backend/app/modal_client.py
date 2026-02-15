@@ -691,18 +691,28 @@ async def complete_autocomplete(
 ) -> dict[str, Any]:
     """Call Modal /v1/complete, or Herald POST / with autocomplete system prompt when endpoint is root."""
     settings = settings or get_settings()
-    if not settings.modal_endpoint_url:
+    autocomplete_endpoint_url = settings.modal_autocomplete_endpoint_url or settings.modal_endpoint_url
+    if not autocomplete_endpoint_url:
         raise ModalClientError(
             "MODAL_ENDPOINT_URL is not configured. Set it on the lean-backend server (e.g. to your Modal app URL like https://user--app.modal.run or .../v1/generate) so autocomplete can run."
         )
-    complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
-    fallback_url = _modal_base_url(settings.modal_endpoint_url)
-    url_candidates: list[str] = [complete_url]
-    if fallback_url not in url_candidates:
-        url_candidates.append(fallback_url)
+
+    def _append_autocomplete_urls(seed_url: str, out: list[str]) -> None:
+        complete = _resolve_modal_complete_url(seed_url)
+        root = _modal_base_url(seed_url)
+        for candidate in (complete, root):
+            if candidate not in out:
+                out.append(candidate)
+
+    url_candidates: list[str] = []
+    _append_autocomplete_urls(autocomplete_endpoint_url, url_candidates)
+    if settings.modal_endpoint_url and settings.modal_endpoint_url != autocomplete_endpoint_url:
+        _append_autocomplete_urls(settings.modal_endpoint_url, url_candidates)
+
     logger.info(
-        "modal_autocomplete_request configured=%s resolved_urls=%s",
+        "modal_autocomplete_request configured=%s autocomplete=%s resolved_urls=%s",
         settings.modal_endpoint_url,
+        autocomplete_endpoint_url,
         url_candidates,
     )
     herald_system = (system_prompt or getattr(settings, "modal_complete_system_prompt", None) or HERALD_AUTOCOMPLETE_SYSTEM_PROMPT).strip()
