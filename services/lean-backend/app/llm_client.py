@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -22,12 +23,79 @@ class _RetriableLLMError(LLMClientError):
 
 
 _ALLOWED_SOURCES = {"latex", "lean", "both", "unknown"}
+_INTERPRET_MAX_DIAGNOSTICS = 8
+_INTERPRET_NL_INPUT_MAX_CHARS = 2_500
+_INTERPRET_CODE_MAX_CHARS = 3_500
+_INTERPRET_STDERR_MAX_CHARS = 2_000
+_INTERPRET_STDOUT_MAX_CHARS = 1_200
+_INTERPRET_DIAGNOSTICS_MAX_CHARS = 2_500
 
 
 def _endpoint_url(settings: Settings) -> str:
     if settings.llm_endpoint_url:
         return settings.llm_endpoint_url
     return f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+
+def _should_enforce_json_mode(endpoint: str) -> bool:
+    """Use strict JSON mode only for OpenAI Chat Completions."""
+    parsed = urlsplit(endpoint)
+    return parsed.netloc.lower() == "api.openai.com"
+
+
+def _interpret_json_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "lean_interpretation",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["summary", "items", "suggestions"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "error",
+                                "probable_cause",
+                                "suggested_fix",
+                                "source",
+                                "latex_start",
+                                "latex_end",
+                                "latex_excerpt",
+                                "lean_line",
+                                "lean_column",
+                                "replacement",
+                                "confidence",
+                            ],
+                            "properties": {
+                                "error": {"type": "string"},
+                                "probable_cause": {"type": ["string", "null"]},
+                                "suggested_fix": {"type": ["string", "null"]},
+                                "source": {
+                                    "type": "string",
+                                    "enum": ["latex", "lean", "both", "unknown"],
+                                },
+                                "latex_start": {"type": ["integer", "null"]},
+                                "latex_end": {"type": ["integer", "null"]},
+                                "latex_excerpt": {"type": ["string", "null"]},
+                                "lean_line": {"type": ["integer", "null"]},
+                                "lean_column": {"type": ["integer", "null"]},
+                                "replacement": {"type": ["string", "null"]},
+                                "confidence": {"type": ["number", "null"]},
+                            },
+                        },
+                    },
+                    "suggestions": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    }
 
 
 def _as_int(value: Any) -> int | None:
@@ -243,6 +311,19 @@ def _extract_message_content(payload: dict[str, Any]) -> str | None:
     return content if isinstance(content, str) else None
 
 
+def _fallback_interpretation(
+    *,
+    nl_input: str,
+    compile_result: CompileResult,
+    summary: str = "Lean compiler errors detected.",
+) -> Interpretation:
+    return _normalize_interpretation(
+        {"summary": summary, "items": [], "suggestions": []},
+        nl_input=nl_input,
+        compile_result=compile_result,
+    )
+
+
 async def interpret_errors(
     code: str,
     compile_result: CompileResult,
@@ -263,7 +344,8 @@ async def interpret_errors(
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
     diagnostics_json = json.dumps(
-        [diag.model_dump() for diag in compile_result.diagnostics], ensure_ascii=False
+        [diag.model_dump() for diag in compile_result.diagnostics[:_INTERPRET_MAX_DIAGNOSTICS]],
+        ensure_ascii=False,
     )
 
     user_prompt = (
@@ -272,13 +354,14 @@ async def interpret_errors(
         "Each item should include: error, probable_cause, suggested_fix, source (latex|lean|both|unknown), "
         "latex_start (0-based char offset in original NL/LaTeX), latex_end, latex_excerpt, lean_line, lean_column, "
         "replacement (optional edit text), confidence (0-1).\n\n"
+        "Keep output compact: at most 2 items and at most 3 suggestions.\n\n"
         "If you can map the issue to the original NL/LaTeX input, provide accurate latex_start/latex_end. "
         "If uncertain, use null for those fields.\n\n"
-        f"Original NL/LaTeX input:\n{truncate_text(nl_input, 8_000)}\n\n"
-        f"Lean code:\n{truncate_text(code, 8_000)}\n\n"
-        f"Compiler stderr:\n{truncate_text(compile_result.stderr, 8_000)}\n\n"
-        f"Compiler stdout:\n{truncate_text(compile_result.stdout, 8_000)}\n\n"
-        f"Structured diagnostics:\n{truncate_text(diagnostics_json, 8_000)}"
+        f"Original NL/LaTeX input:\n{truncate_text(nl_input, _INTERPRET_NL_INPUT_MAX_CHARS)}\n\n"
+        f"Lean code:\n{truncate_text(code, _INTERPRET_CODE_MAX_CHARS)}\n\n"
+        f"Compiler stderr:\n{truncate_text(compile_result.stderr, _INTERPRET_STDERR_MAX_CHARS)}\n\n"
+        f"Compiler stdout:\n{truncate_text(compile_result.stdout, _INTERPRET_STDOUT_MAX_CHARS)}\n\n"
+        f"Structured diagnostics:\n{truncate_text(diagnostics_json, _INTERPRET_DIAGNOSTICS_MAX_CHARS)}"
     )
 
     payload = {
@@ -293,6 +376,10 @@ async def interpret_errors(
             {"role": "user", "content": user_prompt},
         ],
     }
+    if _should_enforce_json_mode(endpoint):
+        payload["response_format"] = _interpret_json_response_format()
+    if settings.llm_max_completion_tokens > 0:
+        payload["max_completion_tokens"] = settings.llm_max_completion_tokens
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
 
@@ -330,11 +417,22 @@ async def interpret_errors(
 
             content = _extract_message_content(data)
             if content is None:
-                raise LLMClientError("LLM response missing message content")
+                logger.warning("llm_interpretation_missing_content fallback_to_compile")
+                return _fallback_interpretation(
+                    nl_input=nl_input,
+                    compile_result=compile_result,
+                )
 
             parsed = extract_json_object(content)
             if parsed is None:
-                raise LLMClientError("LLM message content was not valid JSON")
+                logger.warning(
+                    "llm_interpretation_non_json_content fallback_to_compile content_prefix=%s",
+                    truncate_text(content, 200),
+                )
+                return _fallback_interpretation(
+                    nl_input=nl_input,
+                    compile_result=compile_result,
+                )
 
             return _normalize_interpretation(
                 parsed,

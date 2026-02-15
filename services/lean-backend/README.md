@@ -87,6 +87,7 @@ Note on toolchain persistence:
   - `LLM_BASE_URL` (default `https://api.openai.com/v1`)
   - `LLM_API_KEY`
   - `LLM_MODEL` (default `gpt-5-nano`)
+  - `LLM_MAX_COMPLETION_TOKENS` (default `220`; caps interpretation output size/latency)
   - `LLM_TIMEOUT_SECONDS` (default `30`)
   - `LLM_MAX_RETRIES` (default `1`)
   - `LLM_HIGHLIGHT_TIMEOUT_SECONDS` (default `12`)
