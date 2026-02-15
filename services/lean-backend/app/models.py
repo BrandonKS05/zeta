@@ -45,6 +45,7 @@ class PipelineStage(BaseModel):
         "modal_retry_thinking",
         "modal_retry_analyze",
         "lean_compile",
+        "patch_lean",
         "llm_repair_compile",
         "llm_repair_def_check",
         "semantic_validation",

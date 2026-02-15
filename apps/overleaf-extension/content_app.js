@@ -4677,35 +4677,13 @@ class ZetaApp {
     }
 
     const requestPromise = (async () => {
-      let effectiveRequest = request;
       emitProgress("prepare_request", {
         requestUrl: request.requestUrl,
         elapsedMs: 0,
       });
-      let response;
-      try {
-        response = await this.sendBackendRequest(request, onProgress);
-      } catch (error) {
-        const fallbackRequest = request?.fallbackRequest;
-        const canFallback = !!(
-          fallbackRequest &&
-          typeof fallbackRequest === "object" &&
-          typeof fallbackRequest.requestUrl === "string" &&
-          fallbackRequest.requestUrl
-        );
-        if (!canFallback) {
-          throw error;
-        }
-        emitProgress("fallback_to_legacy", {
-          requestUrl: String(fallbackRequest.requestUrl),
-          previousRequestUrl: String(request.requestUrl || ""),
-          reason: String(error?.message || "primary_request_failed"),
-        });
-        response = await this.sendBackendRequest(fallbackRequest, onProgress);
-        effectiveRequest = fallbackRequest;
-      }
+      const response = await this.sendBackendRequest(request, onProgress);
       emitProgress("response_ready", {
-        requestUrl: effectiveRequest.requestUrl,
+        requestUrl: request.requestUrl,
         elapsedMs: 0,
       });
 
@@ -4713,7 +4691,7 @@ class ZetaApp {
       this.responseCache.set(signature, {
         timestamp: cacheTimestamp,
         payload: response,
-        request: effectiveRequest,
+        request,
       });
 
       for (const [key, value] of this.responseCache.entries()) {
@@ -4725,7 +4703,7 @@ class ZetaApp {
       return {
         payload: response,
         cacheHit: false,
-        request: effectiveRequest,
+        request,
       };
     })();
 
@@ -4831,7 +4809,6 @@ class ZetaApp {
             chunks: [chunkPayload],
           },
         },
-        fallbackRequest: legacyRequest,
       };
     }
 
@@ -4873,14 +4850,7 @@ class ZetaApp {
     };
 
     const attempts = Math.max(0, Number(this.settings.retries) || 0) + 1;
-    let effectiveTimeoutMs = this.resolveEffectiveTimeoutMs(request.requestUrl, request.requestBody);
-    if (
-      request?.fallbackRequest &&
-      /\/v1\/lean\/solve(?:\/)?$/.test(String(request.requestUrl || "")) &&
-      effectiveTimeoutMs > 22000
-    ) {
-      effectiveTimeoutMs = 22000;
-    }
+    const effectiveTimeoutMs = this.resolveEffectiveTimeoutMs(request.requestUrl, request.requestBody);
     let lastError = null;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -5696,10 +5666,7 @@ class ZetaApp {
     if (elapsed <= 6500) {
       return "model inference";
     }
-    if (elapsed <= 20000) {
-      return "lean compile";
-    }
-    return "lean compile (long run)";
+    return "lean compile";
   }
 
   describeLivePipelineStep(step, meta = {}) {
@@ -6003,6 +5970,27 @@ class ZetaApp {
         detailLines.push(
           `${index + 1}. ${String(stage?.stage || "stage")} · ${outcome} · attempted=${attempted} · duration_ms=${durationLabel}`
         );
+        const stageDetails = stage?.details && typeof stage.details === "object" ? stage.details : {};
+        for (const [key, value] of Object.entries(stageDetails)) {
+          if (value === null || value === undefined) continue;
+          if (typeof value === "string" && value.includes("\n")) {
+            detailLines.push(`  ${key}:`);
+            const maxLines = 120;
+            const lines = value.split(/\r?\n/).slice(0, maxLines);
+            for (const line of lines) {
+              detailLines.push("    " + line);
+            }
+            if (value.split(/\r?\n/).length > maxLines) {
+              detailLines.push("    ...");
+            }
+          } else if (Array.isArray(value)) {
+            detailLines.push("  " + key + ": " + JSON.stringify(value));
+          } else if (typeof value === "object") {
+            detailLines.push("  " + key + ": " + JSON.stringify(value));
+          } else {
+            detailLines.push("  " + key + ": " + String(value));
+          }
+        }
       }
     } else {
       const liveTrace = ensureArray(sentenceEntry?.livePipelineTrace);

@@ -572,6 +572,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         raise HTTPException(status_code=502, detail=f"Modal generation failed: {exc}") from exc
     modal_elapsed_ms = (time.perf_counter() - modal_start) * 1000
     logger.info("stage_complete stage=modal_generation duration_ms=%.2f", modal_elapsed_ms)
+    _max_detail_chars = 14_000
     stages.append(
         PipelineStage(
             stage="modal_generation",
@@ -581,6 +582,11 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             details={
                 "endpoint": settings.modal_endpoint_url or "",
                 "metadata_keys": sorted(generated.metadata.keys()),
+                "lean_code_chars": len(generated.code),
+                "lean_code": (
+                    generated.code[: _max_detail_chars]
+                    + ("..." if len(generated.code) > _max_detail_chars else "")
+                ),
             },
         )
     )
@@ -609,17 +615,17 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                     compile_result = compile_repaired
                     stages.append(
                         PipelineStage(
-                            stage="llm_repair_compile",
+                            stage="patch_lean",
                             attempted=True,
                             success=True,
                             duration_ms=repair_elapsed_ms,
-                            details={"reason": "syntactical_fix_then_recompile"},
+                            details={"reason": "fixed_with_openai_then_recompiled"},
                         )
                     )
                 else:
                     stages.append(
                         PipelineStage(
-                            stage="llm_repair_compile",
+                            stage="patch_lean",
                             attempted=True,
                             success=False,
                             duration_ms=repair_elapsed_ms,
@@ -629,7 +635,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             else:
                 stages.append(
                     PipelineStage(
-                        stage="llm_repair_compile",
+                        stage="patch_lean",
                         attempted=True,
                         success=False,
                         duration_ms=repair_elapsed_ms,
@@ -640,7 +646,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             repair_elapsed_ms = (time.perf_counter() - repair_start) * 1000
             stages.append(
                 PipelineStage(
-                    stage="llm_repair_compile",
+                    stage="patch_lean",
                     attempted=True,
                     success=False,
                     duration_ms=repair_elapsed_ms,
@@ -648,13 +654,11 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                 )
             )
 
-    # If compile failed with def-without-body / #check error and we didn't use thinking mode,
-    # retry once with iteration loop so refinement can fix the statement.
+    # If compile failed with def-without-body / #check error, try one LLM repair pass to fix the Lean code.
     def _is_def_check_compile_error(code: str, result: CompileResult) -> bool:
         if result.success:
             return False
         err = " ".join(d.raw or d.message for d in result.diagnostics).lower()
-        # Match common Lean errors: incomplete def (expected ':=', 'where' or '|'), #check token, etc.
         err_matches = (
             "expected ':=" in err
             or "expected 'where'" in err
@@ -665,90 +669,10 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         )
         if not err_matches:
             return False
-        # Code has a def (possibly noncomputable/unsafe/partial) and/or #check
         code_lower = code.lower()
         has_def = "def " in code_lower or "noncomputable def" in code_lower
         has_check = "#check" in code
         return has_def or has_check
-
-    retry_with_thinking = (
-        not compile_result.success
-        and payload.max_iters <= 1
-        and _is_def_check_compile_error(generated.code, compile_result)
-    )
-    if retry_with_thinking:
-        thinking_context = {**(payload.context or {}), "mode": "thinking"}
-        try:
-            generated_retry = await generate_lean(
-                payload.nl_input,
-                context=thinking_context,
-                max_iters=3,
-                settings=settings,
-            )
-            generated_retry = generated_retry.model_copy(
-                update={"code": _normalize_generated_lean_code(generated_retry.code)}
-            )
-            compile_retry = await compile_lean(generated_retry.code, settings=settings)
-            if compile_retry.success or not _is_def_check_compile_error(
-                generated_retry.code, compile_retry
-            ):
-                generated = generated_retry
-                compile_result = compile_retry
-                stages.append(
-                    PipelineStage(
-                        stage="modal_retry_thinking",
-                        attempted=True,
-                        success=compile_retry.success,
-                        duration_ms=0,
-                        details={
-                            "reason": "def_header_fix",
-                            "resolved": compile_retry.success,
-                        },
-                    )
-                )
-        except Exception:  # noqa: BLE001
-            pass
-
-    # If the fast /v1/generate path still returns malformed def/#check output,
-    # force one retry against /v1/analyze for higher reliability.
-    force_retry_with_analyze = (
-        not compile_result.success
-        and payload.max_iters <= 1
-        and _is_def_check_compile_error(generated.code, compile_result)
-    )
-    if force_retry_with_analyze:
-        analyze_settings = settings.model_copy(update={"modal_use_generate_endpoint": False})
-        analyze_context = {**(payload.context or {}), "mode": "fast"}
-        try:
-            generated_analyze = await generate_lean(
-                payload.nl_input,
-                context=analyze_context,
-                max_iters=1,
-                settings=analyze_settings,
-            )
-            generated_analyze = generated_analyze.model_copy(
-                update={"code": _normalize_generated_lean_code(generated_analyze.code)}
-            )
-            compile_analyze = await compile_lean(generated_analyze.code, settings=settings)
-            if compile_analyze.success or not _is_def_check_compile_error(
-                generated_analyze.code, compile_analyze
-            ):
-                generated = generated_analyze
-                compile_result = compile_analyze
-                stages.append(
-                    PipelineStage(
-                        stage="modal_retry_analyze",
-                        attempted=True,
-                        success=compile_analyze.success,
-                        duration_ms=0,
-                        details={
-                            "reason": "force_analyze_endpoint",
-                            "resolved": compile_analyze.success,
-                        },
-                    )
-                )
-        except Exception:  # noqa: BLE001
-            pass
 
     # If still failing with def/#check error, try one LLM repair pass to fix the Lean code.
     if (
@@ -774,11 +698,11 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
                     compile_result = compile_repaired
                     stages.append(
                         PipelineStage(
-                            stage="llm_repair_def_check",
+                            stage="patch_lean",
                             attempted=True,
                             success=True,
                             duration_ms=0,
-                            details={"reason": "def_check_fixed"},
+                            details={"reason": "def_check_fixed_with_openai"},
                         )
                     )
         except Exception:  # noqa: BLE001
@@ -790,6 +714,9 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         compile_elapsed_ms,
         compile_result.success,
     )
+    _max_out_chars = 4000
+    _stdout = compile_result.stdout or ""
+    _stderr = compile_result.stderr or ""
     stages.append(
         PipelineStage(
             stage="lean_compile",
@@ -797,9 +724,19 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             success=compile_result.success,
             duration_ms=compile_elapsed_ms,
             details={
+                "success": compile_result.success,
+                "stdout": _stdout[:_max_out_chars] + ("..." if len(_stdout) > _max_out_chars else ""),
+                "stderr": _stderr[:_max_out_chars] + ("..." if len(_stderr) > _max_out_chars else ""),
                 "diagnostic_count": len(compile_result.diagnostics),
-                "stdout_len": len(compile_result.stdout),
-                "stderr_len": len(compile_result.stderr),
+                "diagnostics": [
+                    {
+                        "severity": d.severity,
+                        "message": (d.message or "")[: 500],
+                        "line": d.line,
+                        "column": d.column,
+                    }
+                    for d in compile_result.diagnostics[:20]
+                ],
             },
         )
     )

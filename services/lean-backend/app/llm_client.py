@@ -358,10 +358,12 @@ async def repair_lean_compile_errors(
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
     user_prompt = (
-        "This Lean 4 code fails to compile. Fix only syntax/compilation errors so it compiles.\n\n"
-        "Rules: Make only syntactical changes (fix tokens, brackets, types, names). "
-        "Do not change the core mathematical logic or the meaning of the statements. "
-        "Preserve imports, set_option, and the intent of the original code.\n\n"
+        "This Lean 4 code fails to compile. Fix the compilation errors below so the code compiles.\n\n"
+        "Rules:\n"
+        "- Fix syntax/compilation errors: tokens, brackets, types, names.\n"
+        "- If the error says \"unexpected token '#check'\", \"expected ':='\", \"expected 'where'\", \"expected '|'\", or \"incomplete def\": "
+        "the code has a `def` (or `noncomputable def`) with no body. Replace that incomplete def with an `axiom` whose type is the def's return type, and keep any `#check` lines.\n"
+        "- Do not change the core mathematical logic or the meaning of the statements. Preserve imports, set_option, namespace, and end.\n\n"
         "Compiler errors / output:\n"
         f"{error_block}\n\n"
         "Return only the corrected Lean 4 source code, no markdown fences and no explanation.\n\n"
@@ -374,8 +376,9 @@ async def repair_lean_compile_errors(
             {
                 "role": "system",
                 "content": (
-                    "You are an expert Lean 4 engineer. Fix only syntax and compilation errors. "
-                    "Do not alter mathematical meaning or logic. Return only the corrected Lean 4 source code, no markdown, no explanation."
+                    "You are an expert Lean 4 engineer. Fix compilation errors so the code compiles. "
+                    "If the error involves #check or a def without a body (expected ':=', 'where' or '|'), replace the incomplete def with an axiom and keep #check. "
+                    "Return only the corrected Lean 4 source code, no markdown, no explanation."
                 ),
             },
             {"role": "user", "content": user_prompt},

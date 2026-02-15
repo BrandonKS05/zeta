@@ -381,9 +381,10 @@ def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pyte
     asyncio.run(_run())
 
 
-def test_solve_retries_force_analyze_after_def_check_failure(
+def test_solve_llm_repair_def_check_after_def_check_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """After first compile fails with def/#check error, LLM repair fixes it; no fallback to /v1/analyze."""
     bad_code = (
         "import Std\n\n"
         "set_option autoImplicit false\n\n"
@@ -400,7 +401,7 @@ def test_solve_retries_force_analyze_after_def_check_failure(
         "#check rational_repr\n"
         "end MathGrammar\n"
     )
-    call_modes: list[tuple[str, bool]] = []
+    generate_calls: list[int] = []
 
     async def fake_generate_lean(
         prompt: str,
@@ -408,14 +409,8 @@ def test_solve_retries_force_analyze_after_def_check_failure(
         max_iters: int = 1,
         settings=None,
     ) -> GeneratedLean:
-        mode = str((context or {}).get("mode") or "fast")
-        use_generate = bool(getattr(settings, "modal_use_generate_endpoint", True))
-        call_modes.append((mode, use_generate))
-        if use_generate:
-            return GeneratedLean(code=bad_code, metadata={"status": "unchecked", "is_valid_lean": False})
-        if mode == "thinking":
-            return GeneratedLean(code=bad_code, metadata={"status": "unchecked", "is_valid_lean": False})
-        return GeneratedLean(code=good_code, metadata={"status": "ok", "is_valid_lean": True})
+        generate_calls.append(1)
+        return GeneratedLean(code=bad_code, metadata={"status": "unchecked", "is_valid_lean": False})
 
     async def fake_compile_lean(code: str, settings=None) -> CompileResult:
         if "def zeta_candidate" in code:
@@ -434,8 +429,18 @@ def test_solve_retries_force_analyze_after_def_check_failure(
             )
         return CompileResult(success=True, stdout="", stderr="", diagnostics=[])
 
+    async def fake_repair_lean_compile_errors(
+        code: str, compile_result, settings=None
+    ) -> str | None:
+        return None
+
+    async def fake_repair_lean_def_check(code: str, diag_msg: str, settings=None) -> str | None:
+        return good_code
+
     monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
     monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.repair_lean_compile_errors", fake_repair_lean_compile_errors)
+    monkeypatch.setattr("app.main.repair_lean_def_check", fake_repair_lean_def_check)
 
     async def _run() -> None:
         transport = ASGITransport(app=app)
@@ -449,17 +454,20 @@ def test_solve_retries_force_analyze_after_def_check_failure(
         payload = response.json()
         assert payload["compile"]["success"] is True
         assert "rational_repr" in payload["lean_code"]
-        retry_stage = next(
-            stage for stage in payload["pipeline"]["stages"] if stage["stage"] == "modal_retry_analyze"
+        stage_names = [s["stage"] for s in payload["pipeline"]["stages"]]
+        assert "modal_retry_analyze" not in stage_names
+        assert "modal_retry_thinking" not in stage_names
+        repair_stage = next(
+            (s for s in payload["pipeline"]["stages"] if s["stage"] == "patch_lean"),
+            None,
         )
-        assert retry_stage["attempted"] is True
-        assert retry_stage["success"] is True
+        assert repair_stage is not None
+        assert repair_stage["attempted"] is True
+        assert repair_stage["success"] is True
 
     asyncio.run(_run())
 
-    assert call_modes[0] == ("fast", True)
-    assert ("thinking", True) in call_modes
-    assert ("fast", False) in call_modes
+    assert len(generate_calls) == 1
 
 
 def test_solve_uses_modal_semantic_interpretation_on_compile_success(

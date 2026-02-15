@@ -586,7 +586,7 @@
         outcome: String(stageMatch[3] || "unknown").toLowerCase(),
         attempted: String(stageMatch[4] || "").toLowerCase() === "true",
         durationMs: Number.isFinite(durationMs) ? durationMs : null,
-        details: details.join(" · "),
+        details: details.join("\n"),
       });
     }
 
@@ -632,6 +632,18 @@
     return "active";
   }
 
+  function pipelineStageDisplayLabel(stageId) {
+    const id = String(stageId || "").trim();
+    if (id === "patch_lean" || id === "llm_repair_compile" || id === "llm_repair_def_check") return "Patching lean";
+    if (id === "modal_generation") return "Model inference";
+    if (id === "lean_compile") return "Lean compile";
+    if (id === "semantic_validation") return "Semantic validation";
+    if (id === "llm_interpretation") return "LLM interpretation";
+    if (id === "highlight_resolution") return "Highlight resolution";
+    if (id) return id.replace(/_/g, " ");
+    return "stage";
+  }
+
   function buildActivityPipelineNodes(parsedTrace) {
     if (!parsedTrace || typeof parsedTrace !== "object") {
       return [];
@@ -646,7 +658,7 @@
           : "--";
         const attempted = stage?.attempted === false ? "attempted=false" : "attempted=true";
         return {
-          label: String(stage?.stage || `stage ${stage?.index || "?"}`),
+          label: pipelineStageDisplayLabel(stage?.stage) || String(stage?.stage || `stage ${stage?.index || "?"}`),
           meta: `${attempted} · ${durationLabel}`,
           outcome: normalizePipelineOutcome(stage?.outcome, stage?.stage),
         };
@@ -848,7 +860,7 @@
       toggle.setAttribute("aria-expanded", "false");
       const name = document.createElement("strong");
       name.className = "zeta-pipeline-stage-name";
-      name.textContent = `${stage.index}. ${stage.stage}`;
+      name.textContent = `${stage.index}. ${pipelineStageDisplayLabel(stage.stage)}`;
       const meta = document.createElement("span");
       meta.className = "zeta-pipeline-stage-meta";
       const durationLabel = Number.isFinite(Number(stage.durationMs))
@@ -862,7 +874,7 @@
       body.hidden = true;
       const details = document.createElement("p");
       details.className = "zeta-pipeline-stage-details";
-      details.textContent = truncatePipelineText(stage.details || "No stage details available.", 800);
+      details.textContent = truncatePipelineText(stage.details || "No stage details available.", 6000);
       body.appendChild(details);
 
       const isExpanded = expandedPipelineStageIds.has(stageId) || index === 0;
