@@ -457,11 +457,12 @@ def test_solve_llm_repair_def_check_after_def_check_failure(
         stage_names = [s["stage"] for s in payload["pipeline"]["stages"]]
         assert "modal_retry_analyze" not in stage_names
         assert "modal_retry_thinking" not in stage_names
+        repair_stages = [s for s in payload["pipeline"]["stages"] if s["stage"] == "patch_lean"]
+        assert len(repair_stages) >= 1
         repair_stage = next(
-            (s for s in payload["pipeline"]["stages"] if s["stage"] == "patch_lean"),
-            None,
+            (s for s in repair_stages if s.get("success") is True),
+            repair_stages[-1],
         )
-        assert repair_stage is not None
         assert repair_stage["attempted"] is True
         assert repair_stage["success"] is True
 

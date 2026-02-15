@@ -176,9 +176,9 @@ const MODAL_BASE_URL =
   "https://amirzeinali--herald-translator-translator-v1-translate-batch.modal.run";
 const DEFAULT_MODAL_ANALYZE_URL = `${MODAL_BASE_URL}/v1/analyze`;
 const DEFAULT_LEAN_SOLVE_URL = "http://13.57.35.202:8000/v1/lean/solve";
-const DEFAULT_MODAL_COMPLETE_URL = `${MODAL_BASE_URL}/v1/complete`;
+const DEFAULT_LEAN_COMPLETE_URL = "http://13.57.35.202:8000/v1/lean/complete";
 const HARDCODED_ANALYZE_URL = DEFAULT_LEAN_SOLVE_URL;
-const HARDCODED_COMPLETE_URL = DEFAULT_MODAL_COMPLETE_URL;
+const HARDCODED_COMPLETE_URL = DEFAULT_LEAN_COMPLETE_URL;
 
 class ZetaApp {
   constructor() {
@@ -1346,6 +1346,10 @@ class ZetaApp {
   }
 
   resolveAutocompleteEndpoint() {
+    const base = HARDCODED_ANALYZE_URL;
+    if (base && /\/v1\/lean\/solve\/?$/.test(base)) {
+      return base.replace(/\/v1\/lean\/solve\/?$/, "/v1/lean/complete");
+    }
     return HARDCODED_COMPLETE_URL;
   }
 
@@ -3372,6 +3376,14 @@ class ZetaApp {
 
       let entry = this.sentenceCache.get(key);
       if (!entry || entry.signature !== signature) {
+        // Reuse a ready result for the same logical sentence (same chunk+text) so we don't re-analyze
+        let readyFrom = null;
+        for (const [, e] of this.sentenceCache.entries()) {
+          if (e.signature === signature && e.status === "ready") {
+            readyFrom = e;
+            break;
+          }
+        }
         entry = {
           key,
           signature,
@@ -3380,18 +3392,21 @@ class ZetaApp {
           end: segment.end,
           chunkId: segment.chunkId || null,
           shouldAnalyze,
-          status: "pending",
-          issues: [],
-          persistentIssues: [],
-          diagnostics: [],
-          hasError: false,
-          inferenceMs: null,
-          lastRequest: null,
-          lastResponse: null,
-          lastCacheHit: false,
-          updatedAt: 0,
+          status: readyFrom ? "ready" : "pending",
+          issues: readyFrom ? [...(readyFrom.issues || [])] : [],
+          persistentIssues: readyFrom ? [...(readyFrom.persistentIssues || [])] : [],
+          diagnostics: readyFrom ? [...(readyFrom.diagnostics || [])] : [],
+          hasError: readyFrom ? !!readyFrom.hasError : false,
+          inferenceMs: readyFrom ? readyFrom.inferenceMs : null,
+          lastRequest: readyFrom ? readyFrom.lastRequest : null,
+          lastResponse: readyFrom ? readyFrom.lastResponse : null,
+          lastCacheHit: readyFrom ? !!readyFrom.lastCacheHit : false,
+          updatedAt: readyFrom ? (readyFrom.updatedAt || now) : 0,
           lastSeenAt: now,
         };
+        if (readyFrom?.activityLog) {
+          entry.activityLog = readyFrom.activityLog;
+        }
         this.sentenceCache.set(key, entry);
       } else {
         entry.text = sentenceText;
@@ -3411,8 +3426,12 @@ class ZetaApp {
         continue;
       }
 
+      // Don't re-analyze successfully compiled sentences (no TTL expiry for "ready")
       const stale = now - (entry.updatedAt || 0) > CACHE_TTL_MS;
-      const needsFetch = force || entry.status === "pending" || stale;
+      const needsFetch =
+        force ||
+        entry.status === "pending" ||
+        (stale && entry.status !== "ready");
       if (needsFetch) {
         entry.status = "pending";
         pending.push(entry);

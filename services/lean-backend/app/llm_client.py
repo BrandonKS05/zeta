@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -430,17 +430,19 @@ async def repair_lean_compile_errors(
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
     system_content = (
-        "You are an expert Lean 4 engineer. Fix compilation errors so the code compiles. "
+        "You are an expert Lean 4 engineer. Fix only type/syntax/compilation errors so the code compiles. "
         "If the error involves #check or a def without a body (expected ':=', 'where' or '|'), replace the incomplete def with an axiom and keep #check. "
+        "Do NOT introduce or define new variables or symbols that are not in the original statement (e.g. if the error is 'unknown identifier', do not invent a definition—leave the error so the user sees the symbol is undefined). "
         "Return only the corrected Lean 4 source code, no markdown, no explanation."
     )
     user_prompt = (
-        "This Lean 4 code fails to compile. Fix the compilation errors below so the code compiles.\n\n"
+        "This Lean 4 code fails to compile. Fix only compilation errors below (syntax, types, brackets, names that are typos).\n\n"
         "Rules:\n"
-        "- Fix syntax/compilation errors: tokens, brackets, types, names.\n"
+        "- Fix syntax/type errors only: tokens, brackets, types, name typos.\n"
         "- If the error says \"unexpected token '#check'\", \"expected ':='\", \"expected 'where'\", \"expected '|'\", or \"incomplete def\": "
         "the code has a `def` (or `noncomputable def`) with no body. Replace that incomplete def with an `axiom` whose type is the def's return type, and keep any `#check` lines.\n"
-        "- Do not change the core mathematical logic or the meaning of the statements. Preserve imports, set_option, namespace, and end.\n\n"
+        "- Do NOT add definitions for undefined variables/symbols (e.g. 'unknown identifier'). Leave such errors so the user is told the symbol is not defined.\n"
+        "- Do not change the core mathematical logic or introduce new identifiers. Preserve imports, set_option, namespace, and end.\n\n"
         "Compiler errors / output:\n"
         f"{error_block}\n\n"
         "Return only the corrected Lean 4 source code, no markdown fences and no explanation.\n\n"
@@ -552,14 +554,19 @@ async def repair_lean_def_check(
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
-    system_content = "You are an expert Lean 4 engineer. Return only the corrected Lean 4 source code, nothing else."
+    system_content = (
+        "You are an expert Lean 4 engineer. Fix only def-without-body / #check errors: replace the incomplete def with an axiom. "
+        "Do NOT introduce or define new variables that are not in the original (e.g. do not add definitions for undefined identifiers). "
+        "Return only the corrected Lean 4 source code, nothing else."
+    )
     user_prompt = (
         "This Lean 4 code fails to compile with the following error:\n\n"
         f"{diagnostic_message}\n\n"
         "The problem is that a `def` (or `noncomputable def`) declaration has no body (no `:=`). "
-        "Rewrite the code so it compiles: replace the incomplete def with an axiom whose type is the def's type. "
+        "Rewrite so it compiles: replace the incomplete def with an axiom whose type is the def's type. "
         "For example, change `def foo (x : ℝ) : Set ℕ` (with no body) into "
         "`axiom foo : (x : ℝ) → Set ℕ` and keep `#check foo`.\n\n"
+        "Do NOT add definitions for undefined symbols (e.g. if the error mentions 'unknown identifier', do not invent a definition). "
         "Keep the same imports, set_option, namespace, and end. Return only the fixed Lean code, no markdown fences and no explanation.\n\n"
         f"Broken Lean code:\n{truncate_text(code, _REPAIR_CODE_MAX_CHARS)}"
     )
@@ -754,6 +761,127 @@ async def interpret_errors(
         )
 
     return interpretation
+
+
+_SEMANTIC_SANITY_MAX_NL_CHARS = 800
+_SEMANTIC_SANITY_MAX_LEAN_CHARS = 1500
+
+
+async def interpret_semantic_sanity(
+    nl_input: str,
+    lean_code: str,
+    compile_stdout: str,
+    *,
+    settings: Settings | None = None,
+) -> Interpretation | None:
+    """When Lean compiles successfully, check if the NL statement is obviously false (e.g. wrong equality/inequality direction). Returns Interpretation with items if so, else None."""
+    settings = settings or get_settings()
+    if not settings.enable_llm_interpretation or not settings.llm_model:
+        return None
+    if not settings.llm_api_key:
+        return None
+
+    endpoint = _endpoint_url(settings)
+    headers = {"Content-Type": "application/json"}
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+
+    user_prompt = (
+        "The following natural language statement was translated to Lean and the Lean code typechecked successfully. "
+        "Your job is to detect if the statement is obviously mathematically FALSE (e.g. wrong equality or inequality direction).\n\n"
+        "Examples of obviously false: 'x - y = y - x for all x, y' (would imply 2x=2y for all x,y); "
+        "'for all n, n+2 ≥ n+3'; 'for all n, n^2 ≤ n+3' (fails for large n).\n\n"
+        "Return JSON only with keys: summary (string), items (array), suggestions (array of short strings). "
+        "Each item: error, probable_cause, suggested_fix, source (latex|lean|both|unknown), "
+        "latex_excerpt, replacement (optional corrected text for the excerpt), confidence (0-1).\n\n"
+        "If the statement is clearly true or you are unsure, return items: [] and suggestions: [].\n\n"
+        f"Natural language statement:\n{truncate_text(nl_input, _SEMANTIC_SANITY_MAX_NL_CHARS)}\n\n"
+        f"Lean code (typechecked):\n{truncate_text(lean_code, _SEMANTIC_SANITY_MAX_LEAN_CHARS)}\n\n"
+        f"#check output:\n{truncate_text(compile_stdout, 500)}"
+    )
+
+    use_responses_api = _use_responses_api(settings)
+    system_content = "You are a math semantics checker. Respond only with valid compact JSON. Use items=[] when the statement is not obviously false."
+    if use_responses_api:
+        payload = {
+            "model": settings.llm_model,
+            "instructions": system_content,
+            "input": user_prompt,
+            _token_limit_key(use_responses_api=True): min(settings.llm_max_completion_tokens or 1024, 1024),
+        }
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_prompt},
+            ],
+            _token_limit_key(use_responses_api=False): min(settings.llm_max_completion_tokens or 1024, 1024),
+        }
+    if _should_enforce_json_mode(endpoint):
+        if use_responses_api:
+            payload["text"] = {"format": _interpret_json_text_format()}
+        else:
+            payload["response_format"] = _interpret_json_response_format()
+
+    timeout = httpx.Timeout(max(settings.llm_timeout_seconds, 30))
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(endpoint, json=payload, headers=headers)
+    except (httpx.TransportError, httpx.TimeoutException):
+        return None
+    if response.status_code >= 400:
+        logger.warning(
+            "interpret_semantic_sanity http status=%s body=%s",
+            response.status_code,
+            (response.text or "")[:200],
+        )
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    content = _extract_message_content(data)
+    if not content:
+        return None
+    parsed = extract_json_object(content)
+    if not isinstance(parsed, dict) or "items" not in parsed:
+        return None
+    items_raw = parsed.get("items")
+    if not isinstance(items_raw, list) or len(items_raw) == 0:
+        return None
+    summary = str(parsed.get("summary") or "Statement may be mathematically false.").strip()
+    suggestions = _normalize_suggestion_list(parsed.get("suggestions"))
+    items: list[InterpretationItem] = []
+    for raw in items_raw[:2]:
+        if not isinstance(raw, dict) or not raw.get("error"):
+            continue
+        items.append(
+            InterpretationItem(
+                error=str(raw["error"]),
+                probable_cause=str(raw["probable_cause"]).strip() if raw.get("probable_cause") else None,
+                suggested_fix=str(raw["suggested_fix"]).strip() if raw.get("suggested_fix") else None,
+                source=_source_from_str(raw.get("source")),
+                latex_excerpt=str(raw["latex_excerpt"]).strip() if raw.get("latex_excerpt") else None,
+                replacement=str(raw["replacement"]).strip() if raw.get("replacement") else None,
+                confidence=float(raw["confidence"]) if isinstance(raw.get("confidence"), (int, float)) else None,
+            )
+        )
+    if not items:
+        return None
+    return Interpretation(summary=summary, items=items, suggestions=suggestions)
+
+
+def _source_from_str(value: Any) -> Literal["latex", "lean", "both", "unknown"]:
+    if value in ("latex", "lean", "both", "unknown"):
+        return value
+    return "unknown"
+
+
+def _normalize_suggestion_list(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
 
 
 async def explain_issue_chat(

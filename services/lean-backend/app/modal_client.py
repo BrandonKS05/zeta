@@ -25,6 +25,7 @@ class _RetriableModalError(ModalClientError):
 _ANALYZE_ENDPOINT_SUFFIX = "/v1/analyze"
 _GENERATE_ENDPOINT_SUFFIX = "/v1/generate"
 _QUERY_ENDPOINT_SUFFIX = "/v1/query"
+_COMPLETE_ENDPOINT_SUFFIX = "/v1/complete"
 _ANALYZE_ACCEPTED_STATUSES = {"ok", "success", "needs_revision", "unchecked"}
 _ANALYZE_METADATA_FIELDS = (
     "model",
@@ -200,6 +201,22 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
     return resolved
 
 
+def _resolve_modal_complete_url(modal_endpoint_url: str) -> str:
+    """Resolve the Modal /v1/complete URL from the configured modal endpoint (e.g. /v1/generate or /v1/analyze)."""
+    normalized = modal_endpoint_url.strip()
+    parsed = urlsplit(normalized)
+    path = parsed.path.rstrip("/")
+    if path.endswith(_ANALYZE_ENDPOINT_SUFFIX):
+        path = f"{path[: -len(_ANALYZE_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
+    elif path.endswith(_GENERATE_ENDPOINT_SUFFIX):
+        path = f"{path[: -len(_GENERATE_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
+    elif path.endswith(_QUERY_ENDPOINT_SUFFIX):
+        path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
+    else:
+        path = _COMPLETE_ENDPOINT_SUFFIX
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+
+
 def _extract_lean_code(candidate: dict[str, Any]) -> tuple[str | None, str | None]:
     for key in ("lean_source", "lean_code", "code"):
         value = candidate.get(key)
@@ -355,3 +372,37 @@ async def generate_lean(
             logger=logger,
             operation_name="modal.generate_lean",
         )
+
+
+async def complete_autocomplete(
+    request_payload: dict[str, Any],
+    *,
+    system_prompt: str | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Call Modal /v1/complete with the given request body. Optionally pass a custom system_prompt."""
+    settings = settings or get_settings()
+    if not settings.modal_endpoint_url:
+        raise ModalClientError("MODAL_ENDPOINT_URL is not configured")
+    complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
+    payload = dict(request_payload)
+    if system_prompt is not None and system_prompt.strip():
+        payload["system_prompt"] = system_prompt.strip()
+    headers = {"Content-Type": "application/json"}
+    if settings.modal_api_key:
+        headers["Authorization"] = f"Bearer {settings.modal_api_key}"
+        headers["x-api-key"] = settings.modal_api_key
+    timeout = httpx.Timeout(getattr(settings, "modal_timeout_seconds", 20.0) * 1.5)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            response = await client.post(complete_url, json=payload, headers=headers)
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            raise ModalClientError(f"Modal complete request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise ModalClientError(
+                f"Modal complete returned HTTP {response.status_code}: {(response.text or '')[:500]}"
+            )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ModalClientError("Modal complete returned non-JSON or non-object response")
+        return data

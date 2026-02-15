@@ -196,7 +196,34 @@ class ZetaPopover {
     if (!resolvedReplacement && suggestionText && issue?.targetText) {
       resolvedReplacement = deriveReplacementFromSuggestion(suggestionText, issue.targetText);
     }
-    if (suggestionText) {
+    const applyPayload = () => {
+      this.onApply({
+        ...issue,
+        replacement: resolvedReplacement,
+      });
+      this.close();
+    };
+    const isSameFix = resolvedReplacement && suggestionText && (
+      suggestionText === resolvedReplacement ||
+      suggestionText.replace(/^suggested fix:\s*/i, "").trim() === resolvedReplacement
+    );
+    if (resolvedReplacement) {
+      const applyBtn = document.createElement("button");
+      applyBtn.type = "button";
+      applyBtn.className = "zeta-suggestion-option zeta-suggestion-option--clickable";
+      const strong = document.createElement("strong");
+      strong.textContent = isSameFix && suggestionText ? "Apply" : "Apply replacement";
+      const span = document.createElement("span");
+      span.className = "zeta-suggestion-fix-text";
+      span.textContent = (isSameFix && suggestionText ? suggestionText : resolvedReplacement);
+      applyBtn.append(strong, span);
+      applyBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        applyPayload();
+      });
+      list.appendChild(applyBtn);
+    }
+    if (suggestionText && !isSameFix) {
       const note = document.createElement("div");
       note.className = "zeta-suggestion-note";
       const label = document.createElement("strong");
@@ -205,22 +232,6 @@ class ZetaPopover {
       body.textContent = suggestionText;
       note.append(label, body);
       list.appendChild(note);
-    }
-
-    if (resolvedReplacement) {
-      const applyBtn = document.createElement("button");
-      applyBtn.type = "button";
-      applyBtn.className = "zeta-suggestion-option";
-      applyBtn.innerHTML = `<strong>Apply replacement</strong><span>${resolvedReplacement}</span>`;
-      applyBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        this.onApply({
-          ...issue,
-          replacement: resolvedReplacement,
-        });
-        this.close();
-      });
-      list.appendChild(applyBtn);
     }
 
     const ignoreBtn = document.createElement("button");
@@ -698,12 +709,13 @@ class ZetaPanel {
       actionRow.className = "zeta-item-actions";
 
       if (issue.replacement) {
-        const applyBtn = document.createElement("button");
-        applyBtn.type = "button";
-        applyBtn.className = "zeta-btn";
-        applyBtn.setAttribute("data-action", "apply");
-        applyBtn.textContent = "Apply";
-        actionRow.appendChild(applyBtn);
+        const fixBtn = document.createElement("button");
+        fixBtn.type = "button";
+        fixBtn.className = "zeta-btn zeta-btn-fix-text";
+        fixBtn.setAttribute("data-action", "apply");
+        fixBtn.textContent = issue.replacement;
+        fixBtn.title = "Click to apply this fix";
+        actionRow.appendChild(fixBtn);
       }
 
       const ignoreBtn = document.createElement("button");

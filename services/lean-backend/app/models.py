@@ -11,6 +11,20 @@ class SolveRequest(BaseModel):
     max_iters: int = Field(default=1, ge=1, le=5)
 
 
+class CompleteRequest(BaseModel):
+    """Autocomplete request body (extension → lean-backend → modal)."""
+    model_config = ConfigDict(extra="ignore")
+
+    text: str = Field(min_length=1)
+    cursor_offset: int | None = Field(default=None, ge=0)
+    context: str | None = None
+    imports: list[str] = Field(default_factory=lambda: ["Std"])
+    max_candidates: int = Field(default=3, ge=1, le=8)
+    max_new_tokens: int = Field(default=24, ge=8, le=128)
+    temperature: float = Field(default=0.35, ge=0.0, le=1.5)
+    include_debug: bool = False
+
+
 class GeneratedLean(BaseModel):
     code: str = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)

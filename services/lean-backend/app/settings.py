@@ -15,6 +15,7 @@ class Settings(BaseModel):
     modal_use_generate_endpoint: bool = True
     modal_timeout_seconds: float = 20.0
     modal_max_retries: int = 2
+    modal_complete_system_prompt: str | None = None
 
     lean_command: str = "lean"
     lake_command: str = "lake"
@@ -59,6 +60,7 @@ def get_settings() -> Settings:
         modal_use_generate_endpoint=_env("MODAL_USE_GENERATE_ENDPOINT", "true"),
         modal_timeout_seconds=_env("MODAL_TIMEOUT_SECONDS", "20"),
         modal_max_retries=_env("MODAL_MAX_RETRIES", "2"),
+        modal_complete_system_prompt=_env("MODAL_COMPLETE_SYSTEM_PROMPT"),
         lean_command=_env("LEAN_COMMAND", "lean"),
         lake_command=_env("LAKE_COMMAND", "lake"),
         elan_command=_env("ELAN_COMMAND", "elan"),

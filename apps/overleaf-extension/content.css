@@ -821,6 +821,13 @@
   border-color: var(--zeta-accent);
 }
 
+.zeta-btn-fix-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .zeta-activity-item {
   border: 1px solid var(--zeta-border);
   border-left: 3px solid color-mix(in srgb, var(--zeta-muted) 80%, #ffffff 20%);

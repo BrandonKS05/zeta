@@ -14,13 +14,15 @@ from .lean_compile import compile_lean
 from .llm_client import (
     explain_issue_chat,
     interpret_errors,
+    interpret_semantic_sanity,
     repair_lean_compile_errors,
     repair_lean_def_check,
 )
-from .modal_client import ModalClientError, generate_lean
+from .modal_client import ModalClientError, complete_autocomplete, generate_lean
 from .models import (
     ChatExplainRequest,
     ChatExplainResponse,
+    CompleteRequest,
     CompileResult,
     DashboardAdvice,
     Diagnostic,
@@ -551,6 +553,21 @@ def run_semantic_validation(
     )
 
 
+@app.post("/v1/lean/complete")
+async def lean_complete(payload: CompleteRequest):
+    """Proxy autocomplete to the configured Modal /v1/complete with optional custom system prompt."""
+    try:
+        body = payload.model_dump()
+        result = await complete_autocomplete(
+            body,
+            system_prompt=settings.modal_complete_system_prompt,
+            settings=settings,
+        )
+        return result
+    except ModalClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.post("/v1/lean/solve", response_model=SolveResponse)
 async def solve_lean(payload: SolveRequest) -> SolveResponse:
     logger.info("received solve request")
@@ -793,6 +810,64 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
     interpretation = _interpretation_from_modal_metadata(generated.metadata)
     interpretation_error: str | None = None
     llm_attempted = False
+    llm_stage_appended = False  # so we do not append twice when semantic_sanity block ran
+
+    # When compile succeeded but we have no interpretation yet, check for obviously false statements (e.g. wrong equality/inequality direction)
+    if (
+        compile_result.success
+        and semantic_validation.success
+        and (interpretation is None or not interpretation.items)
+    ):
+        sanity_start = time.perf_counter()
+        try:
+            sanity_interp = await interpret_semantic_sanity(
+                payload.nl_input,
+                generated.code,
+                compile_result.stdout or "",
+                settings=settings,
+            )
+            sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
+            if sanity_interp is not None and sanity_interp.items:
+                interpretation = sanity_interp
+                logger.info(
+                    "stage_complete stage=llm_semantic_sanity duration_ms=%.2f item_count=%s",
+                    sanity_elapsed_ms,
+                    len(interpretation.items),
+                )
+                stages.append(
+                    PipelineStage(
+                        stage="llm_interpretation",
+                        attempted=True,
+                        success=True,
+                        duration_ms=sanity_elapsed_ms,
+                        details={"reason": "semantic_sanity", "item_count": len(interpretation.items)},
+                    )
+                )
+                llm_stage_appended = True
+            else:
+                stages.append(
+                    PipelineStage(
+                        stage="llm_interpretation",
+                        attempted=False,
+                        success=None,
+                        duration_ms=None,
+                        details={"reason": "compile_success"},
+                    )
+                )
+                llm_stage_appended = True
+        except Exception as exc:  # pragma: no cover
+            sanity_elapsed_ms = (time.perf_counter() - sanity_start) * 1000
+            logger.warning("interpret_semantic_sanity failed: %s", exc)
+            stages.append(
+                PipelineStage(
+                    stage="llm_interpretation",
+                    attempted=False,
+                    success=None,
+                    duration_ms=None,
+                    details={"reason": "compile_success"},
+                )
+            )
+            llm_stage_appended = True
 
     if (
         not compile_result.success
@@ -880,19 +955,20 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             )
         )
     else:
-        skip_reason = "compile_success"
-        if interpretation is not None and interpretation.items:
-            skip_reason = "modal_metadata"
-        logger.info("stage_skipped stage=llm_interpretation reason=%s", skip_reason)
-        stages.append(
-            PipelineStage(
-                stage="llm_interpretation",
-                attempted=False,
-                success=None,
-                duration_ms=None,
-                details={"reason": skip_reason},
+        if not llm_stage_appended:
+            skip_reason = "compile_success"
+            if interpretation is not None and interpretation.items:
+                skip_reason = "modal_metadata"
+            logger.info("stage_skipped stage=llm_interpretation reason=%s", skip_reason)
+            stages.append(
+                PipelineStage(
+                    stage="llm_interpretation",
+                    attempted=False,
+                    success=None,
+                    duration_ms=None,
+                    details={"reason": skip_reason},
+                )
             )
-        )
 
     highlights: HighlightResolveResponse | None = None
     should_resolve_highlights = (not compile_result.success) or bool(

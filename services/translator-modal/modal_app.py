@@ -525,6 +525,7 @@ class CompleteRequest(BaseModel):
     max_new_tokens: int = Field(default=36, ge=8, le=128)
     temperature: float = Field(default=0.35, ge=0.0, le=1.5)
     include_debug: bool = False
+    system_prompt: str | None = Field(default=None, description="Optional custom system prompt for completion.")
 
     @field_validator("imports")
     @classmethod
@@ -865,6 +866,10 @@ def _build_completion_prompt(
     prefix_text: str,
     retrieval_hints: list[str],
 ) -> str:
+    system_content = (
+        request.system_prompt.strip() if request.system_prompt and request.system_prompt.strip()
+        else COMPLETE_SYSTEM_PROMPT
+    )
     user_prompt = _complete_user_prompt(
         request=request,
         prefix_text=prefix_text,
@@ -873,13 +878,13 @@ def _build_completion_prompt(
     if getattr(tokenizer, "chat_template", None):
         return tokenizer.apply_chat_template(
             [
-                {"role": "system", "content": COMPLETE_SYSTEM_PROMPT},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_prompt},
             ],
             tokenize=False,
             add_generation_prompt=True,
         )
-    return f"{COMPLETE_SYSTEM_PROMPT}\n\n{user_prompt}\n\nJSON:"
+    return f"{system_content}\n\n{user_prompt}\n\nJSON:"
 
 
 def _ensure_model_downloaded() -> Path:
