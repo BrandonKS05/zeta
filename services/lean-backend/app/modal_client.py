@@ -445,6 +445,23 @@ def _build_herald_autocomplete_payload(
     }
 
 
+def _build_backend_shape_autocomplete_payload(request_payload: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility payload for translator endpoints that expect nl_input/context/max_iters."""
+    text = request_payload.get("text") or ""
+    imports = list(request_payload.get("imports") or ["Std"])
+    raw_context = request_payload.get("context")
+    context_str = raw_context if isinstance(raw_context, str) else ""
+    return {
+        "nl_input": text,
+        "context": {
+            "theorem_name": "unnamed",
+            "imports": imports,
+            "document": context_str,
+        },
+        "max_iters": 1,
+    }
+
+
 def _normalize_herald_complete_response(raw: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
     """Convert Herald translate response into the shape the extension expects (candidates, selected_completion)."""
     candidates: list[str] = []
@@ -584,8 +601,9 @@ async def complete_autocomplete(
     async with httpx.AsyncClient(timeout=timeout) as client:
         last_http_error: ModalClientError | None = None
         for index, candidate_url in enumerate(url_candidates):
+            payload_for_attempt = payload
             try:
-                response = await client.post(candidate_url, json=payload, headers=headers)
+                response = await client.post(candidate_url, json=payload_for_attempt, headers=headers)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 raise ModalClientError(f"Modal complete request failed: {exc}") from exc
 
@@ -615,6 +633,33 @@ async def complete_autocomplete(
                 last_http_error = ModalClientError("Modal complete returned non-object response")
                 break
 
+            status_value = str(data.get("status") or "").strip().lower()
+            message_value = str(data.get("message") or "")
+            missing_nl_input = (
+                status_value == "error"
+                and "missing" in message_value.lower()
+                and "nl_input" in message_value.lower()
+            )
+            if missing_nl_input:
+                compat_payload = _build_backend_shape_autocomplete_payload(request_payload)
+                logger.info(
+                    "modal_autocomplete_retry_backend_shape url=%s reason=%s",
+                    candidate_url,
+                    message_value,
+                )
+                try:
+                    compat_response = await client.post(candidate_url, json=compat_payload, headers=headers)
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    raise ModalClientError(f"Modal complete request failed: {exc}") from exc
+                if compat_response.status_code < 400:
+                    try:
+                        compat_data = compat_response.json()
+                    except ValueError:
+                        compat_data = None
+                    if isinstance(compat_data, dict):
+                        data = compat_data
+                        payload_for_attempt = compat_payload
+
             normalized = _normalize_herald_complete_response(data, request_payload)
             if (
                 isinstance(normalized, dict)
@@ -623,9 +668,9 @@ async def complete_autocomplete(
             ):
                 debug = dict(normalized["no_suggestion_debug"])
                 try:
-                    request_preview = json.dumps(payload, ensure_ascii=False)[:800]
+                    request_preview = json.dumps(payload_for_attempt, ensure_ascii=False)[:800]
                 except Exception:
-                    request_preview = str(payload)[:800]
+                    request_preview = str(payload_for_attempt)[:800]
                 debug["request_url"] = candidate_url
                 debug["request_preview"] = request_preview
                 normalized["no_suggestion_debug"] = debug

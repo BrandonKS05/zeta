@@ -1538,6 +1538,20 @@ class ZetaApp {
     const autocompleteDurationMs = Math.round(performance.now() - autocompleteStartedAt);
     const timings = response?.json?.timings_ms;
     const serverLatencyMs = Number(response?.json?.latency_ms);
+    const responseJson = response?.json && typeof response.json === "object" ? response.json : null;
+    const responseKeys = responseJson ? Object.keys(responseJson) : [];
+    const candidatesCount = Array.isArray(responseJson?.candidates)
+      ? responseJson.candidates.length
+      : 0;
+    const selectedCompletion = typeof responseJson?.selected_completion === "string"
+      ? responseJson.selected_completion
+      : "";
+    const noSuggestionReasons = Array.isArray(responseJson?.no_suggestion_reasons)
+      ? responseJson.no_suggestion_reasons
+      : [];
+    const noSuggestionDebug = responseJson?.no_suggestion_debug && typeof responseJson.no_suggestion_debug === "object"
+      ? responseJson.no_suggestion_debug
+      : null;
     console.info(`${zetaLogPrefix("autocomplete")} request done`, {
       durationMs: autocompleteDurationMs,
       ok: response?.ok,
@@ -1547,6 +1561,11 @@ class ZetaApp {
       retrievalMs: timings && Number.isFinite(timings.retrieval) ? timings.retrieval : null,
       generationMs: timings && Number.isFinite(timings.generation) ? timings.generation : null,
       rankingMs: timings && Number.isFinite(timings.ranking) ? timings.ranking : null,
+      responseKeys,
+      candidatesCount,
+      selectedCompletionLength: selectedCompletion.length,
+      noSuggestionReasons,
+      noSuggestionDebug,
     });
 
     if (!response.ok) {
