@@ -82,7 +82,7 @@ class ZetaOverlay {
         break;
       }
 
-      const ranges = this.resolveRanges(issue, snapshot, sourceText);
+      const ranges = this.resolveRanges(issue, snapshot, sourceText, adapter);
       for (const [start, end] of ranges) {
         const rects = adapter.getClientRectsForRange(start, end, adapter.getVisibleTextSnapshot());
         for (const rect of rects) {
@@ -114,10 +114,103 @@ class ZetaOverlay {
     this.rectIssueMap = renderedRects;
   }
 
-  resolveRanges(issue, snapshot, sourceText) {
+  resolveRangeFromDom(issue, snapshot, _sourceText, adapter) {
+    if (!adapter || typeof adapter.getVisibleTextSnapshot !== "function") {
+      return null;
+    }
+    const target = String(issue?.targetText || "").trim();
+    if (!target) {
+      return null;
+    }
+    const visible = adapter.getVisibleTextSnapshot();
+    const visibleText = String(visible?.text || "");
+    if (!visibleText) {
+      return null;
+    }
+
+    const candidates = [];
+    let cursor = visibleText.indexOf(target);
+    while (cursor !== -1) {
+      candidates.push(cursor);
+      if (candidates.length >= 32) {
+        break;
+      }
+      cursor = visibleText.indexOf(target, cursor + target.length);
+    }
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const expectedGlobalStart = Number.isInteger(issue?.start)
+      ? ((Number.isInteger(snapshot?.scopeStart) ? snapshot.scopeStart : 0) + issue.start)
+      : null;
+    const sentenceText = String(issue?.sentenceText || "").trim();
+    const sentenceStarts = [];
+    if (sentenceText) {
+      let sentenceCursor = visibleText.indexOf(sentenceText);
+      while (sentenceCursor !== -1) {
+        sentenceStarts.push(sentenceCursor);
+        if (sentenceStarts.length >= 12) {
+          break;
+        }
+        sentenceCursor = visibleText.indexOf(sentenceText, sentenceCursor + sentenceText.length);
+      }
+    }
+    let sentenceWindow = null;
+    if (sentenceStarts.length > 0) {
+      let bestSentenceStart = sentenceStarts[0];
+      if (Number.isInteger(expectedGlobalStart)) {
+        let bestDistance = Math.abs(sentenceStarts[0] - expectedGlobalStart);
+        for (let i = 1; i < sentenceStarts.length; i += 1) {
+          const distance = Math.abs(sentenceStarts[i] - expectedGlobalStart);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestSentenceStart = sentenceStarts[i];
+          }
+        }
+      }
+      sentenceWindow = [bestSentenceStart, bestSentenceStart + sentenceText.length];
+    }
+
+    let bestIndex = candidates[0];
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const start of candidates) {
+      let score = 0;
+      if (Number.isInteger(expectedGlobalStart)) {
+        score += Math.abs(start - expectedGlobalStart);
+      }
+      if (sentenceWindow && start >= sentenceWindow[0] && start + target.length <= sentenceWindow[1]) {
+        score -= 100000;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = start;
+      }
+    }
+
+    return [bestIndex, bestIndex + target.length];
+  }
+
+  resolveRanges(issue, snapshot, sourceText, adapter = null) {
     const ranges = [];
     if (Number.isInteger(issue.start) && Number.isInteger(issue.end)) {
-      ranges.push([snapshot.scopeStart + issue.start, snapshot.scopeStart + issue.end]);
+      const globalStart = snapshot.scopeStart + issue.start;
+      const globalEnd = snapshot.scopeStart + issue.end;
+      const target = String(issue?.targetText || "").trim();
+      const spanText = sourceText.slice(globalStart, globalEnd);
+      if (
+        target &&
+        globalEnd > globalStart &&
+        spanText !== target &&
+        !spanText.includes(target)
+      ) {
+        const domRange = this.resolveRangeFromDom(issue, snapshot, sourceText, adapter);
+        if (domRange) {
+          ranges.push(domRange);
+          return ranges;
+        }
+      }
+      ranges.push([globalStart, globalEnd]);
       return ranges;
     }
 
@@ -127,6 +220,12 @@ class ZetaOverlay {
 
     const target = issue.targetText.trim();
     if (!target) {
+      return ranges;
+    }
+
+    const domRange = this.resolveRangeFromDom(issue, snapshot, sourceText, adapter);
+    if (domRange) {
+      ranges.push(domRange);
       return ranges;
     }
 

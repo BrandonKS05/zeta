@@ -4973,7 +4973,11 @@ class ZetaApp {
       const normalized = this.normalizeBackendResponse(
         responsePayload,
         sentenceEntry.text,
-        String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL)
+        String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL),
+        {
+          sentenceStart: Number.isInteger(sentenceEntry.start) ? sentenceEntry.start : null,
+          sentenceEnd: Number.isInteger(sentenceEntry.end) ? sentenceEntry.end : null,
+        }
       );
       emitProgress("normalize_response", {
         requestUrl: String(requestResult.request?.requestUrl || HARDCODED_ANALYZE_URL),
@@ -5167,8 +5171,12 @@ class ZetaApp {
 
   buildBackendPayload(snapshot, reason, sentenceEntry = null) {
     const requestUrl = HARDCODED_ANALYZE_URL;
-    const mode = this.settings.mode === "accurate" ? "thinking" : "fast";
-    const maxIters = mode === "thinking" ? 2 : 1;
+    const selectedMode = String(this.settings.mode || "auto");
+    const isAccurate = selectedMode === "accurate";
+    const mode = isAccurate ? "thinking" : "fast";
+    const maxIters = mode === "thinking" ? 3 : 1;
+    // Keep fast/auto low-latency; let accurate opt into a stronger model.
+    const requestedModel = isAccurate ? "gpt-5-2025-08-07" : null;
     const sentenceText = String(sentenceEntry?.text || snapshot?.text || "").trim();
     const normalizedSentenceText = this.normalizeLeanInputMathSets(sentenceText);
     const chunkId = String(sentenceEntry?.chunkId || this.activeChunkId || "input");
@@ -5186,6 +5194,7 @@ class ZetaApp {
         include_raw_model_output: false,
         mode,
         max_iters: maxIters,
+        ...(requestedModel ? { model: requestedModel } : {}),
         include_iteration_history: mode === "thinking",
         zeta_meta: {
           reason,
@@ -5220,6 +5229,7 @@ class ZetaApp {
             theorem_name: "zeta_candidate",
             imports: ["Std"],
             temperature: this.settings.mode === "accurate" ? 0.1 : 0.0,
+            ...(requestedModel ? { model: requestedModel } : {}),
             mode,
             include_iteration_history: mode === "thinking",
             include_raw_model_output: false,
@@ -5489,6 +5499,9 @@ class ZetaApp {
     if (!text) {
       return false;
     }
+    if (/unknown identifier\s+[`'"]?zeta_candidate[`'"]?/.test(text)) {
+      return true;
+    }
     const markers = [
       "no default toolchain configured",
       "elan default stable",
@@ -5498,6 +5511,9 @@ class ZetaApp {
       "lake_project_dir",
       "missing lakefile",
       "compile failed: no compile attempts were executed",
+      "unknown identifier `zeta_candidate`",
+      "unknown identifier zeta_candidate",
+      "error(lean.unknownidentifier): unknown identifier `zeta_candidate`",
     ];
     return markers.some((marker) => text.includes(marker));
   }
@@ -5510,6 +5526,16 @@ class ZetaApp {
       return response.is_valid_lean;
     }
     return !ensureArray(diagnostics).some((diag) => normalizeSeverity(diag?.severity) === "error");
+  }
+
+  isSuppressedBackendIssue(issue) {
+    const message = String(issue?.message || "").toLowerCase();
+    const targetText = String(issue?.targetText || "").toLowerCase();
+    const suggestion = String(issue?.suggestion || issue?.suggestedFix || "").toLowerCase();
+    const replacement = String(issue?.replacement || "").toLowerCase();
+    const combined = `${message}\n${targetText}\n${suggestion}\n${replacement}`;
+    return /unknown identifier\s+[`'"]?zeta_candidate[`'"]?/.test(combined)
+      || /\bzeta_candidate\b/.test(targetText);
   }
 
   resolveChunkFixSuggestion(response, diagnostics, topSuggestions, feedbackItems, semanticReasons) {
@@ -5651,7 +5677,70 @@ class ZetaApp {
     return issues;
   }
 
-  normalizeBackendResponse(response, scopeText, requestUrl = "") {
+  resolveHighlightLocalOffsets(range, scopeText, sentenceWindow = null) {
+    const text = String(scopeText || "");
+    const textLength = text.length;
+    const sentenceStart = Number.isInteger(sentenceWindow?.sentenceStart) ? sentenceWindow.sentenceStart : null;
+    const sentenceEnd = Number.isInteger(sentenceWindow?.sentenceEnd) ? sentenceWindow.sentenceEnd : null;
+    const absStart = Number.isInteger(range?.start) ? range.start : null;
+    const absEnd = Number.isInteger(range?.end) ? range.end : null;
+    const chunkLocalStart = Number.isInteger(range?.start_in_chunk) ? range.start_in_chunk : null;
+    const chunkLocalEnd = Number.isInteger(range?.end_in_chunk) ? range.end_in_chunk : null;
+
+    const candidates = [];
+    const pushCandidate = (start, end) => {
+      if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) {
+        return;
+      }
+      if (start < 0 || end > textLength) {
+        return;
+      }
+      candidates.push([start, end]);
+    };
+
+    if (
+      sentenceStart !== null &&
+      sentenceEnd !== null &&
+      absStart !== null &&
+      absEnd !== null &&
+      absEnd > absStart
+    ) {
+      const overlapStart = Math.max(absStart, sentenceStart);
+      const overlapEnd = Math.min(absEnd, sentenceEnd);
+      if (overlapEnd > overlapStart) {
+        pushCandidate(overlapStart - sentenceStart, overlapEnd - sentenceStart);
+      }
+      // Some backends can provide sentence-local offsets directly in start/end.
+      pushCandidate(absStart, absEnd);
+    } else if (absStart !== null && absEnd !== null) {
+      pushCandidate(absStart, absEnd);
+    }
+
+    // Deterministic/LLM highlight resolver common shape.
+    pushCandidate(chunkLocalStart, chunkLocalEnd);
+
+    const exactSpanText = String(range?.text || "").trim();
+    if (exactSpanText) {
+      // Prefer offsets that reproduce the exact highlight text.
+      for (const [candidateStart, candidateEnd] of candidates) {
+        if (text.slice(candidateStart, candidateEnd) === exactSpanText) {
+          return { start: candidateStart, end: candidateEnd };
+        }
+      }
+      const searchIdx = text.indexOf(exactSpanText);
+      if (searchIdx !== -1) {
+        return { start: searchIdx, end: searchIdx + exactSpanText.length };
+      }
+    }
+
+    if (candidates.length > 0) {
+      return { start: candidates[0][0], end: candidates[0][1] };
+    }
+
+    return { start: null, end: null };
+  }
+
+  normalizeBackendResponse(response, scopeText, requestUrl = "", sentenceWindow = null) {
     const diagnostics =
       ensureArray(response.compile?.diagnostics).length > 0
         ? ensureArray(response.compile?.diagnostics)
@@ -5675,6 +5764,7 @@ class ZetaApp {
     const normalizedRequestUrl = String(requestUrl || "");
     const isLegacyTranslatorAnalyze = /\/v1\/(?:analyze|query)(?:\/)?$/.test(normalizedRequestUrl);
     const chunkScopeText = String(scopeText || "");
+    const preferSentenceSpanForInterpretation = chunkScopeText.trim().length > 0;
     const chunkFixSuggestion = this.resolveChunkFixSuggestion(
       response,
       inlineDiagnostics,
@@ -5694,17 +5784,12 @@ class ZetaApp {
           coveredInterpretationIndices.add(itemIndex);
         }
         const linkedItem = itemIndex !== null ? interpretationItems[itemIndex] : null;
-        const localStartRaw = Number.isInteger(range?.start_in_chunk)
-          ? range.start_in_chunk
-          : (Number.isInteger(range?.start) ? range.start : null);
-        const localEndRaw = Number.isInteger(range?.end_in_chunk)
-          ? range.end_in_chunk
-          : (Number.isInteger(range?.end) ? range.end : null);
-        const localStart = Number.isInteger(localStartRaw)
-          ? clamp(localStartRaw, 0, scopeText.length)
+        const localOffsets = this.resolveHighlightLocalOffsets(range, scopeText, sentenceWindow);
+        const localStart = Number.isInteger(localOffsets.start)
+          ? clamp(localOffsets.start, 0, scopeText.length)
           : null;
-        const localEnd = Number.isInteger(localEndRaw)
-          ? clamp(localEndRaw, 0, scopeText.length)
+        const localEnd = Number.isInteger(localOffsets.end)
+          ? clamp(localOffsets.end, 0, scopeText.length)
           : null;
         const targetText = (
           Number.isInteger(localStart) &&
@@ -5722,6 +5807,8 @@ class ZetaApp {
           || linkedItem?.suggested_fix
           || String(range?.text || "").trim()
           || "Interpretation issue";
+        const issueStart = preferSentenceSpanForInterpretation ? 0 : localStart;
+        const issueEnd = preferSentenceSpanForInterpretation ? scopeText.length : localEnd;
 
         issues.push({
           id: `hl-${issues.length + 1}`,
@@ -5734,8 +5821,8 @@ class ZetaApp {
           category: "math-typo",
           severity: "error",
           message,
-          start: localStart,
-          end: localEnd,
+          start: issueStart,
+          end: issueEnd,
           targetText,
           replacement: resolvedReplacement,
           suggestion: linkedItem?.suggested_fix || null,
@@ -5767,6 +5854,8 @@ class ZetaApp {
 
       const message =
         item.error || item.suggested_fix || item.probable_cause || "Interpretation issue";
+      const issueStart = preferSentenceSpanForInterpretation ? 0 : start;
+      const issueEnd = preferSentenceSpanForInterpretation ? scopeText.length : end;
 
       issues.push({
         id: `interp-${issues.length + 1}`,
@@ -5779,8 +5868,8 @@ class ZetaApp {
         category: "math-typo",
         severity: "error",
         message,
-        start,
-        end,
+        start: issueStart,
+        end: issueEnd,
         targetText,
         replacement: resolvedReplacement,
         suggestion: item.suggested_fix || null,
@@ -5789,7 +5878,7 @@ class ZetaApp {
       });
     }
 
-    for (const diag of diagnostics) {
+    for (const diag of inlineDiagnostics) {
       const severity = normalizeSeverity(diag.severity);
       const location =
         Number.isInteger(diag.line) && Number.isInteger(diag.column)
@@ -5961,15 +6050,24 @@ class ZetaApp {
       }
     }
 
+    const filteredIssues = issues.filter((issue) => !this.isSuppressedBackendIssue(issue));
+    const hasVisibleErrorIssue = filteredIssues.some(
+      (issue) => normalizeSeverity(issue?.severity) === "error"
+    );
+
+    const onlyInfrastructureDiagnostics =
+      diagnostics.length > 0 &&
+      diagnostics.every((diag) => this.isInfrastructureDiagnosticMessage(diag?.message));
     const hasCompileErrors =
-      !compileSuccess ||
+      ((!compileSuccess && !onlyInfrastructureDiagnostics) && inlineDiagnostics.some(
+        (diag) => normalizeSeverity(diag.severity) === "error"
+      )) ||
       response.pipeline?.semantic?.success === false ||
-      interpretationItems.length > 0 ||
-      diagnostics.some((diag) => normalizeSeverity(diag.severity) === "error");
+      hasVisibleErrorIssue;
 
     return {
-      diagnostics,
-      issues,
+      diagnostics: inlineDiagnostics,
+      issues: filteredIssues,
       hasError: hasCompileErrors,
     };
   }
