@@ -3,6 +3,7 @@
 
   const zeta = window.__zetaContent || (window.__zetaContent = {});
   const {
+    DEBUG_CHAT_ONLY = false,
     SETTINGS_KEY,
     MODE_KEY,
     IGNORED_KEY,
@@ -33,6 +34,22 @@
     ZetaPopover,
     ZetaPanel,
   } = zeta;
+
+  const zetaLogPrefix = (tag) => `[zeta:${tag}] ${new Date().toISOString()}`;
+
+  if (DEBUG_CHAT_ONLY) {
+    const _info = console.info.bind(console);
+    const _warn = console.warn.bind(console);
+    const chatOnly = (s) => /assistant|zeta-chat|sendChatForThread|chat endpoint|chat_request|chat_send|chat_delete|autocomplete/.test(s);
+    console.info = function (...args) {
+      if (!chatOnly(String(args[0] ?? ""))) return;
+      _info.apply(console, args);
+    };
+    console.warn = function (...args) {
+      if (!chatOnly(String(args[0] ?? ""))) return;
+      _warn.apply(console, args);
+    };
+  }
 
 const LATEX_SECTION_LEVELS = Object.freeze({
   part: 0,
@@ -153,13 +170,13 @@ const AUTOCOMPLETE_DEBOUNCE_MS = 1000;
 const AUTOCOMPLETE_CACHE_TTL_MS = 30 * 1000;
 const AUTOCOMPLETE_MIN_FRAGMENT_CHARS = 12;
 const AUTOCOMPLETE_MIN_FRAGMENT_WORDS = 3;
-const AUTOCOMPLETE_MAX_TEXT_WINDOW = 1200;
+const AUTOCOMPLETE_MAX_TEXT_WINDOW = 16000;
 const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
-const DEFAULT_MODAL_ANALYZE_URL =
-  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/v1/analyze";
+const MODAL_BASE_URL =
+  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run";
+const DEFAULT_MODAL_ANALYZE_URL = `${MODAL_BASE_URL}/v1/analyze`;
 const DEFAULT_LEAN_SOLVE_URL = "http://13.57.35.202:8000/v1/lean/solve";
-const DEFAULT_MODAL_COMPLETE_URL =
-  "https://aryan-sharma0714--herald-math-grammarly-api.modal.run/v1/complete";
+const DEFAULT_MODAL_COMPLETE_URL = `${MODAL_BASE_URL}/v1/complete`;
 const HARDCODED_ANALYZE_URL = DEFAULT_LEAN_SOLVE_URL;
 const HARDCODED_COMPLETE_URL = DEFAULT_MODAL_COMPLETE_URL;
 
@@ -248,6 +265,7 @@ class ZetaApp {
     this.autocompleteBackoffUntil = 0;
     this.autocompleteLastErrorKey = "";
     this.autocompleteLastErrorAt = 0;
+    this.autocompleteGeneratedSentenceBoundaries = [];
 
     this.boundSelectionChange = this.handleSelectionChange.bind(this);
     this.boundFocusIn = this.handleFocusIn.bind(this);
@@ -468,8 +486,7 @@ class ZetaApp {
   handleRuntimeMessage(message, _sender, sendResponse) {
     if (message && message.type === "zeta-ui-surface") {
       const surface = String(message.surface || "").toLowerCase();
-      console.info("[zeta:content] ui_surface_received", {
-        ts: new Date().toISOString(),
+      console.info(`${zetaLogPrefix("content")} ui_surface_received`, {
         surface,
       });
       if (surface === "popup" && this.settings.panelOpen) {
@@ -490,18 +507,41 @@ class ZetaApp {
       return true;
     }
 
+    if (message && message.type === "zeta-chat-delete-thread") {
+      const threadId = String(message.threadId || "");
+      this.deleteChatThread(threadId)
+        .then((ok) => sendResponse?.({ ok, threadId }))
+        .catch(() => sendResponse?.({ ok: false, threadId }));
+      return true;
+    }
+
     if (message && message.type === "zeta-chat-send") {
       const threadId = String(message.threadId || "");
       const userMessage = String(message.message || "");
+      console.info(`${zetaLogPrefix("content")} assistant zeta-chat-send received`, {
+        threadId,
+        messageLength: userMessage.length,
+        hasThread: this.chatById.has(threadId),
+      });
       this.sendChatForThread(threadId, userMessage)
-        .then((result) => sendResponse?.({
-          ok: true,
-          ...result,
-        }))
-        .catch((error) => sendResponse?.({
-          ok: false,
-          error: String(error?.message || error || "Assistant request failed."),
-        }));
+        .then((result) => {
+          console.info(`${zetaLogPrefix("content")} assistant sendChatForThread resolved`, {
+            ok: true,
+            source: result?.source,
+            threadId: result?.threadId,
+          });
+          sendResponse?.({ ok: true, ...result });
+        })
+        .catch((error) => {
+          console.warn(`${zetaLogPrefix("content")} assistant sendChatForThread rejected`, {
+            error: String(error?.message || error),
+            threadId,
+          });
+          sendResponse?.({
+            ok: false,
+            error: String(error?.message || error || "Assistant request failed."),
+          });
+        });
       return true;
     }
 
@@ -510,8 +550,7 @@ class ZetaApp {
     }
 
     const action = String(message.action || "");
-    console.info("[zeta:content] popup_action_received", {
-      ts: new Date().toISOString(),
+    console.info(`${zetaLogPrefix("content")} popup_action_received`, {
       action,
     });
 
@@ -521,9 +560,9 @@ class ZetaApp {
         this.addActivity("Macro: refresh checker.", "info");
         return;
       }
-      if (action === "manual-autocomplete") {
-        this.markShortcutTriggered("Alt+Shift+M");
-        this.triggerManualAutocomplete("popup-macro");
+      if (action === "clear-chat-history") {
+        this.clearActiveChatHistory();
+        this.addActivity("Macro: cleared all chat history.", "info");
         return;
       }
       if (action === "undo-last") {
@@ -543,6 +582,13 @@ class ZetaApp {
       if (action === "prev-issue") {
         this.focusPrevIssue();
         this.addActivity("Macro: focused previous issue.", "info");
+        return;
+      }
+      if (action === "apply-issue") {
+        if (this.focusedIssueIndex >= 0) {
+          this.applyIssueByIndex(this.focusedIssueIndex);
+          this.addActivity("Macro: applied current fix.", "info");
+        }
         return;
       }
       this.addActivity(`Macro not recognized: ${action}`, "error");
@@ -873,7 +919,7 @@ class ZetaApp {
       this.clearAutocompleteSuggestion();
     }
 
-    console.info("[zeta:content] keydown", {
+    console.info(`${zetaLogPrefix("content")} keydown`, {
       ts,
       key: event.key,
       code,
@@ -886,7 +932,7 @@ class ZetaApp {
 
     if (altHeld && shiftHeld && (key === "n" || code === "KeyN")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
         shortcut: "Alt+Shift+N",
         action: "next-issue",
@@ -898,7 +944,7 @@ class ZetaApp {
 
     if (altHeld && shiftHeld && (key === "p" || code === "KeyP")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
         shortcut: "Alt+Shift+P",
         action: "prev-issue",
@@ -918,7 +964,7 @@ class ZetaApp {
 
     if (altHeld && shiftHeld && (key === "u" || code === "KeyU")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
         shortcut: "Alt+Shift+U",
         action: "undo-last",
@@ -928,21 +974,27 @@ class ZetaApp {
       return;
     }
 
+    if (altHeld && shiftHeld && (key === "c" || code === "KeyC")) {
+      event.preventDefault();
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
+        ts,
+        shortcut: "Alt+Shift+C",
+        action: "clear-chat-history",
+      });
+      this.markShortcutTriggered("Alt+Shift+C");
+      this.clearActiveChatHistory();
+      return;
+    }
+
     if (altHeld && shiftHeld && (key === "m" || code === "KeyM")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
-        ts,
-        shortcut: "Alt+Shift+M",
-        action: "manual-autocomplete",
-      });
-      this.markShortcutTriggered("Alt+Shift+M");
       this.triggerManualAutocomplete("shortcut");
       return;
     }
 
     if (altHeld && shiftHeld && (key === "r" || code === "KeyR")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
         shortcut: "Alt+Shift+R",
         action: "refresh-checker",
@@ -954,7 +1006,7 @@ class ZetaApp {
 
     if (altHeld && shiftHeld && (key === "h" || code === "KeyH")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
         shortcut: "Alt+Shift+H",
         action: "clear-history",
@@ -964,15 +1016,16 @@ class ZetaApp {
       return;
     }
 
-    if ((metaHeld || ctrlHeld) && (key === "enter" || code === "Enter")) {
+    if (ctrlHeld && shiftHeld && (key === "Enter" || key === "enter" || code === "Enter")) {
       event.preventDefault();
-      console.info("[zeta:content] shortcut_match", {
+      console.info(`${zetaLogPrefix("content")} shortcut_match`, {
         ts,
-        shortcut: "Ctrl/Cmd+Enter",
+        shortcut: "Ctrl+Shift+Enter",
         action: "refresh-checker",
       });
-      this.markShortcutTriggered("Ctrl/Cmd+Enter");
+      this.markShortcutTriggered("Ctrl+Shift+Enter");
       this.requestAnalysis("shortcut", true);
+      return;
     }
   }
 
@@ -1124,6 +1177,15 @@ class ZetaApp {
     }
 
     const prefixTrimRight = prefix.replace(/\s+$/, "");
+    let overlapLen = 0;
+    for (let n = 1; n <= Math.min(prefixTrimRight.length, value.length); n++) {
+      if (prefixTrimRight.slice(-n) === value.slice(0, n)) {
+        overlapLen = n;
+      }
+    }
+    if (overlapLen > 0) {
+      value = value.slice(overlapLen);
+    }
     const suffixTrimLeft = suffix.replace(/^\s+/, "");
     const prefixEndsWhitespace = /\s$/.test(prefix);
     const suffixStartsWhitespace = /^\s/.test(suffix);
@@ -1305,6 +1367,11 @@ class ZetaApp {
     }
     const caretOffset = clamp(caretOffsetRaw, 0, sourceText.length);
     const prefixText = sourceText.slice(0, caretOffset);
+    const suffixFromCursor = sourceText.slice(caretOffset);
+    const restOfLine = suffixFromCursor.split("\n")[0] || "";
+    if (/[^\s]/.test(restOfLine)) {
+      return null;
+    }
     if (this.isSentenceCompleteForAutocomplete(prefixText)) {
       return null;
     }
@@ -1328,7 +1395,9 @@ class ZetaApp {
       return null;
     }
 
-    const textStart = Math.max(0, caretOffset - AUTOCOMPLETE_MAX_TEXT_WINDOW);
+    const textStart = caretOffset > AUTOCOMPLETE_MAX_TEXT_WINDOW
+      ? caretOffset - AUTOCOMPLETE_MAX_TEXT_WINDOW
+      : 0;
     const textEnd = Math.min(sourceText.length, caretOffset + 120);
     const textWindow = sourceText.slice(textStart, textEnd);
     const localCursorOffset = caretOffset - textStart;
@@ -1353,6 +1422,7 @@ class ZetaApp {
       prefixText,
       suffixText: sourceText.slice(caretOffset),
       fragment,
+      sentenceBoundary,
       textWindow,
       localCursorOffset,
       contextWindow,
@@ -1360,7 +1430,7 @@ class ZetaApp {
     };
   }
 
-  async requestAutocomplete(endpointUrl, context, reason) {
+  async requestAutocomplete(endpointUrl, context, reason, options = {}) {
     const requestBody = {
       text: context.textWindow,
       cursor_offset: context.localCursorOffset,
@@ -1385,12 +1455,42 @@ class ZetaApp {
       };
     }
 
+    const baseTimeoutMs = Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
+    const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? Math.min(18000, options.timeoutMs)
+      : baseTimeoutMs;
+    const prefixLen = String(context.prefixText || "").length;
+    const prefixTail = String(context.prefixText || "").slice(-80);
+    const autocompleteStartedAt = performance.now();
+    console.info(`${zetaLogPrefix("autocomplete")} request start`, {
+      endpoint: endpointUrl,
+      timeoutMs,
+      prefixLen,
+      prefixTail: prefixTail || "(empty)",
+      textLen: String(context.textWindow || "").length,
+      contextLen: String(context.contextWindow || "").length,
+    });
+
     const response = await this.sendHttpMessage({
       url: endpointUrl,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(requestBody),
-      timeoutMs: Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000)),
+      timeoutMs,
+    });
+
+    const autocompleteDurationMs = Math.round(performance.now() - autocompleteStartedAt);
+    const timings = response?.json?.timings_ms;
+    const serverLatencyMs = Number(response?.json?.latency_ms);
+    console.info(`${zetaLogPrefix("autocomplete")} request done`, {
+      durationMs: autocompleteDurationMs,
+      ok: response?.ok,
+      status: response?.status,
+      cacheHit: !!response?.json?.cache_hit,
+      serverLatencyMs: Number.isFinite(serverLatencyMs) ? serverLatencyMs : null,
+      retrievalMs: timings && Number.isFinite(timings.retrieval) ? timings.retrieval : null,
+      generationMs: timings && Number.isFinite(timings.generation) ? timings.generation : null,
+      rankingMs: timings && Number.isFinite(timings.ranking) ? timings.ranking : null,
     });
 
     if (!response.ok) {
@@ -1541,6 +1641,9 @@ class ZetaApp {
       this.clearAutocompleteSuggestion();
       return;
     }
+    if (this.autocompleteGeneratedSentenceBoundaries.includes(context.sentenceBoundary)) {
+      return;
+    }
 
     const requestId = ++this.autocompleteRequestSeq;
     this.autocompleteInFlight = true;
@@ -1548,21 +1651,118 @@ class ZetaApp {
     this.autocompleteQueuedReason = "";
     this.activeAutocomplete = null;
     this.renderTabGhost();
+
+    const autocompleteDetail = `reason: ${reasonLabel} · prefix (${String(context.prefixText || "").length} chars): ${String(context.prefixText || "").slice(-80)}`;
+    const liveActivityId = this.addActivity(
+      "Autocomplete: fetching…",
+      "info",
+      null,
+      autocompleteDetail
+    );
+
+    let result;
+    let requestError = null;
     try {
-      const result = await this.requestAutocomplete(endpointUrl, context, reasonLabel);
+      try {
+        result = await this.requestAutocomplete(endpointUrl, context, reasonLabel);
+      } catch (firstErr) {
+        const isTimeout = /timeout|abort|timed out/i.test(String(firstErr?.message || ""));
+        if (isTimeout) {
+          const baseMs = Math.min(18000, Math.max(4000, Number(this.settings.requestTimeoutMs) || 6000));
+          try {
+            result = await this.requestAutocomplete(endpointUrl, context, reasonLabel, {
+              timeoutMs: Math.min(18000, baseMs * 2),
+            });
+          } catch (retryErr) {
+            requestError = retryErr;
+          }
+        } else {
+          requestError = firstErr;
+        }
+      }
+      if (requestError) {
+      const error = requestError;
       if (requestId !== this.autocompleteRequestSeq) {
+        this.updateActivityById(liveActivityId, { message: "Autocomplete: canceled (new request)" }, { refreshTime: true });
+        return;
+      }
+      this.clearAutocompleteSuggestion();
+      const rawMessage = String(error?.message || error);
+      let status = Number(error?.status) || 0;
+      if (!status) {
+        const messageMatch = rawMessage.match(/HTTP error\s+(\d{3})/i);
+        if (messageMatch) {
+          status = Number(messageMatch[1]) || 0;
+        }
+      }
+      const endpointForLog = String(error?.endpointUrl || endpointUrl || "");
+      this.updateActivityById(
+        liveActivityId,
+        { message: `Autocomplete: failed${status ? ` (${status})` : ""}`, detailText: `${autocompleteDetail}\n${rawMessage.slice(0, 300)}` },
+        { refreshTime: true }
+      );
+      if (status === 404) {
+        this.autocompleteBackoffUntil = Date.now() + 60_000;
+        this.reportAutocompleteErrorOnce(
+          `autocomplete_404:${endpointForLog}`,
+          "Autocomplete endpoint returned 404. Confirm the deployed Modal app exposes `/v1/complete`."
+        );
+      } else {
+        this.autocompleteBackoffUntil = Date.now() + 5000;
+      }
+      logTrace("autocomplete_error", {
+        reason: reasonLabel,
+        status,
+        endpointUrl: endpointForLog,
+        message: rawMessage,
+      });
+    } else {
+      this.autocompleteGeneratedSentenceBoundaries.push(context.sentenceBoundary);
+      if (this.autocompleteGeneratedSentenceBoundaries.length > 100) {
+        this.autocompleteGeneratedSentenceBoundaries.shift();
+      }
+      if (requestId !== this.autocompleteRequestSeq) {
+        this.updateActivityById(liveActivityId, { message: "Autocomplete: canceled (new request)" }, { refreshTime: true });
         return;
       }
       if (this.settings.autocompleteEnabled === false) {
         this.clearAutocompleteSuggestion();
+        this.updateActivityById(liveActivityId, { message: "Autocomplete: disabled" }, { refreshTime: true });
         return;
       }
       const suggestions = this.extractAutocompleteCandidates(result.payload, context);
       if (suggestions.length === 0) {
         this.autocompleteBackoffUntil = 0;
         this.clearAutocompleteSuggestion();
+        const timings = result?.payload?.timings_ms;
+        const reasons = result?.payload?.no_suggestion_reasons;
+        const lines = [autocompleteDetail];
+        if (timings) {
+          lines.push(`retrieval: ${timings.retrieval ?? "?"}ms · generation: ${timings.generation ?? "?"}ms · ranking: ${timings.ranking ?? "?"}ms`);
+        }
+        lines.push(`sent: text=${String(context.textWindow || "").length} chars, context=${String(context.contextWindow || "").length} chars`);
+        if (Array.isArray(reasons) && reasons.length > 0) {
+          lines.push(`why no suggestion: ${reasons.join(", ")}`);
+        }
+        const whyMessage = Array.isArray(reasons) && reasons.length > 0
+          ? `Autocomplete: no suggestion — reason: ${reasons[0]}`
+          : `Autocomplete: no suggestion — reason: ${reasonLabel} (backend gave no reason)`;
+        this.updateActivityById(liveActivityId, { message: whyMessage, detailText: lines.join("\n") }, { refreshTime: true });
         return;
       }
+      const timings = result?.payload?.timings_ms;
+      const latency = result?.payload?.latency_ms;
+      const detail = [autocompleteDetail];
+      if (Number.isFinite(latency)) detail.push(`latency: ${latency}ms`);
+      if (timings) detail.push(`retrieval: ${timings.retrieval ?? "?"}ms · generation: ${timings.generation ?? "?"}ms · ranking: ${timings.ranking ?? "?"}ms`);
+      this.updateActivityById(
+        liveActivityId,
+        {
+          message: result.cacheHit ? "Autocomplete: suggestion ready (cached)" : "Autocomplete: suggestion ready",
+          detailText: detail.join("\n"),
+        },
+        { refreshTime: true }
+      );
       this.activeAutocomplete = {
         candidates: suggestions,
         selectedIndex: 0,
@@ -1585,35 +1785,7 @@ class ZetaApp {
       };
       this.autocompleteBackoffUntil = 0;
       this.renderTabGhost();
-    } catch (error) {
-      if (requestId !== this.autocompleteRequestSeq) {
-        return;
-      }
-      this.clearAutocompleteSuggestion();
-      const rawMessage = String(error?.message || error);
-      let status = Number(error?.status) || 0;
-      if (!status) {
-        const messageMatch = rawMessage.match(/HTTP error\s+(\d{3})/i);
-        if (messageMatch) {
-          status = Number(messageMatch[1]) || 0;
-        }
-      }
-      const endpointForLog = String(error?.endpointUrl || endpointUrl || "");
-      if (status === 404) {
-        this.autocompleteBackoffUntil = Date.now() + 60_000;
-        this.reportAutocompleteErrorOnce(
-          `autocomplete_404:${endpointForLog}`,
-          "Autocomplete endpoint returned 404. Confirm the deployed Modal app exposes `/v1/complete`."
-        );
-      } else {
-        this.autocompleteBackoffUntil = Date.now() + 5000;
-      }
-      logTrace("autocomplete_error", {
-        reason: reasonLabel,
-        status,
-        endpointUrl: endpointForLog,
-        message: rawMessage,
-      });
+    }
     } finally {
       this.autocompleteInFlight = false;
       this.autocompletePendingSince = 0;
@@ -2081,6 +2253,7 @@ class ZetaApp {
   }
 
   persistPanelSnapshot(partial = {}) {
+    this.sortActivityEntriesLatestToEarliest();
     const serializedChunkTree = this.serializeChunkTree(this.chunkTree);
     const next = {
       healthScore: Math.round(this.currentHealthScore),
@@ -2224,10 +2397,10 @@ class ZetaApp {
       })
     );
     if (signature === this.lastChatSnapshotSignature) {
-      return;
+      return Promise.resolve();
     }
     this.lastChatSnapshotSignature = signature;
-    storageLocalSet({
+    return storageLocalSet({
       [CHAT_SNAPSHOT_KEY]: payload,
     });
   }
@@ -2313,45 +2486,56 @@ class ZetaApp {
     nextThreads.push(this.buildGeneralChatThread(existingGeneralThread, issueList.length));
     existingById.delete("general");
 
+    // One thread per sentence: group issues by sentence key so we don't create multiple windows per sentence.
+    const sentenceToIssues = new Map();
     for (const issue of issueList) {
       const issueKey = String(issue?.key || "").trim();
       if (!issueKey) {
         continue;
       }
-      const threadId = `issue-${issueKey}`;
+      const sentenceKey = String(issue?.sentenceKey || "").trim()
+        || shortHash(String(issue?.sentenceText || "").trim())
+        || shortHash(issueKey);
+      if (!sentenceToIssues.has(sentenceKey)) {
+        sentenceToIssues.set(sentenceKey, []);
+      }
+      sentenceToIssues.get(sentenceKey).push(issue);
+    }
+
+    for (const [sentenceKey, groupIssues] of sentenceToIssues) {
+      const primary = groupIssues[0];
+      const threadId = `sentence-${sentenceKey}`;
       const existing = existingById.get(threadId);
-      const title = this.buildChatThreadTitle(issue);
+      const sentencePreview = String(primary?.sentenceText || "").trim().slice(0, 60);
+      const title = sentencePreview ? `${sentencePreview}${sentencePreview.length >= 60 ? "…" : ""}` : this.buildChatThreadTitle(primary);
       const issueSignature = shortHash(
         JSON.stringify({
-          category: issue?.category || "",
-          severity: issue?.severity || "",
-          message: issue?.message || "",
-          targetText: issue?.targetText || "",
-          replacement: issue?.replacement || "",
-          line: Number.isInteger(issue?.line) ? issue.line : null,
-          column: Number.isInteger(issue?.column) ? issue.column : null,
-          source: issue?.source || "",
-          sentenceText: issue?.sentenceText || "",
-          chunkId: issue?.chunkId || "",
-          compileSuccess: issue?.compile?.success,
-          diagnostics: ensureArray(issue?.diagnostics).map((diag) => (
-            `${diag?.severity || "unknown"}|${diag?.message || ""}|${diag?.line || ""}|${diag?.column || ""}`
-          )),
-          semantic: ensureArray(issue?.pipeline?.semantic?.reasons),
-          leanCodeHash: shortHash(String(issue?.leanCode || "")),
-          requestUrl: String(issue?.backendRequestUrl || ""),
+          sentenceKey,
+          issues: groupIssues.map((i) => i?.key || ""),
+          category: primary?.category || "",
+          severity: primary?.severity || "",
+          message: primary?.message || "",
         })
       );
       const metadataChanged = String(existing?.issueSignature || "") !== issueSignature;
-      const diagnostics = ensureArray(issue?.diagnostics).slice(0, 8).map((diag) => ({
-        severity: String(diag?.severity || "unknown"),
-        message: String(diag?.message || ""),
-        line: Number.isInteger(diag?.line) ? diag.line : null,
-        column: Number.isInteger(diag?.column) ? diag.column : null,
-        file: String(diag?.file || ""),
-        raw: String(diag?.raw || ""),
-      }));
-      const semanticReasons = ensureArray(issue?.pipeline?.semantic?.reasons)
+      const diagnostics = [];
+      const seenDiag = new Set();
+      for (const issue of groupIssues) {
+        for (const diag of ensureArray(issue?.diagnostics).slice(0, 8)) {
+          const key = `${diag?.message || ""}|${diag?.line || ""}|${diag?.column || ""}`;
+          if (seenDiag.has(key)) continue;
+          seenDiag.add(key);
+          diagnostics.push({
+            severity: String(diag?.severity || "unknown"),
+            message: String(diag?.message || ""),
+            line: Number.isInteger(diag?.line) ? diag.line : null,
+            column: Number.isInteger(diag?.column) ? diag.column : null,
+            file: String(diag?.file || ""),
+            raw: String(diag?.raw || ""),
+          });
+        }
+      }
+      const semanticReasons = ensureArray(primary?.pipeline?.semantic?.reasons)
         .map((reason) => String(reason || "").trim())
         .filter(Boolean)
         .slice(0, 8);
@@ -2360,7 +2544,7 @@ class ZetaApp {
         : [{
           id: `msg-${threadId}-intro`,
           role: "assistant",
-          text: this.buildChatPrimerMessage(issue),
+          text: this.buildChatPrimerMessage(primary),
           createdAt: now,
           error: false,
         }];
@@ -2370,22 +2554,22 @@ class ZetaApp {
       nextThreads.push({
         id: threadId,
         title,
-        issueKey,
-        category: String(issue?.category || "issue"),
-        severity: String(issue?.severity || "unknown"),
-        issueMessage: String(issue?.message || ""),
-        targetText: String(issue?.targetText || ""),
-        replacement: String(issue?.replacement || ""),
-        line: Number.isInteger(issue?.line) ? issue.line : null,
-        column: Number.isInteger(issue?.column) ? issue.column : null,
-        source: String(issue?.source || ""),
-        sentenceText: String(issue?.sentenceText || ""),
-        chunkId: String(issue?.chunkId || ""),
-        compileSuccess: typeof issue?.compile?.success === "boolean" ? issue.compile.success : null,
+        issueKey: String(primary?.key || ""),
+        category: String(primary?.category || "issue"),
+        severity: String(primary?.severity || "unknown"),
+        issueMessage: String(primary?.message || ""),
+        targetText: String(primary?.targetText || ""),
+        replacement: String(primary?.replacement || ""),
+        line: Number.isInteger(primary?.line) ? primary.line : null,
+        column: Number.isInteger(primary?.column) ? primary.column : null,
+        source: String(primary?.source || ""),
+        sentenceText: String(primary?.sentenceText || ""),
+        chunkId: String(primary?.chunkId || ""),
+        compileSuccess: typeof primary?.compile?.success === "boolean" ? primary.compile.success : null,
         diagnostics,
         semanticReasons,
-        leanCode: String(issue?.leanCode || ""),
-        requestUrl: String(issue?.backendRequestUrl || ""),
+        leanCode: String(primary?.leanCode || ""),
+        requestUrl: String(primary?.backendRequestUrl || ""),
         issueSignature,
         status,
         lastSource: String(existing?.lastSource || ""),
@@ -2425,6 +2609,41 @@ class ZetaApp {
     this.activeChatThreadId = id;
     this.persistChatSnapshot();
     return true;
+  }
+
+  async deleteChatThread(threadId) {
+    const id = String(threadId || "").trim();
+    if (!id) {
+      return false;
+    }
+    const index = this.chatThreads.findIndex((t) => t.id === id);
+    if (index === -1) {
+      return false;
+    }
+    this.chatThreads.splice(index, 1);
+    this.chatById = new Map(this.chatThreads.map((thread) => [thread.id, thread]));
+    if (this.activeChatThreadId === id) {
+      this.activeChatThreadId = this.chatThreads[0]?.id || null;
+    }
+    await this.persistChatSnapshot();
+    return true;
+  }
+
+  clearActiveChatHistory() {
+    const now = Date.now();
+    const general = this.chatThreads.find((t) => t.id === "general");
+    this.chatThreads = general
+      ? [general]
+      : [this.buildGeneralChatThread(null, 0)];
+    this.chatThreads[0].messages = [];
+    this.chatThreads[0].status = "ready";
+    this.chatThreads[0].lastError = "";
+    this.chatThreads[0].lastSource = "";
+    this.chatThreads[0].lastLatencyMs = 0;
+    this.chatThreads[0].updatedAt = now;
+    this.chatById = new Map(this.chatThreads.map((t) => [t.id, t]));
+    this.activeChatThreadId = "general";
+    this.persistChatSnapshot();
   }
 
   resolveChatEndpoint() {
@@ -2515,27 +2734,19 @@ class ZetaApp {
     const location = Number.isInteger(thread?.line) && Number.isInteger(thread?.column)
       ? ` (L${thread.line}:C${thread.column})`
       : "";
-    const lines = [];
-    lines.push(`Diagnosis: ${issueMessage}${location}`);
-    if (sentence) {
-      lines.push(`Sentence: ${sentence}`);
-    }
-    if (target) {
-      lines.push(`Likely problematic span: ${target}`);
-    }
-    if (firstDiagnostic) {
-      lines.push(`Compiler detail: ${firstDiagnostic}`);
-    }
+    const parts = [];
+    parts.push(`${issueMessage}${location}`);
+    if (sentence) parts.push(`Sentence: ${sentence}`);
+    if (target) parts.push(`Relevant text: ${target}`);
+    if (firstDiagnostic) parts.push(`Compiler: ${firstDiagnostic}`);
     if (replacement) {
-      lines.push(`Try this rewrite next: ${replacement}`);
+      parts.push(`Try next: ${replacement}`);
     } else {
-      lines.push("Try rewriting this statement with explicit quantifiers and a direct inequality/proof goal.");
+      parts.push("Try rewriting with explicit quantifiers and a direct proof goal.");
     }
-    lines.push(`Question: ${question}`);
-    if (failureReason) {
-      lines.push(`(Backend fallback triggered: ${failureReason})`);
-    }
-    return lines.join("\n");
+    parts.push(`Your question: ${question}`);
+    if (failureReason) parts.push(`(Fallback: ${failureReason})`);
+    return parts.join(" ");
   }
 
   async sendChatForThread(threadId, message) {
@@ -2549,6 +2760,11 @@ class ZetaApp {
     }
     const thread = this.chatById.get(id);
     if (!thread) {
+      console.warn(`${zetaLogPrefix("assistant")} sendChatForThread thread not found`, {
+        threadId: id,
+        chatByIdSize: this.chatById.size,
+        chatByIdKeys: Array.from(this.chatById.keys()).slice(0, 5),
+      });
       throw new Error("Chat thread not found.");
     }
 
@@ -2564,10 +2780,18 @@ class ZetaApp {
     thread.lastError = "";
     thread.updatedAt = Date.now();
     this.activeChatThreadId = thread.id;
-    this.persistChatSnapshot();
+    await this.persistChatSnapshot();
 
     const requestUrls = this.resolveChatEndpoints();
     const requestBody = this.buildChatRequestPayload(thread, question);
+    console.info(`${zetaLogPrefix("assistant")} sendChatForThread request`, {
+      threadId: thread.id,
+      questionLength: question.length,
+      endpointCount: requestUrls.length,
+      firstUrl: requestUrls[0] || "(none)",
+      payloadKeys: Object.keys(requestBody || {}),
+      issueKey: requestBody?.issue?.category,
+    });
     logTrace("chat_request_send", {
       threadId: thread.id,
       url: requestUrls[0] || "",
@@ -2577,16 +2801,32 @@ class ZetaApp {
     let response = null;
     let sourceRequestUrl = "";
     let lastError = null;
-    for (const requestUrl of requestUrls) {
+    for (let i = 0; i < requestUrls.length; i += 1) {
+      const requestUrl = requestUrls[i];
       try {
+        console.info(`${zetaLogPrefix("assistant")} trying chat endpoint`, {
+          attempt: i + 1,
+          url: requestUrl,
+        });
         response = await this.sendBackendRequest({
           requestUrl,
           requestBody,
         });
         sourceRequestUrl = requestUrl;
+        console.info(`${zetaLogPrefix("assistant")} chat endpoint success`, {
+          url: requestUrl,
+          source: response?.source,
+          answerLength: String(response?.answer || "").length,
+          status: response?.fallback_reason ? "fallback" : "ok",
+        });
         break;
       } catch (error) {
         lastError = error;
+        console.warn(`${zetaLogPrefix("assistant")} chat endpoint failed`, {
+          url: requestUrl,
+          error: String(error?.message || error),
+          status: error?.status,
+        });
         logTrace("chat_request_failed", {
           threadId: thread.id,
           url: requestUrl,
@@ -2599,60 +2839,75 @@ class ZetaApp {
       const answer = String(response?.answer || "").trim() || "No explanation returned.";
       const source = String(response?.source || "deterministic");
       const latencyMs = Number(response?.latency_ms);
-      thread.messages.push({
+      const currentThread = this.chatById.get(thread.id) || thread;
+      if (!Array.isArray(currentThread.messages)) {
+        currentThread.messages = [];
+      }
+      currentThread.messages.push({
         id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         role: "assistant",
         text: answer,
         createdAt: Date.now(),
         error: false,
       });
-      thread.status = "ready";
-      thread.lastSource = source;
-      thread.lastLatencyMs = Number.isFinite(latencyMs)
+      currentThread.status = "ready";
+      currentThread.lastSource = source;
+      currentThread.lastLatencyMs = Number.isFinite(latencyMs)
         ? latencyMs
         : performance.now() - startedAt;
-      thread.lastError = "";
-      thread.requestUrl = sourceRequestUrl || thread.requestUrl;
-      thread.updatedAt = Date.now();
-      this.persistChatSnapshot();
+      currentThread.lastError = "";
+      currentThread.requestUrl = sourceRequestUrl || currentThread.requestUrl;
+      currentThread.updatedAt = Date.now();
+      await this.persistChatSnapshot();
       this.addActivity(
-        `Assistant explained issue: ${thread.title}`,
+        `Replied in thread: ${currentThread.title}`,
         "info",
         null,
-        this.truncateActivityText(answer, 2800)
+        null
       );
       return {
         ok: true,
-        threadId: thread.id,
+        threadId: currentThread.id,
         source,
+        answer,
       };
     }
 
     const errorText = String(lastError?.message || lastError || "Assistant request failed.");
+    console.warn(`${zetaLogPrefix("assistant")} all chat endpoints failed, using local fallback`, {
+      threadId: thread.id,
+      lastError: errorText,
+      triedUrls: requestUrls,
+    });
     const fallbackAnswer = this.buildLocalChatFallback(thread, question, errorText);
-    thread.messages.push({
+    const currentThreadFallback = this.chatById.get(thread.id) || thread;
+    if (!Array.isArray(currentThreadFallback.messages)) {
+      currentThreadFallback.messages = [];
+    }
+    currentThreadFallback.messages.push({
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       role: "assistant",
       text: fallbackAnswer,
       createdAt: Date.now(),
       error: false,
     });
-    thread.status = "ready";
-    thread.lastError = errorText;
-    thread.lastSource = "local-fallback";
-    thread.lastLatencyMs = performance.now() - startedAt;
-    thread.updatedAt = Date.now();
-    this.persistChatSnapshot();
+    currentThreadFallback.status = "ready";
+    currentThreadFallback.lastError = errorText;
+    currentThreadFallback.lastSource = "local-fallback";
+    currentThreadFallback.lastLatencyMs = performance.now() - startedAt;
+    currentThreadFallback.updatedAt = Date.now();
+    await this.persistChatSnapshot();
     this.addActivity(
-      `Assistant fallback used: ${thread.title}`,
+      `Replied in thread (fallback): ${currentThreadFallback.title}`,
       "info",
       null,
-      this.truncateActivityText(errorText, 1200)
+      null
     );
     return {
       ok: true,
       threadId: thread.id,
       source: "local-fallback",
+      answer: fallbackAnswer,
     };
   }
 
@@ -3079,15 +3334,6 @@ class ZetaApp {
       status: hasError ? "error" : "ready",
       pendingCount: 0,
     });
-
-    if (reason !== "typing" || hasError) {
-      this.addActivity(
-        hasError
-          ? `Completed check with ${finalIssues.length} feedback items needing attention.`
-          : `Completed check with ${finalIssues.length} feedback items.`,
-        hasError ? "error" : "success"
-      );
-    }
 
     this.syncPopoverWithCaret();
   }
@@ -4267,6 +4513,7 @@ class ZetaApp {
       }, 1000);
     };
     sentenceEntry.activityLog = null;
+    sentenceEntry.livePipelineTrace = [];
     emitProgress("cache_lookup", {
       requestUrl: HARDCODED_ANALYZE_URL,
       elapsedMs: 0,
@@ -4339,6 +4586,8 @@ class ZetaApp {
     } catch (error) {
       stopWaitingTicker();
       const message = String(error?.message || error || "Request failed.");
+      const failedRequestUrl = String(error?.requestUrl || HARDCODED_ANALYZE_URL);
+      const failedRequest = { requestUrl: failedRequestUrl };
       sentenceEntry.hasError = true;
       sentenceEntry.status = "error";
       sentenceEntry.inferenceMs = performance.now() - startedAt;
@@ -4361,19 +4610,19 @@ class ZetaApp {
         },
       ];
       sentenceEntry.persistentIssues = this.mergeIssues(sentenceEntry.issues);
-      sentenceEntry.lastRequest = null;
+      sentenceEntry.lastRequest = failedRequest;
       sentenceEntry.lastResponse = null;
       sentenceEntry.lastCacheHit = false;
       sentenceEntry.activityLog = this.buildSentenceActivityLog(
         sentenceEntry,
         null,
         { diagnostics: [], hasError: true },
-        null,
+        failedRequest,
         false,
         message
       );
       emitProgress("error", {
-        requestUrl: String(error?.requestUrl || HARDCODED_ANALYZE_URL),
+        requestUrl: failedRequestUrl,
         message,
         elapsedMs: sentenceEntry.inferenceMs,
       });
@@ -4495,16 +4744,35 @@ class ZetaApp {
     }
   }
 
+  normalizeLeanInputMathSets(text) {
+    let normalized = String(text || "");
+    const replacements = [
+      [/\\mathbb\s*\{\s*N\s*\}/gi, "Nat"],
+      [/\\mathbb\s*\{\s*Z\s*\}/gi, "Int"],
+      [/\\mathbb\s*\{\s*Q\s*\}/gi, "Rat"],
+      [/\\mathbb\s*\{\s*R\s*\}/gi, "Real"],
+      [/ℕ/g, "Nat"],
+      [/ℤ/g, "Int"],
+      [/ℚ/g, "Rat"],
+      [/ℝ/g, "Real"],
+    ];
+    for (const [pattern, replacement] of replacements) {
+      normalized = normalized.replace(pattern, replacement);
+    }
+    return normalized.trim();
+  }
+
   buildBackendPayload(snapshot, reason, sentenceEntry = null) {
     const requestUrl = HARDCODED_ANALYZE_URL;
     const mode = this.settings.mode === "accurate" ? "thinking" : "fast";
     const maxIters = mode === "thinking" ? 2 : 1;
     const sentenceText = String(sentenceEntry?.text || snapshot?.text || "").trim();
+    const normalizedSentenceText = this.normalizeLeanInputMathSets(sentenceText);
     const chunkId = String(sentenceEntry?.chunkId || this.activeChunkId || "input");
     const legacyRequest = {
       requestUrl: DEFAULT_MODAL_ANALYZE_URL,
       requestBody: {
-        text: sentenceText,
+        text: normalizedSentenceText,
         context: String(snapshot?.context || "").slice(0, 6000),
         theorem_name: "zeta_candidate",
         imports: ["Std"],
@@ -4513,6 +4781,9 @@ class ZetaApp {
         lean_timeout_seconds: 60,
         skip_lean_check: false,
         include_raw_model_output: false,
+        mode,
+        max_iters: maxIters,
+        include_iteration_history: mode === "thinking",
         zeta_meta: {
           reason,
           scope: snapshot?.scope || this.settings.scope,
@@ -4525,22 +4796,22 @@ class ZetaApp {
     if (/\/v1\/lean\/solve(?:\/)?$/.test(requestUrl)) {
       const chunkPayload = {
         chunk_id: chunkId,
-        text: sentenceText,
+        text: normalizedSentenceText,
         start: 0,
-        end: sentenceText.length,
+        end: normalizedSentenceText.length,
         sentences: [
           {
             sentence_id: `sentence-${chunkId}`,
             start: 0,
-            end: sentenceText.length,
-            text: sentenceText,
+            end: normalizedSentenceText.length,
+            text: normalizedSentenceText,
           },
         ],
       };
       return {
         requestUrl,
         requestBody: {
-          nl_input: sentenceText,
+          nl_input: normalizedSentenceText,
           max_iters: maxIters,
           context: {
             theorem_name: "zeta_candidate",
@@ -4619,6 +4890,17 @@ class ZetaApp {
         requestUrl: request.requestUrl,
         timeoutMs: effectiveTimeoutMs,
       });
+      const isChatExplain = /\/v1\/chat\/explain(?:\/)?$/.test(String(request.requestUrl || ""));
+      if (isChatExplain) {
+        console.info(`${zetaLogPrefix("assistant")} sendBackendRequest chat/explain`, {
+          attempt,
+          url: request.requestUrl,
+          timeoutMs: effectiveTimeoutMs,
+          bodySize: typeof request.requestBody === "object"
+            ? JSON.stringify(request.requestBody).length
+            : 0,
+        });
+      }
       logTrace("backend_request_send", {
         attempt,
         attempts,
@@ -4635,6 +4917,17 @@ class ZetaApp {
           body: JSON.stringify(request.requestBody),
           timeoutMs: effectiveTimeoutMs,
         });
+        if (isChatExplain) {
+          console.info(`${zetaLogPrefix("assistant")} sendBackendRequest chat/explain response`, {
+            attempt,
+            status: response.status,
+            ok: response.ok,
+            durationMs: Math.round(performance.now() - startedAt),
+            source: response.json?.source,
+            fallbackReason: response.json?.fallback_reason,
+            answerLength: String(response.json?.answer || "").length,
+          });
+        }
         logTrace("backend_response_received", {
           attempt,
           status: response.status,
@@ -4653,6 +4946,12 @@ class ZetaApp {
 
         if (!response.ok) {
           const detail = response.json?.detail || response.text || response.statusText || "Request failed";
+          if (isChatExplain) {
+            console.warn(`${zetaLogPrefix("assistant")} chat/explain backend returned error`, {
+              status: response.status,
+              detail: typeof detail === "string" ? detail.slice(0, 500) : detail,
+            });
+          }
           logTrace("backend_response_error", {
             attempt,
             status: response.status,
@@ -4710,6 +5009,11 @@ class ZetaApp {
       requestBody?.lean_timeout_seconds
       || requestBody?.context?.lean_timeout_seconds
     );
+    const isChatExplain = /\/v1\/chat\/explain(?:\/)?$/.test(url);
+    if (isChatExplain) {
+      const minChatMs = 45000;
+      return Math.max(configured, minChatMs);
+    }
     const isLeanSolve = /\/v1\/lean\/solve(?:\/)?$/.test(url);
     const isAnalyze = /\/v1\/(?:analyze|query)(?:\/)?$/.test(url);
     if (isLeanSolve || isAnalyze) {
@@ -4842,6 +5146,45 @@ class ZetaApp {
     return picked[0] || "";
   }
 
+  deriveReplacementFromSuggestion(suggestionText, targetText) {
+    const suggestion = String(suggestionText || "").trim();
+    const target = String(targetText || "").trim();
+    if (!suggestion || !target) {
+      return "";
+    }
+
+    const cleaned = suggestion
+      .replace(/^suggested fix:\s*/i, "")
+      .replace(/^try this rewrite(?: next)?:\s*/i, "")
+      .trim();
+    const patterns = [
+      /^did you mean\s+(.+?)\?\s*$/i,
+      /^replace with\s+(.+?)\.?\s*$/i,
+      /^use\s+(.+?)\s+instead\.?\s*$/i,
+      /^rewrite as\s+(.+?)\.?\s*$/i,
+    ];
+    let candidate = "";
+    for (const pattern of patterns) {
+      const match = cleaned.match(pattern);
+      if (match && match[1]) {
+        candidate = String(match[1]).trim();
+        break;
+      }
+    }
+    if (!candidate) {
+      return "";
+    }
+
+    candidate = candidate
+      .replace(/^["'`]+/, "")
+      .replace(/["'`]+$/, "")
+      .trim();
+    if (!candidate || candidate === target || candidate.length > 260) {
+      return "";
+    }
+    return candidate;
+  }
+
   detectMonotonicInequalityIssues(scopeText) {
     const source = String(scopeText || "");
     if (!source.trim()) {
@@ -4885,7 +5228,7 @@ class ZetaApp {
             category: "semantic-sanity",
             message: `This inequality direction looks inconsistent: ${humanTargetText}.`,
             targetText,
-            replacement: null,
+            replacement: suggestion,
           }),
           category: "semantic-sanity",
           severity: "warning",
@@ -4893,7 +5236,7 @@ class ZetaApp {
           start: match.index,
           end: match.index + targetText.length,
           targetText,
-          replacement: null,
+          replacement: suggestion,
           suggestion: `Did you mean ${suggestion}?`,
           source: "heuristic",
         });
@@ -4965,6 +5308,11 @@ class ZetaApp {
         )
           ? scopeText.slice(localStart, localEnd)
           : (String(range?.text || "").trim() || linkedItem?.latex_excerpt || null);
+        const resolvedReplacement = String(
+          linkedItem?.replacement
+          || this.deriveReplacementFromSuggestion(linkedItem?.suggested_fix, targetText)
+          || ""
+        ).trim() || null;
         const message = linkedItem?.error
           || linkedItem?.suggested_fix
           || String(range?.text || "").trim()
@@ -4976,7 +5324,7 @@ class ZetaApp {
             category: "math-typo",
             message,
             targetText,
-            replacement: linkedItem?.replacement,
+            replacement: resolvedReplacement,
           }),
           category: "math-typo",
           severity: "error",
@@ -4984,7 +5332,7 @@ class ZetaApp {
           start: localStart,
           end: localEnd,
           targetText,
-          replacement: linkedItem?.replacement || null,
+          replacement: resolvedReplacement,
           suggestion: linkedItem?.suggested_fix || null,
           suggestedFix: linkedItem?.suggested_fix || null,
           source: "backend",
@@ -5006,6 +5354,11 @@ class ZetaApp {
         start !== null && end !== null && end > start
           ? scopeText.slice(start, end)
           : excerpt;
+      const resolvedReplacement = String(
+        item.replacement
+        || this.deriveReplacementFromSuggestion(item.suggested_fix, targetText)
+        || ""
+      ).trim() || null;
 
       const message =
         item.error || item.suggested_fix || item.probable_cause || "Interpretation issue";
@@ -5016,7 +5369,7 @@ class ZetaApp {
           category: "math-typo",
           message,
           targetText,
-          replacement: item.replacement,
+          replacement: resolvedReplacement,
         }),
         category: "math-typo",
         severity: "error",
@@ -5024,7 +5377,7 @@ class ZetaApp {
         start,
         end,
         targetText,
-        replacement: item.replacement || null,
+        replacement: resolvedReplacement,
         suggestion: item.suggested_fix || null,
         suggestedFix: item.suggested_fix || null,
         source: "backend",
@@ -5114,11 +5467,9 @@ class ZetaApp {
       });
     }
 
-    if (compileSuccess) {
-      const semanticHeuristics = this.detectMonotonicInequalityIssues(scopeText);
-      for (const heuristicIssue of semanticHeuristics) {
-        issues.push(heuristicIssue);
-      }
+    const semanticHeuristics = this.detectMonotonicInequalityIssues(scopeText);
+    for (const heuristicIssue of semanticHeuristics) {
+      issues.push(heuristicIssue);
     }
 
     if (
@@ -5177,6 +5528,21 @@ class ZetaApp {
     }
 
     for (const issue of issues) {
+      if (issue?.replacement) {
+        continue;
+      }
+      const targetText = String(issue?.targetText || "").trim();
+      const suggestionText = String(issue?.suggestion || issue?.suggestedFix || "").trim();
+      if (!targetText || !suggestionText) {
+        continue;
+      }
+      const derived = this.deriveReplacementFromSuggestion(suggestionText, targetText);
+      if (derived) {
+        issue.replacement = derived;
+      }
+    }
+
+    for (const issue of issues) {
       if (
         !Number.isInteger(issue.start) &&
         issue.targetText &&
@@ -5193,6 +5559,7 @@ class ZetaApp {
     const hasCompileErrors =
       !compileSuccess ||
       response.pipeline?.semantic?.success === false ||
+      interpretationItems.length > 0 ||
       diagnostics.some((diag) => normalizeSeverity(diag.severity) === "error");
 
     return {
@@ -5306,7 +5673,7 @@ class ZetaApp {
     }
     if (ms > 1000) {
       const seconds = ms / 1000;
-      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+      return `${seconds.toFixed(2).replace(/\.0+$/, "")} s`;
     }
     return `${Math.round(ms)} ms`;
   }
@@ -5378,6 +5745,60 @@ class ZetaApp {
     return value.replace(/[_-]+/g, " ");
   }
 
+  resolveLivePipelineOutcome(step) {
+    const value = String(step || "").trim().toLowerCase();
+    if (value === "error" || value === "request_failed") {
+      return "failed";
+    }
+    if (
+      value === "complete"
+      || value === "cache_hit"
+      || value === "response_ready"
+      || value === "normalize_response"
+    ) {
+      return "ok";
+    }
+    if (value === "canceled") {
+      return "skipped";
+    }
+    return "unknown";
+  }
+
+  recordLivePipelineStep(sentenceEntry, step, meta = {}) {
+    if (!sentenceEntry || typeof sentenceEntry !== "object") {
+      return [];
+    }
+    const trace = Array.isArray(sentenceEntry.livePipelineTrace)
+      ? sentenceEntry.livePipelineTrace.slice()
+      : [];
+    const label = this.describeLivePipelineStep(step, meta);
+    const stepKey = `${String(step || "")}|${label}`;
+    const elapsedMs = Number(meta.elapsedMs);
+    const durationMs = Number.isFinite(elapsedMs) && elapsedMs >= 0
+      ? Math.round(elapsedMs)
+      : null;
+    const outcome = this.resolveLivePipelineOutcome(step);
+    const lastStage = trace.length > 0 ? trace[trace.length - 1] : null;
+    if (lastStage && lastStage.key === stepKey) {
+      lastStage.outcome = outcome;
+      if (durationMs !== null) {
+        lastStage.durationMs = durationMs;
+      }
+    } else {
+      trace.push({
+        key: stepKey,
+        label,
+        outcome,
+        durationMs,
+      });
+    }
+    if (trace.length > 10) {
+      trace.splice(0, trace.length - 10);
+    }
+    sentenceEntry.livePipelineTrace = trace;
+    return trace;
+  }
+
   buildLiveSentenceActivityDetail(sentenceEntry, step, meta = {}) {
     const text = String(sentenceEntry?.text || "");
     const displayText = this.toActivityMathText(text) || text;
@@ -5422,6 +5843,19 @@ class ZetaApp {
     if (step === "await_backend_pipeline") {
       detailLines.push(`pipeline_phase: ${this.estimateLivePipelinePhase(meta.elapsedMs)}`);
     }
+    const liveTrace = ensureArray(sentenceEntry?.livePipelineTrace);
+    if (liveTrace.length > 0) {
+      detailLines.push("", "Pipeline trace");
+      for (let index = 0; index < liveTrace.length; index += 1) {
+        const stage = liveTrace[index];
+        const durationLabel = Number.isFinite(Number(stage?.durationMs))
+          ? String(Math.max(0, Math.round(Number(stage.durationMs))))
+          : "--";
+        detailLines.push(
+          `${index + 1}. ${String(stage?.label || "step")} · ${String(stage?.outcome || "unknown")} · attempted=true · duration_ms=${durationLabel}`
+        );
+      }
+    }
     if ((step === "error" || step === "request_failed") && meta.message) {
       detailLines.push("", "Error", this.truncateActivityText(String(meta.message || ""), 1200));
     }
@@ -5439,6 +5873,7 @@ class ZetaApp {
     const level = step === "error" || step === "request_failed"
       ? "error"
       : (step === "complete" ? "success" : "info");
+    this.recordLivePipelineStep(sentenceEntry, step, meta);
     this.updateActivityById(id, {
       message: `analyzing · ${sentenceLabel} · ${stepLabel}`,
       level,
@@ -5509,6 +5944,10 @@ class ZetaApp {
       "Sentence",
       this.truncateActivityText(sentenceDisplayText, 500),
     ];
+    const generatedLeanCode = String(responsePayload?.lean_code || "").trim();
+    if (generatedLeanCode) {
+      detailLines.push("", "Lean", this.truncateActivityText(generatedLeanCode, 5000));
+    }
     if (errorMessage) {
       detailLines.push("", "Error", this.truncateActivityText(errorMessage, 1200));
     }
@@ -5568,6 +6007,29 @@ class ZetaApp {
     });
   }
 
+  /** Normalized key for activity dedup: same sentence/title => one entry (keep latest). */
+  getActivityTitleKey(message) {
+    const s = String(message || "").trim().replace(/\s+/g, " ");
+    const sep = " · ";
+    const i = s.lastIndexOf(sep);
+    const title = i >= 0 ? s.slice(i + sep.length).trim() : s;
+    return title || s;
+  }
+
+  activityCreatedAt(entry) {
+    const created = Number(entry?.createdAt);
+    if (Number.isFinite(created)) return created;
+    const id = String(entry?.id || "");
+    const match = id.match(/^act-(\d+)-/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  sortActivityEntriesLatestToEarliest() {
+    this.activityEntries.sort(
+      (a, b) => this.activityCreatedAt(b) - this.activityCreatedAt(a)
+    );
+  }
+
   addActivity(message, level = "info", undoAction = null, detailText = "") {
     const now = Date.now();
     const entry = {
@@ -5576,11 +6038,17 @@ class ZetaApp {
       level,
       detailText: this.truncateActivityText(detailText, 7000),
       timeLabel: this.buildActivityTimeLabel(now),
+      createdAt: now,
     };
 
-    this.activityEntries.unshift(entry);
+    const newKey = this.getActivityTitleKey(message);
+    this.activityEntries = this.activityEntries.filter(
+      (e) => this.getActivityTitleKey(e?.message) !== newKey
+    );
+    this.activityEntries.push(entry);
+    this.sortActivityEntriesLatestToEarliest();
     if (this.activityEntries.length > 60) {
-      this.activityEntries.length = 60;
+      this.activityEntries = this.activityEntries.slice(0, 60);
     }
 
     if (undoAction) {
@@ -5623,6 +6091,7 @@ class ZetaApp {
     }
 
     this.activityEntries[index] = next;
+    this.sortActivityEntriesLatestToEarliest();
     this.panel.setActivity(this.activityEntries, this.undoStack.length > 0);
     this.persistPanelSnapshot();
     return true;
@@ -5748,7 +6217,7 @@ class ZetaApp {
       info: 0,
       unknown: 0,
     };
-
+    const issueEntries = [];
     let rawSeverityPenalty = 0;
     for (const issue of issueList) {
       const severity = normalizeSeverity(issue?.severity);
@@ -5757,7 +6226,10 @@ class ZetaApp {
       } else {
         severityCounts.unknown += 1;
       }
-      rawSeverityPenalty += SEVERITY_WEIGHT[severity] || SEVERITY_WEIGHT.unknown;
+      const points = SEVERITY_WEIGHT[severity] || SEVERITY_WEIGHT.unknown;
+      rawSeverityPenalty += points;
+      const message = String(issue?.message || issue?.category || "issue").trim().slice(0, 80);
+      issueEntries.push({ message: message || severity, severity, points });
     }
 
     const cachedSentences = Math.max(0, Number(this.currentSentenceCached) || 0);
@@ -5794,6 +6266,7 @@ class ZetaApp {
       pendingSentences,
       analyzedSentences,
       coverageRatio,
+      issueEntries,
     };
   }
 

@@ -379,3 +379,227 @@ def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pyte
         assert payload["pipeline"]["semantic"]["reasons"] == []
 
     asyncio.run(_run())
+
+
+def test_solve_retries_force_analyze_after_def_check_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_code = (
+        "import Std\n\n"
+        "set_option autoImplicit false\n\n"
+        "namespace MathGrammar\n"
+        "def zeta_candidate (x : Expr) : MetaM (Option (Expr × Expr))\n"
+        "#check zeta_candidate\n"
+        "end MathGrammar\n"
+    )
+    good_code = (
+        "import Mathlib.Data.Real.Basic\n\n"
+        "set_option autoImplicit false\n\n"
+        "namespace MathGrammar\n"
+        "axiom rational_repr : ∀ x : Real, (∃ p q : Int, x = (p : Real) / (q : Real))\n"
+        "#check rational_repr\n"
+        "end MathGrammar\n"
+    )
+    call_modes: list[tuple[str, bool]] = []
+
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        mode = str((context or {}).get("mode") or "fast")
+        use_generate = bool(getattr(settings, "modal_use_generate_endpoint", True))
+        call_modes.append((mode, use_generate))
+        if use_generate:
+            return GeneratedLean(code=bad_code, metadata={"status": "unchecked", "is_valid_lean": False})
+        if mode == "thinking":
+            return GeneratedLean(code=bad_code, metadata={"status": "unchecked", "is_valid_lean": False})
+        return GeneratedLean(code=good_code, metadata={"status": "ok", "is_valid_lean": True})
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        if "def zeta_candidate" in code:
+            return CompileResult(
+                success=False,
+                stdout="",
+                stderr="Main.lean:6:1: error: unexpected token '#check'; expected ':=', 'where' or '|'",
+                diagnostics=[
+                    Diagnostic(
+                        severity="error",
+                        line=6,
+                        column=1,
+                        message="unexpected token '#check'; expected ':=', 'where' or '|'",
+                    )
+                ],
+            )
+        return CompileResult(success=True, stdout="", stderr="", diagnostics=[])
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={"nl_input": "We can represent x in R as p/q with integers p,q."},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is True
+        assert "rational_repr" in payload["lean_code"]
+        retry_stage = next(
+            stage for stage in payload["pipeline"]["stages"] if stage["stage"] == "modal_retry_analyze"
+        )
+        assert retry_stage["attempted"] is True
+        assert retry_stage["success"] is True
+
+    asyncio.run(_run())
+
+    assert call_modes[0] == ("fast", True)
+    assert ("thinking", True) in call_modes
+    assert ("fast", False) in call_modes
+
+
+def test_solve_uses_modal_semantic_interpretation_on_compile_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentence = "For all naturals n, n + 2 >= n + 3."
+
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        assert prompt == sentence
+        return GeneratedLean(
+            code=(
+                "import Std\n\n"
+                "set_option autoImplicit false\n\n"
+                "namespace MathGrammar\n"
+                "axiom bad_claim : ∀ n : Nat, n + 2 ≥ n + 3\n"
+                "#check bad_claim\n"
+                "end MathGrammar\n"
+            ),
+            metadata={
+                "status": "ok",
+                "is_valid_lean": True,
+                "interpretation": {
+                    "summary": "This universal inequality is false.",
+                    "items": [
+                        {
+                            "error": "The inequality fails for n = 0.",
+                            "probable_cause": "Direction is reversed.",
+                            "suggested_fix": "Use n + 2 <= n + 3 instead.",
+                            "source": "latex",
+                            "latex_start": 20,
+                            "latex_end": 33,
+                            "latex_excerpt": "n + 2 >= n + 3",
+                            "lean_line": None,
+                            "lean_column": None,
+                            "replacement": "n + 2 <= n + 3",
+                            "confidence": 0.93,
+                        }
+                    ],
+                    "suggestions": ["Replace with n + 2 <= n + 3."],
+                },
+                "final_feedback": ["Try n + 2 <= n + 3."],
+            },
+        )
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        return CompileResult(success=True, stdout="", stderr="", diagnostics=[])
+
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        raise AssertionError("Local LLM interpretation should be skipped when modal interpretation exists.")
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.interpret_errors", fake_interpret_errors)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={"nl_input": sentence},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is True
+        assert payload["interpretation"]["summary"] == "This universal inequality is false."
+        assert payload["interpretation"]["items"][0]["replacement"] == "n + 2 <= n + 3"
+        assert "Try n + 2 <= n + 3." in payload["interpretation"]["suggestions"]
+        assert payload["dashboard"]["status"] == "warning"
+        assert payload["highlights"]["highlights"]
+
+        llm_stage = next(
+            stage for stage in payload["pipeline"]["stages"] if stage["stage"] == "llm_interpretation"
+        )
+        assert llm_stage["attempted"] is False
+        assert llm_stage["details"]["reason"] == "modal_metadata"
+
+    asyncio.run(_run())
+
+
+def test_solve_normalizes_unicode_math_sets_before_compile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_compiled_code: list[str] = []
+
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        return GeneratedLean(
+            code=(
+                "import Std\n\n"
+                "set_option autoImplicit false\n\n"
+                "namespace MathGrammar\n"
+                "axiom bad_claim : ∀ n : ℕ, n + 2 ≥ n + 3\n"
+                "#check bad_claim\n"
+                "end MathGrammar\n"
+            ),
+            metadata={"status": "ok", "is_valid_lean": True},
+        )
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        seen_compiled_code.append(code)
+        if "ℕ" in code:
+            return CompileResult(
+                success=False,
+                stdout="",
+                stderr="Unknown identifier `ℕ`",
+                diagnostics=[Diagnostic(severity="error", message="Unknown identifier `ℕ`")],
+            )
+        return CompileResult(success=True, stdout="", stderr="", diagnostics=[])
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={"nl_input": "For all naturals n, n + 2 >= n + 3."},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is True
+        assert seen_compiled_code, "compile_lean should have been called"
+        assert "Nat" in seen_compiled_code[0]
+        assert "ℕ" not in seen_compiled_code[0]
+
+    asyncio.run(_run())

@@ -373,6 +373,7 @@
   position: fixed;
   top: auto;
   bottom: 88px;
+  left: auto;
   right: 14px;
   width: min(430px, calc(100vw - 20px));
   min-height: 620px;

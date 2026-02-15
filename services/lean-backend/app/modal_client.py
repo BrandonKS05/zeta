@@ -38,7 +38,12 @@ _ANALYZE_METADATA_FIELDS = (
     "lean_declaration",
     "diagnostics",
     "feedback",
+    "final_feedback",
+    "interpretation",
     "is_valid_lean",
+    "mode",
+    "iteration_count",
+    "iteration_history",
     "latency_ms",
 )
 
@@ -177,9 +182,9 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
     elif path.endswith(_QUERY_ENDPOINT_SUFFIX):
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{target_suffix}"
         rewritten = True
-    elif path == "":
-        # Root translator endpoint is valid and should be used as-is.
-        return normalized
+    elif path == "" or path == "/":
+        path = target_suffix
+        rewritten = True
 
     resolved = urlunsplit((parsed.scheme, parsed.netloc, path or "/", parsed.query, parsed.fragment))
     if rewritten:
@@ -254,9 +259,13 @@ async def generate_lean(
     settings = settings or get_settings()
     if not settings.modal_endpoint_url:
         raise ModalClientError("MODAL_ENDPOINT_URL is not configured")
+    context_payload = context or {}
+    mode = _normalize_mode(context_payload.get("mode"), max_iters)
+    use_generate_default = bool(getattr(settings, "modal_use_generate_endpoint", True))
+    use_generate = use_generate_default and mode != "thinking" and max_iters <= 1
     endpoint_url = _resolve_modal_endpoint(
         settings.modal_endpoint_url,
-        use_generate=bool(getattr(settings, "modal_use_generate_endpoint", True)),
+        use_generate=use_generate,
     )
 
     headers = {"Content-Type": "application/json"}
@@ -265,7 +274,6 @@ async def generate_lean(
         headers["Authorization"] = f"Bearer {settings.modal_api_key}"
         headers["x-api-key"] = settings.modal_api_key
 
-    context_payload = context or {}
     payload = _build_modal_payload(
         prompt=prompt,
         context_payload=context_payload,

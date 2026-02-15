@@ -3,6 +3,9 @@
 
   const zeta = window.__zetaContent || (window.__zetaContent = {});
 
+  /** Set to true to mute all logs except chat/assistant (turn off when done debugging). */
+  const DEBUG_CHAT_ONLY = true;
+
   const SETTINGS_KEY = "zetaSettings";
   const MODE_KEY = "zetaMode";
   const IGNORED_KEY = "zetaIgnoredIssueKeys";
@@ -26,7 +29,7 @@
     notationStrictness: "balanced",
     panelOpen: false,
   };
-  
+
   const MODE_SET = new Set(["fast", "accurate", "auto"]);
   const SCOPE_SET = new Set(["selection", "paragraph", "document"]);
   const THEME_SET = new Set(["dark", "light"]);
@@ -95,12 +98,12 @@
       try {
         chrome.storage.sync.get(defaults, (result) => {
           try {
-            const runtimeError = chrome.runtime?.lastError;
+            const runtimeError = chrome?.runtime?.lastError;
             if (runtimeError) {
               resolve(defaults);
               return;
             }
-            resolve(result);
+            resolve(result != null ? result : defaults);
           } catch (_error) {
             resolve(defaults);
           }
@@ -120,7 +123,7 @@
       try {
         chrome.storage.sync.set(payload, () => {
           try {
-            void chrome.runtime?.lastError;
+            void chrome?.runtime?.lastError;
           } catch (_error) {
             // ignore invalidated context
           }
@@ -141,12 +144,12 @@
       try {
         chrome.storage.local.get(defaults, (result) => {
           try {
-            const runtimeError = chrome.runtime?.lastError;
+            const runtimeError = chrome?.runtime?.lastError;
             if (runtimeError) {
               resolve(defaults);
               return;
             }
-            resolve(result);
+            resolve(result != null ? result : defaults);
           } catch (_error) {
             resolve(defaults);
           }
@@ -166,7 +169,7 @@
       try {
         chrome.storage.local.set(payload, () => {
           try {
-            void chrome.runtime?.lastError;
+            void chrome?.runtime?.lastError;
           } catch (_error) {
             // ignore invalidated context
           }
@@ -198,10 +201,14 @@
 
   function logTrace(event, payload) {
     try {
+      if (DEBUG_CHAT_ONLY && !/chat|assistant/.test(String(event))) {
+        return;
+      }
+      const ts = new Date().toISOString();
       if (typeof payload === "undefined") {
-        console.info(`${LOG_PREFIX} ${event}`);
+        console.info(`${LOG_PREFIX} ${ts} ${event}`);
       } else {
-        console.info(`${LOG_PREFIX} ${event}`, payload);
+        console.info(`${LOG_PREFIX} ${ts} ${event}`, payload);
       }
     } catch (_error) {
       // ignore console failures
@@ -209,6 +216,7 @@
   }
 
   Object.assign(zeta, {
+    DEBUG_CHAT_ONLY,
     SETTINGS_KEY,
     MODE_KEY,
     IGNORED_KEY,

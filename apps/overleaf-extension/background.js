@@ -1,5 +1,9 @@
 "use strict";
 
+/** Set to true to mute all logs except chat/explain (turn off when done debugging). */
+const DEBUG_CHAT_ONLY = true;
+const zetaLogPrefix = (tag) => `[zeta:${tag}] ${new Date().toISOString()}`;
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "zeta-http") {
     return false;
@@ -20,11 +24,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   const controller = new AbortController();
   const startedAt = Date.now();
-  console.info("[zeta:bg] http_request_start", {
-    method,
-    url,
-    timeoutMs,
-  });
+  const isChatExplain = typeof url === "string" && url.includes("/v1/chat/explain");
+  const isComplete = typeof url === "string" && url.includes("/v1/complete");
+  if (!DEBUG_CHAT_ONLY || isChatExplain || isComplete) {
+    console.info(`${zetaLogPrefix("bg")} http_request_start`, {
+      method,
+      url,
+      timeoutMs,
+      isChatExplain,
+      isComplete,
+    });
+  }
   const timerId = setTimeout(() => {
     controller.abort();
   }, Math.max(1000, Number(timeoutMs) || 15000));
@@ -46,13 +56,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         json = null;
       }
 
-      console.info("[zeta:bg] http_response", {
-        method,
-        url,
-        status: response.status,
-        ok: response.ok,
-        durationMs: Date.now() - startedAt,
-      });
+      const durationMs = Date.now() - startedAt;
+      if (!DEBUG_CHAT_ONLY || isChatExplain || isComplete) {
+        console.info(`${zetaLogPrefix("bg")} http_response`, {
+          method,
+          url,
+          status: response.status,
+          ok: response.ok,
+          durationMs,
+        });
+      }
+      if (isComplete && json) {
+        console.info(`${zetaLogPrefix("bg")} complete response`, {
+          durationMs,
+          serverLatencyMs: json.latency_ms,
+          timings_ms: json.timings_ms,
+          cache_hit: json.cache_hit,
+        });
+      }
+      if (isChatExplain) {
+        console.info(`${zetaLogPrefix("bg")} chat/explain response detail`, {
+          status: response.status,
+          ok: response.ok,
+          durationMs,
+          source: json?.source,
+          fallback_reason: json?.fallback_reason,
+          answerLength: typeof json?.answer === "string" ? json.answer.length : 0,
+          error: json?.detail ? String(json.detail).slice(0, 300) : undefined,
+        });
+      }
 
       sendResponse({
         ok: response.ok,
@@ -64,12 +96,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     .catch((error) => {
       const isAbort = error?.name === "AbortError";
-      console.warn("[zeta:bg] http_error", {
-        method,
-        url,
-        durationMs: Date.now() - startedAt,
-        error: isAbort ? "Request timed out." : String(error?.message || error),
-      });
+      if (!DEBUG_CHAT_ONLY || isChatExplain || isComplete) {
+        console.warn(`${zetaLogPrefix("bg")} http_error`, {
+          method,
+          url,
+          durationMs: Date.now() - startedAt,
+          error: isAbort ? "Request timed out." : String(error?.message || error),
+          isChatExplain,
+          isComplete,
+        });
+      }
       sendResponse({
         ok: false,
         error: isAbort ? "Request timed out." : String(error?.message || error),

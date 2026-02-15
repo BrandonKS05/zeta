@@ -190,6 +190,20 @@ LEAN_FORALL_UNTYPED_GROUP_RE = re.compile(
     r"(?:∀|forall)\s+([A-Za-z_][A-Za-z0-9_']*(?:\s+[A-Za-z_][A-Za-z0-9_']*)*)\s*,"
 )
 LEAN_TYPED_BINDER_RE = re.compile(r"(?:∀|forall)\s+([A-Za-z_][A-Za-z0-9_']*)\s*:")
+LEAN_INCOMPLETE_LET_RE = re.compile(
+    r"^\s*let\s+([A-Za-z_][A-Za-z0-9_']*)\s*:\s*(.+)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# Herald-style incomplete def/theorem (header with no := body); we need a type for axiom _ : <type>.
+# Lean 4 allows modifiers before def: noncomputable, unsafe, partial.
+LEAN_INCOMPLETE_DEF_HEADER_RE = re.compile(
+    r"^\s*(?:(?:noncomputable|unsafe|partial)\s+)?def\s+[A-Za-z_][A-Za-z0-9_']*((?:\s*\([^)]*\))*)\s*:\s*(.+)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+LEAN_INCOMPLETE_THEOREM_HEADER_RE = re.compile(
+    r"^\s*(?:theorem|lemma)\s+[A-Za-z_][A-Za-z0-9_']*((?:\s*\([^)]*\))*)\s*:\s*(.+)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 LEAN_CANONICAL_REPLACEMENTS = (
     (r"\\mathbb\s*\{\s*N\s*\}", "Nat"),
     (r"\\mathbb\s*\{\s*Z\s*\}", "Int"),
@@ -557,6 +571,7 @@ class CompleteResponse(BaseModel):
     timings_ms: dict[str, int] = Field(default_factory=dict)
     latency_ms: int = 0
     debug: dict[str, Any] | None = None
+    no_suggestion_reasons: list[str] = Field(default_factory=list)
 
 
 def _normalize_input_text(text: str) -> str:
@@ -1750,8 +1765,9 @@ def _apply_final_feedback_summary(request: AnalyzeRequest, response: AnalyzeResp
 
     response.final_feedback = final_feedback
     for item in final_feedback:
-        if item not in response.feedback:
-            response.feedback.append(item)
+        tagged = f"LLM final feedback: {item}"
+        if tagged not in response.feedback:
+            response.feedback.append(tagged)
     return response
 
 
@@ -1842,6 +1858,57 @@ def _normalize_statement_type(candidate: str) -> str:
         if marker in value:
             value = value.split(marker, 1)[0].strip()
 
+    if ":=" not in value:
+        def_match = LEAN_INCOMPLETE_DEF_HEADER_RE.match(value)
+        if def_match:
+            binders = def_match.group(1).strip()
+            type_part = def_match.group(2).split("\n")[0].strip()
+            if type_part and len(type_part) <= 500 and "#check" not in type_part.lower():
+                binder_parts = re.findall(r"\([^)]*\)", binders)
+                if binder_parts:
+                    value = " → ".join(binder_parts) + " → " + type_part
+                else:
+                    value = type_part
+        else:
+            thm_match = LEAN_INCOMPLETE_THEOREM_HEADER_RE.match(value)
+            if thm_match:
+                binders = thm_match.group(1).strip()
+                type_part = thm_match.group(2).split("\n")[0].strip()
+                if type_part and len(type_part) <= 500 and "#check" not in type_part.lower():
+                    binder_parts = re.findall(r"\([^)]*\)", binders)
+                    if binder_parts:
+                        value = " → ".join(binder_parts) + " → " + type_part
+                    else:
+                        value = type_part
+            else:
+                # Full Lean file: find first line that looks like "[noncomputable] def name (...) : type" (no :=)
+                for line in value.split("\n"):
+                    line_stripped = line.strip()
+                    if " : " not in line_stripped or " := " in line_stripped:
+                        continue
+                    def_match = LEAN_INCOMPLETE_DEF_HEADER_RE.match(line_stripped)
+                    if def_match:
+                        binders = def_match.group(1).strip()
+                        type_part = def_match.group(2).split("\n")[0].strip()
+                        if type_part and len(type_part) <= 500 and "#check" not in type_part.lower():
+                            binder_parts = re.findall(r"\([^)]*\)", binders)
+                            if binder_parts:
+                                value = " → ".join(binder_parts) + " → " + type_part
+                            else:
+                                value = type_part
+                        break
+                    thm_match = LEAN_INCOMPLETE_THEOREM_HEADER_RE.match(line_stripped)
+                    if thm_match:
+                        binders = thm_match.group(1).strip()
+                        type_part = thm_match.group(2).split("\n")[0].strip()
+                        if type_part and len(type_part) <= 500 and "#check" not in type_part.lower():
+                            binder_parts = re.findall(r"\([^)]*\)", binders)
+                            if binder_parts:
+                                value = " → ".join(binder_parts) + " → " + type_part
+                            else:
+                                value = type_part
+                        break
+
     value = value.strip().strip("`").strip()
     value = re.sub(r"\s+", " ", value)
     return value
@@ -1912,6 +1979,51 @@ def _compose_lean_source(imports: list[str], declaration_name: str, statement_ty
         f"#check {declaration_name}\n"
         "end MathGrammar\n"
     )
+
+
+def _sanitize_lean_source_def_headers(lean_source: str, declaration_name: str) -> str:
+    """If lean_source contains a line like 'def name (...) : type' or 'axiom name : def ...' (no :=),
+    replace with 'axiom declaration_name : type' so the file is valid. Last-resort safety net."""
+    lines = lean_source.split("\n")
+
+    def extract_type_from_def_line(text: str) -> str | None:
+        def_match = LEAN_INCOMPLETE_DEF_HEADER_RE.match(text)
+        if def_match:
+            binders = def_match.group(1).strip()
+            type_part = def_match.group(2).split("\n")[0].strip()
+        else:
+            thm_match = LEAN_INCOMPLETE_THEOREM_HEADER_RE.match(text)
+            if not thm_match:
+                return None
+            binders = thm_match.group(1).strip()
+            type_part = thm_match.group(2).split("\n")[0].strip()
+        if not type_part or "#check" in type_part.lower() or len(type_part) > 500:
+            return None
+        for pattern, replacement in LEAN_CANONICAL_REPLACEMENTS:
+            type_part = re.sub(pattern, replacement, type_part)
+            binders = re.sub(pattern, replacement, binders)
+        binder_parts = re.findall(r"\([^)]*\)", binders)
+        type_str = " → ".join(binder_parts) + " → " + type_part if binder_parts else type_part
+        return re.sub(r"\s+", " ", type_str).strip()
+
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        if " := " in line_stripped:
+            continue
+        # Case 1: line is "def name (...) : type" or "noncomputable def ..."
+        type_str = extract_type_from_def_line(line_stripped)
+        if type_str is not None:
+            lines[i] = f"axiom {declaration_name} : {type_str}"
+            return "\n".join(lines)
+        # Case 2: line is "axiom name : def name (...) : type" (composed when statement_type was raw def)
+        if line_stripped.startswith("axiom ") and " : def " in line_stripped:
+            prefix, _, after_colon = line_stripped.partition(" : ")
+            if after_colon.strip().startswith("def "):
+                type_str = extract_type_from_def_line(after_colon.strip())
+                if type_str is not None:
+                    lines[i] = f"axiom {declaration_name} : {type_str}"
+                    return "\n".join(lines)
+    return lean_source
 
 
 def _parse_lean_diagnostics(output: str) -> list[LeanDiagnostic]:
@@ -2327,6 +2439,21 @@ def _refine_statement_type(
     candidate = _normalize_statement_type(statement_type)
     rewrite_notes: list[str] = []
 
+    lower_errors = " ".join(
+        d.message.lower() for d in diagnostics if d.severity == "error"
+    )
+    if ":=" not in candidate and ("#check" in lower_errors or "expected ':='" in lower_errors):
+        let_match = LEAN_INCOMPLETE_LET_RE.match(candidate)
+        if let_match:
+            binder_id = let_match.group(1)
+            type_part = let_match.group(2).strip()
+            if type_part and len(type_part) <= 200:
+                candidate = f"∀ {binder_id} : {type_part}, True"
+                rewrite_notes.append(
+                    "Rewrote incomplete `let` term to type (∀ x : T, True) so it is valid in an axiom."
+                )
+                return candidate, rewrite_notes
+
     llm_rewrite, llm_feedback = _rewrite_with_llm(candidate, diagnostics)
     if llm_rewrite and llm_rewrite != candidate:
         if llm_feedback:
@@ -2421,6 +2548,7 @@ def _evaluate_statement_type(
         declaration_name=declaration_name,
         statement_type=statement_type,
     )
+    lean_source = _sanitize_lean_source_def_headers(lean_source, declaration_name)
     if request.skip_lean_check:
         feedback = _build_feedback(statement_type, [], assumptions, notes)
         feedback.append("Lean check skipped (`skip_lean_check=true`).")
@@ -2479,6 +2607,7 @@ def _evaluate_statement_type(
             declaration_name=declaration_name,
             statement_type=statement_type,
         )
+        lean_source = _sanitize_lean_source_def_headers(lean_source, declaration_name)
         is_valid_lean, diagnostics, _lean_raw = _run_lean_check(
             statement_type=statement_type,
             timeout_seconds=request.lean_timeout_seconds,
@@ -2600,6 +2729,30 @@ def _analyze_with_iterations(request: AnalyzeRequest) -> AnalyzeResponse:
     elif len(history) >= max_iters:
         current_response.feedback.append(f"Reached max iterations ({max_iters}) without valid Lean.")
 
+    if not current_response.is_valid_lean and current_statement_type:
+        backup_refined, backup_notes = _refine_statement_type(
+            statement_type=current_statement_type,
+            diagnostics=current_response.diagnostics,
+        )
+        if backup_refined != current_statement_type and backup_notes:
+            fallback_response = _evaluate_statement_type(
+                request=request,
+                normalized_text=normalized_text,
+                statement_type=backup_refined,
+                assumptions=assumptions,
+                notes=notes,
+                model_output=model_output,
+            )
+            if fallback_response.is_valid_lean:
+                current_response = fallback_response
+                current_response.mode = "thinking"
+                current_response.iteration_count = len(history)
+                current_response.iteration_history = history if request.include_iteration_history else None
+                current_response.feedback.append(
+                    "Backup heuristic applied after iterations: statement rewritten and re-checked."
+                )
+                rewrite_notes_accumulated.extend(backup_notes)
+
     current_response.feedback.append(
         "Final suggestions are generated from the last Lean validation pass."
     )
@@ -2679,6 +2832,12 @@ def _analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 
 
 def _complete(request: CompleteRequest) -> CompleteResponse:
+    """Run the completion pipeline: prefix from request.text[:cursor], retrieval hints from
+    request.context + corpus, generation (LLM), then ranking. 'no_suggestion' when all
+    candidates are rejected by _normalize_completion_suffix (empty, forbidden_pattern,
+    json_like_candidate, schema_fragment, too_long, too_many_newlines) or by ranking
+    (redundant_with_prefix, low_relevance_to_prefix, math_context_mismatch). More context
+    (request.context) improves retrieval hints; prefix_text is request.text up to cursor."""
     started = time.perf_counter()
     prefix_text = _complete_prefix(request)
     imports_used = _canonical_imports(request.imports)
@@ -2733,6 +2892,18 @@ def _complete(request: CompleteRequest) -> CompleteResponse:
             "raw_outputs": raw_outputs,
             "rejected_candidates": rejected,
         }
+    no_suggestion_reasons_list: list[str] = []
+    if status == "no_suggestion":
+        if rejected:
+            reason_counts: dict[str, int] = {}
+            for item in rejected:
+                for r in item.get("reasons") or []:
+                    reason_counts[r] = reason_counts.get(r, 0) + 1
+            no_suggestion_reasons_list = [
+                f"{reason}({count})" for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1])
+            ]
+        else:
+            no_suggestion_reasons_list = ["no_candidates"]
     return CompleteResponse(
         model=MODEL_ID,
         status=status,
@@ -2746,6 +2917,7 @@ def _complete(request: CompleteRequest) -> CompleteResponse:
         timings_ms=timings,
         latency_ms=int((time.perf_counter() - started) * 1000),
         debug=debug_payload,
+        no_suggestion_reasons=no_suggestion_reasons_list,
     )
 
 

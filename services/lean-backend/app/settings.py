@@ -35,7 +35,7 @@ class Settings(BaseModel):
     llm_api_key: str | None = None
     llm_model: str = "gpt-5-nano"
     llm_max_completion_tokens: int = 220
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 1
     enable_llm_highlights: bool = True
     llm_highlight_timeout_seconds: float = 12.0
@@ -79,7 +79,7 @@ def get_settings() -> Settings:
         llm_api_key=_env("LLM_API_KEY"),
         llm_model=_env("LLM_MODEL", "gpt-5-nano"),
         llm_max_completion_tokens=_env("LLM_MAX_COMPLETION_TOKENS", "220"),
-        llm_timeout_seconds=_env("LLM_TIMEOUT_SECONDS", "30"),
+        llm_timeout_seconds=_env("LLM_TIMEOUT_SECONDS", "60"),
         llm_max_retries=_env("LLM_MAX_RETRIES", "1"),
         enable_llm_highlights=_env("ENABLE_LLM_HIGHLIGHTS", "true"),
         llm_highlight_timeout_seconds=_env("LLM_HIGHLIGHT_TIMEOUT_SECONDS", "12"),

@@ -11,7 +11,7 @@
     }
     if (ms > 1000) {
       const seconds = ms / 1000;
-      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+      return `${seconds.toFixed(2).replace(/\.0+$/, "")} s`;
     }
     return `${Math.round(ms)} ms`;
   }

@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  /** Set to true to mute all logs except chat/assistant (turn off when done debugging). */
+  const DEBUG_CHAT_ONLY = true;
+
   const MODE_KEY = "zetaMode";
   const SETTINGS_KEY = "zetaSettings";
   const TELEMETRY_KEY = "zetaTelemetry";
@@ -12,14 +15,30 @@
   if (IS_EMBEDDED && document.body) {
     document.body.setAttribute("data-zeta-embedded", "1");
   }
+
+  if (DEBUG_CHAT_ONLY) {
+    const _info = console.info.bind(console);
+    const _warn = console.warn.bind(console);
+    const chatOnly = (s) => /assistant|chat_send|chat_delete|zeta-chat|tab_message/.test(s);
+    console.info = function (...args) {
+      if (!chatOnly(String(args[0] ?? ""))) return;
+      _info.apply(console, args);
+    };
+    console.warn = function (...args) {
+      if (!chatOnly(String(args[0] ?? ""))) return;
+      _warn.apply(console, args);
+    };
+  }
+
   const DEFAULT_SHORTCUTS = [
-    { trigger: "Ctrl/Cmd+Enter", text: "Cmd+Enter", keys: ["⌘", "↩"], label: "Run checker now" },
-    { trigger: "Alt+Shift+M", text: "Option+Shift+M", keys: ["⌥", "⇧", "M"], label: "Manual autocomplete" },
-    { trigger: "Alt+Shift+U", text: "Option+Shift+U", keys: ["⌥", "⇧", "U"], label: "Undo last action" },
-    { trigger: "Alt+Shift+N", text: "Option+Shift+N", keys: ["⌥", "⇧", "N"], label: "Focus next issue" },
-    { trigger: "Alt+Shift+P", text: "Option+Shift+P", keys: ["⌥", "⇧", "P"], label: "Focus previous issue" },
-    { trigger: "Alt+Shift+R", text: "Option+Shift+R", keys: ["⌥", "⇧", "R"], label: "Refresh checker" },
-    { trigger: "Alt+Shift+H", text: "Option+Shift+H", keys: ["⌥", "⇧", "H"], label: "Clear activity history" },
+    { trigger: "Ctrl+Shift+Enter", text: "Ctrl+Shift+Enter", keys: ["⌃", "⇧", "↩"], label: "Run checker now", section: "Checking" },
+    { trigger: "Alt+Shift+R", text: "Option+Shift+R", keys: ["⌥", "⇧", "R"], label: "Refresh checker", section: "Checking" },
+    { trigger: "Alt+Shift+N", text: "Option+Shift+N", keys: ["⌥", "⇧", "N"], label: "Focus next issue", section: "Issues" },
+    { trigger: "Alt+Shift+P", text: "Option+Shift+P", keys: ["⌥", "⇧", "P"], label: "Focus previous issue", section: "Issues" },
+    { trigger: "Alt+Shift+A", text: "Option+Shift+A", keys: ["⌥", "⇧", "A"], label: "Apply current fix", section: "Issues" },
+    { trigger: "Alt+Shift+U", text: "Option+Shift+U", keys: ["⌥", "⇧", "U"], label: "Undo last action", section: "History & actions" },
+    { trigger: "Alt+Shift+C", text: "Option+Shift+C", keys: ["⌥", "⇧", "C"], label: "Clear all chat history", section: "History & actions" },
+    { trigger: "Alt+Shift+H", text: "Option+Shift+H", keys: ["⌥", "⇧", "H"], label: "Clear activity history", section: "History & actions" },
   ];
   const MODE_COPY = {
     fast: "Fast applies immediate underlines while typing.",
@@ -56,6 +75,9 @@
   const assistantMeta = document.getElementById("zeta-assistant-meta");
   const assistantMessages = document.getElementById("zeta-assistant-messages");
   const assistantMessagesEmpty = document.getElementById("zeta-assistant-messages-empty");
+  const assistantQueueEl = document.getElementById("zeta-assistant-queue");
+  const assistantLayout = document.getElementById("zeta-assistant-layout");
+  const assistantCollapseBtn = document.getElementById("zeta-assistant-collapse");
   const assistantForm = document.getElementById("zeta-assistant-form");
   const assistantInput = document.getElementById("zeta-assistant-input");
   const assistantSend = document.getElementById("zeta-assistant-send");
@@ -73,6 +95,12 @@
     activeThreadId: null,
     updatedAt: 0,
   };
+  let assistantSending = false;
+  let assistantSendingThreadId = null;
+  let assistantSendStep = "";
+  /** Queue of { threadId, message } for assistant; processed one at a time. */
+  const assistantQueue = [];
+  let assistantThreadsCollapsed = false;
   const expandedGraphNodeIds = new Set();
   const expandedPipelineStageIds = new Set();
   const previewCache = new Map();
@@ -82,6 +110,7 @@
   let pipelineModalMeta = null;
   let pipelineModalBody = null;
   const nowTs = () => new Date().toISOString();
+  const zetaLogPrefix = (tag) => `[zeta:${tag}] ${nowTs()}`;
   const LATEX_PREVIEW_LIMIT = 160;
   const LATEX_PARSER = window.__zetaLatexParserSimple && typeof window.__zetaLatexParserSimple.parse === "function"
     ? window.__zetaLatexParserSimple
@@ -266,7 +295,7 @@
 
   function sendMessageToActiveTab(message, tag, extraPayloadFactory = null, onResponse = null) {
     if (!chrome?.tabs?.query || !chrome?.tabs?.sendMessage) {
-      console.warn("[zeta:popup] tabs_api_unavailable", { ts: nowTs(), tag });
+      console.warn(`${zetaLogPrefix("popup")} tabs_api_unavailable`, { tag });
       if (typeof onResponse === "function") {
         onResponse(null);
       }
@@ -275,15 +304,14 @@
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs && tabs[0];
       if (!activeTab?.id) {
-        console.warn("[zeta:popup] no_active_tab", { ts: nowTs(), tag });
+        console.warn(`${zetaLogPrefix("popup")} no_active_tab`, { tag });
         if (typeof onResponse === "function") {
           onResponse(null);
         }
         return;
       }
       const extra = typeof extraPayloadFactory === "function" ? extraPayloadFactory() : null;
-      console.info("[zeta:popup] sending_tab_message", {
-        ts: nowTs(),
+      console.info(`${zetaLogPrefix("popup")} sending_tab_message`, {
         tag,
         tabId: activeTab.id,
         ...(extra || {}),
@@ -291,8 +319,7 @@
       chrome.tabs.sendMessage(activeTab.id, message, (response) => {
         const runtimeError = chrome.runtime?.lastError?.message;
         if (runtimeError) {
-          console.warn("[zeta:popup] tab_message_failed", {
-            ts: nowTs(),
+          console.warn(`${zetaLogPrefix("popup")} tab_message_failed`, {
             tag,
             error: runtimeError,
             ...(extra || {}),
@@ -301,8 +328,7 @@
             onResponse(null);
           }
         } else {
-          console.info("[zeta:popup] tab_message_ok", {
-            ts: nowTs(),
+          console.info(`${zetaLogPrefix("popup")} tab_message_ok`, {
             tag,
             ...(extra || {}),
             response: response || null,
@@ -325,8 +351,8 @@
     const ctrlHeld = event.ctrlKey || event.getModifierState?.("Control");
     const altHeld = event.altKey || event.getModifierState?.("Alt");
     const shiftHeld = event.shiftKey || event.getModifierState?.("Shift");
-    if ((metaHeld || ctrlHeld) && (key === "enter" || code === "Enter")) {
-      return { action: "refresh-checker", trigger: "Ctrl/Cmd+Enter" };
+    if (ctrlHeld && shiftHeld && (key === "enter" || code === "Enter")) {
+      return { action: "refresh-checker", trigger: "Ctrl+Shift+Enter" };
     }
     if (altHeld && shiftHeld && (key === "n" || code === "KeyN")) {
       return { action: "next-issue", trigger: "Alt+Shift+N" };
@@ -334,11 +360,14 @@
     if (altHeld && shiftHeld && (key === "p" || code === "KeyP")) {
       return { action: "prev-issue", trigger: "Alt+Shift+P" };
     }
+    if (altHeld && shiftHeld && (key === "a" || code === "KeyA")) {
+      return { action: "apply-issue", trigger: "Alt+Shift+A" };
+    }
     if (altHeld && shiftHeld && (key === "u" || code === "KeyU")) {
       return { action: "undo-last", trigger: "Alt+Shift+U" };
     }
-    if (altHeld && shiftHeld && (key === "m" || code === "KeyM")) {
-      return { action: "manual-autocomplete", trigger: "Alt+Shift+M" };
+    if (altHeld && shiftHeld && (key === "c" || code === "KeyC")) {
+      return { action: "clear-chat-history", trigger: "Alt+Shift+C" };
     }
     if (altHeld && shiftHeld && (key === "r" || code === "KeyR")) {
       return { action: "refresh-checker", trigger: "Alt+Shift+R" };
@@ -463,7 +492,7 @@
     }
     if (ms > 1000) {
       const seconds = ms / 1000;
-      return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")} s`;
+      return `${seconds.toFixed(2).replace(/\.0+$/, "")} s`;
     }
     return `${Math.round(ms)} ms`;
   }
@@ -577,6 +606,104 @@
       pipelineTrace,
       stages,
     };
+  }
+
+  function normalizePipelineOutcome(value, fallbackLabel = "") {
+    const outcome = String(value || "").trim().toLowerCase();
+    if (outcome === "ok" || outcome === "success" || outcome === "completed") {
+      return "ok";
+    }
+    if (outcome === "failed" || outcome === "error") {
+      return "failed";
+    }
+    if (outcome === "skipped") {
+      return "skipped";
+    }
+    if (outcome === "active" || outcome === "running" || outcome === "pending" || outcome === "unknown") {
+      return "active";
+    }
+    const label = String(fallbackLabel || "").toLowerCase();
+    if (/\b(fail|error)\b/.test(label)) {
+      return "failed";
+    }
+    if (/\b(done|complete|success|ok|hit)\b/.test(label)) {
+      return "ok";
+    }
+    return "active";
+  }
+
+  function buildActivityPipelineNodes(parsedTrace) {
+    if (!parsedTrace || typeof parsedTrace !== "object") {
+      return [];
+    }
+    const stageNodes = Array.isArray(parsedTrace.stages)
+      ? parsedTrace.stages
+      : [];
+    if (stageNodes.length > 0) {
+      return stageNodes.map((stage) => {
+        const durationLabel = Number.isFinite(Number(stage.durationMs))
+          ? formatInferenceDuration(Number(stage.durationMs))
+          : "--";
+        const attempted = stage?.attempted === false ? "attempted=false" : "attempted=true";
+        return {
+          label: String(stage?.stage || `stage ${stage?.index || "?"}`),
+          meta: `${attempted} · ${durationLabel}`,
+          outcome: normalizePipelineOutcome(stage?.outcome, stage?.stage),
+        };
+      });
+    }
+
+    const pipelineStep = String(parsedTrace.pipeline?.step || "").trim();
+    if (!pipelineStep) {
+      return [];
+    }
+    const elapsed = String(parsedTrace.pipeline?.elapsed || "").trim();
+    return [
+      {
+        label: pipelineStep,
+        meta: elapsed ? `elapsed: ${elapsed}` : "",
+        outcome: normalizePipelineOutcome("", pipelineStep),
+      },
+    ];
+  }
+
+  function renderActivityPipelineFlow(parsedTrace) {
+    const nodes = buildActivityPipelineNodes(parsedTrace);
+    if (nodes.length === 0) {
+      return null;
+    }
+    const container = document.createElement("section");
+    container.className = "zeta-activity-pipeline";
+
+    const label = document.createElement("p");
+    label.className = "zeta-activity-pipeline-label";
+    label.textContent = "Pipeline";
+    container.appendChild(label);
+
+    const flow = document.createElement("div");
+    flow.className = "zeta-activity-pipeline-flow";
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      const card = document.createElement("article");
+      card.className = `zeta-activity-pipeline-node zeta-activity-pipeline-node--${node.outcome || "active"}`;
+
+      const title = document.createElement("strong");
+      title.textContent = truncatePipelineText(node.label || "stage", 92);
+      const meta = document.createElement("span");
+      meta.textContent = truncatePipelineText(node.meta || "", 96);
+      card.append(title, meta);
+      flow.appendChild(card);
+
+      if (index < nodes.length - 1) {
+        const arrow = document.createElement("span");
+        arrow.className = "zeta-activity-pipeline-arrow";
+        arrow.textContent = "→";
+        flow.appendChild(arrow);
+      }
+    }
+
+    container.appendChild(flow);
+    return container;
   }
 
   function ensurePipelineModal() {
@@ -789,15 +916,7 @@
     if (pendingCount > 0) {
       parts.push(`${pendingCount} queued`);
     }
-    if (Number.isFinite(updatedAt) && updatedAt > 0) {
-      parts.push(
-        new Date(updatedAt).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      );
-    } else {
+    if (parts.length === 0) {
       parts.push("waiting for a run");
     }
     statusLabel.textContent = parts.join(" · ");
@@ -811,11 +930,12 @@
       snapshotData = {};
     }
     const score = Math.max(0, Math.min(100, Number(snapshotData.healthScore) || 100));
-    const breakdown = snapshotData.healthBreakdown && typeof snapshotData.healthBreakdown === "object"
-      ? snapshotData.healthBreakdown
+    const rawBreakdown = snapshotData.healthBreakdown;
+    const breakdown = rawBreakdown && typeof rawBreakdown === "object" && !Array.isArray(rawBreakdown)
+      ? rawBreakdown
       : null;
-    const cached = Math.max(0, Number(snapshotData.sentenceCached) || 0);
-    const pending = Math.max(0, Number(snapshotData.sentencePending) || 0);
+    const cached = Math.max(0, Number(snapshotData.sentenceCached) ?? Number(breakdown?.cachedSentences) ?? 0);
+    const pending = Math.max(0, Number(snapshotData.sentencePending) ?? Number(breakdown?.pendingSentences) ?? 0);
     const activity = Array.isArray(snapshotData.activity) ? snapshotData.activity : [];
     const chunkTree = snapshotData.chunkTree && typeof snapshotData.chunkTree === "object"
       ? snapshotData.chunkTree
@@ -847,7 +967,6 @@
         const time = String(entry?.timeLabel || "");
         const detailText = String(entry?.detailText || "").trim();
         const parsedPipeline = detailText ? parseActivityPipelineTrace(detailText) : null;
-        const hasPipelineStages = !!(parsedPipeline && Array.isArray(parsedPipeline.stages) && parsedPipeline.stages.length > 0);
         const head = document.createElement("div");
         head.className = "zeta-activity-head";
         const strong = document.createElement("strong");
@@ -862,55 +981,15 @@
           li.classList.add("is-compact");
         }
         if (detailText) {
-          const actions = document.createElement("div");
-          actions.className = "zeta-activity-actions";
-          const toggle = document.createElement("button");
-          toggle.type = "button";
-          toggle.className = "zeta-activity-toggle";
-          toggle.textContent = "View output";
+          const inlinePipeline = renderActivityPipelineFlow(parsedPipeline);
+          if (inlinePipeline) {
+            li.appendChild(inlinePipeline);
+          }
+
           const pre = document.createElement("pre");
           pre.className = "zeta-activity-detail";
           pre.textContent = detailText;
-          pre.hidden = true;
-          const toggleExpanded = () => {
-            const expanded = pre.hidden;
-            pre.hidden = !expanded;
-            toggle.textContent = expanded ? "Hide output" : "View output";
-            li.classList.toggle("is-expanded", expanded);
-          };
-          toggle.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleExpanded();
-          });
-          actions.appendChild(toggle);
-          if (hasPipelineStages) {
-            const pipelineButton = document.createElement("button");
-            pipelineButton.type = "button";
-            pipelineButton.className = "zeta-activity-toggle zeta-activity-pipeline-btn";
-            pipelineButton.textContent = "View pipeline";
-            pipelineButton.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              openPipelineModal({
-                message,
-                timeLabel: time,
-                index: activityIndex,
-              }, detailText);
-            });
-            actions.appendChild(pipelineButton);
-          }
-          li.addEventListener("click", (event) => {
-            const target = event.target;
-            if (
-              target instanceof Element
-              && target.closest(".zeta-activity-detail, .zeta-activity-actions, .zeta-activity-toggle")
-            ) {
-              return;
-            }
-            toggleExpanded();
-          });
-          li.append(actions, pre);
+          li.append(pre);
         }
         activityList.appendChild(li);
       }
@@ -924,7 +1003,16 @@
     }
     if (macrosList) {
       macrosList.replaceChildren();
+      let lastSection = null;
       for (const macro of DEFAULT_SHORTCUTS) {
+        const section = macro.section || "Actions";
+        if (section !== lastSection) {
+          lastSection = section;
+          const subhead = document.createElement("li");
+          subhead.className = "zeta-macros-subsection";
+          subhead.textContent = section;
+          macrosList.appendChild(subhead);
+        }
         const li = document.createElement("li");
         li.className = "zeta-shortcut-row";
         li.dataset.shortcut = normalizeShortcutKey(macro.trigger);
@@ -1071,6 +1159,64 @@
     }
   }
 
+  function deleteAssistantThread(threadId) {
+    const id = String(threadId || "").trim();
+    if (!id) {
+      return;
+    }
+    sendMessageToActiveTab(
+      {
+        type: "zeta-chat-delete-thread",
+        threadId: id,
+      },
+      "chat_delete_thread",
+      () => ({ threadId: id }),
+      (response) => {
+        if (response?.ok && chrome?.storage?.local) {
+          chrome.storage.local.get([CHAT_SNAPSHOT_KEY], (result) => {
+            if (result && result[CHAT_SNAPSHOT_KEY] != null) {
+              renderAssistantSnapshot(result[CHAT_SNAPSHOT_KEY]);
+            }
+          });
+        }
+      }
+    );
+  }
+
+  function escapeHtml(s) {
+    const t = String(s ?? "");
+    return t
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderMessageBodyWithCodeBlocks(text) {
+    const raw = String(text ?? "").trim();
+    const fragment = document.createDocumentFragment();
+    const parts = raw.split("```");
+    for (let i = 0; i < parts.length; i += 1) {
+      if (i % 2 === 0) {
+        if (parts[i].length > 0) {
+          const span = document.createElement("span");
+          span.className = "zeta-assistant-message-text";
+          span.innerHTML = escapeHtml(parts[i]).replace(/\n/g, "<br>");
+          fragment.appendChild(span);
+        }
+      } else {
+        const code = document.createElement("pre");
+        code.className = "zeta-assistant-code";
+        const codeInner = document.createElement("code");
+        const content = parts[i].replace(/^\w*\n?/, "").trim();
+        codeInner.textContent = content;
+        code.appendChild(codeInner);
+        fragment.appendChild(code);
+      }
+    }
+    return fragment;
+  }
+
   function renderAssistantSnapshot(snapshot) {
     const normalized = normalizeAssistantSnapshot(snapshot);
     assistantSnapshot = normalized;
@@ -1084,13 +1230,27 @@
 
     if (assistantThreads) {
       assistantThreads.replaceChildren();
-      for (const thread of threads) {
+      const sortedThreads = [...threads].sort((a, b) => {
+        if (a.id === "general") return -1;
+        if (b.id === "general") return 1;
+        return 0;
+      });
+      for (const thread of sortedThreads) {
         const li = document.createElement("li");
+        const wrap = document.createElement("div");
+        wrap.className = "zeta-assistant-thread-wrap";
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "zeta-assistant-thread";
         if (thread.id === activeThreadId) {
           btn.classList.add("is-active");
+        }
+        if (thread.id === "general") {
+          const pinIcon = document.createElement("span");
+          pinIcon.className = "zeta-assistant-thread-pin";
+          pinIcon.setAttribute("aria-hidden", "true");
+          pinIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78 0.9A2 2 0 0 0 5 14.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.76a2 2 0 0 0-1.11-1.79l-1.78-0.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4 1 1 0 0 1-1-1 2 2 0 0 0 0-4 1 1 0 0 1-1-1 2 2 0 0 0 0 4 1 1 0 0 1 1 1 2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+          btn.appendChild(pinIcon);
         }
         const title = document.createElement("strong");
         title.className = "zeta-assistant-thread-title";
@@ -1098,11 +1258,28 @@
         const meta = document.createElement("p");
         meta.className = "zeta-assistant-thread-meta";
         meta.textContent = `${thread.severity || "unknown"} · ${thread.status || "idle"}`;
-        btn.append(title, meta);
+        const contentWrap = document.createElement("div");
+        contentWrap.className = "zeta-assistant-thread-content";
+        contentWrap.append(title, meta);
+        btn.append(contentWrap);
         btn.addEventListener("click", () => {
           setAssistantActiveThread(thread.id, true);
         });
-        li.appendChild(btn);
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "zeta-assistant-thread-delete";
+        deleteBtn.setAttribute("aria-label", "Delete thread");
+        deleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+        deleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          deleteAssistantThread(thread.id);
+        });
+        if (thread.id === "general") {
+          deleteBtn.style.display = "none";
+        }
+        wrap.append(btn, deleteBtn);
+        li.appendChild(wrap);
         assistantThreads.appendChild(li);
       }
     }
@@ -1125,19 +1302,52 @@
         }
         const who = document.createElement("strong");
         who.textContent = message.role === "assistant" ? "Zeta" : "You";
-        const body = document.createElement("p");
-        body.textContent = message.text;
+        const body = document.createElement("div");
+        body.className = "zeta-assistant-message-body";
+        body.appendChild(renderMessageBodyWithCodeBlocks(message.text));
         li.append(who, body);
         assistantMessages.appendChild(li);
       }
-      if (messages.length > 0) {
+      const showLoading = (assistantSending && activeThreadId === assistantSendingThreadId) || (activeThread && String(activeThread.status || "") === "thinking");
+      if (showLoading) {
+        const loadingLi = document.createElement("li");
+        loadingLi.className = "zeta-assistant-loading";
+        loadingLi.setAttribute("aria-live", "polite");
+        const spinner = document.createElement("span");
+        spinner.className = "zeta-assistant-spinner";
+        spinner.setAttribute("aria-hidden", "true");
+        const step = document.createElement("span");
+        step.className = "zeta-assistant-loading-step";
+        step.textContent = assistantSendStep || "Thinking…";
+        loadingLi.append(spinner, step);
+        assistantMessages.appendChild(loadingLi);
+      }
+      const queuedForActive = assistantQueue.filter((q) => q.threadId === activeThreadId);
+      const inFlightForActive = assistantSending && assistantSendingThreadId === activeThreadId;
+      const queuedExcludingInFlight = inFlightForActive && queuedForActive.length > 0
+        ? queuedForActive.slice(1)
+        : queuedForActive;
+      for (const item of queuedExcludingInFlight) {
+        const li = document.createElement("li");
+        li.className = "zeta-assistant-message zeta-assistant-message--queued";
+        const who = document.createElement("strong");
+        who.textContent = "You";
+        const body = document.createElement("div");
+        body.className = "zeta-assistant-message-body";
+        body.textContent = `(Queued) ${item.message}`;
+        li.append(who, body);
+        assistantMessages.appendChild(li);
+      }
+      if (messages.length > 0 || showLoading || queuedForActive.length > 0) {
         assistantMessages.scrollTop = assistantMessages.scrollHeight;
       }
     }
 
     if (assistantMessagesEmpty) {
       const hasMessages = Array.isArray(activeThread?.messages) && activeThread.messages.length > 0;
-      assistantMessagesEmpty.style.display = hasMessages ? "none" : "block";
+      const showLoading = (assistantSending && activeThreadId === assistantSendingThreadId) || (activeThread && String(activeThread.status || "") === "thinking");
+      const hasQueued = assistantQueue.some((q) => q.threadId === activeThreadId);
+      assistantMessagesEmpty.style.display = hasMessages || showLoading || hasQueued ? "none" : "block";
     }
 
     if (assistantInput) {
@@ -1151,39 +1361,172 @@
     if (assistantSend) {
       assistantSend.disabled = !activeThread;
     }
+    if (assistantQueueEl) {
+      const queuedForActive = assistantQueue.filter((q) => q.threadId === activeThreadId);
+      const inFlightForActive = assistantSending && assistantSendingThreadId === activeThreadId;
+      const n = inFlightForActive && queuedForActive.length > 0 ? queuedForActive.length - 1 : queuedForActive.length;
+      if (n > 0) {
+        assistantQueueEl.textContent = n === 1 ? "1 message queued" : `${n} messages queued`;
+        assistantQueueEl.style.display = "block";
+      } else {
+        assistantQueueEl.textContent = "";
+        assistantQueueEl.style.display = "none";
+      }
+    }
+  }
+
+  function processAssistantQueue() {
+    if (assistantQueue.length === 0) {
+      assistantSending = false;
+      assistantSendingThreadId = null;
+      assistantSendStep = "";
+      if (assistantSend) assistantSend.disabled = !assistantSnapshot.activeThreadId;
+      renderAssistantSnapshot(assistantSnapshot);
+      return;
+    }
+    const item = assistantQueue[0];
+    const { threadId, message: text } = item;
+    assistantSending = true;
+    assistantSendingThreadId = threadId;
+    assistantSendStep = "Sending…";
+    renderAssistantSnapshot(assistantSnapshot);
+
+    function refetchAndRender() {
+      if (!chrome?.storage?.local) return;
+      chrome.storage.local.get([CHAT_SNAPSHOT_KEY], (result) => {
+        if (result && result[CHAT_SNAPSHOT_KEY] != null) {
+          renderAssistantSnapshot(result[CHAT_SNAPSHOT_KEY]);
+        }
+      });
+    }
+    window.setTimeout(() => {
+      refetchAndRender();
+      assistantSendStep = "Thinking…";
+      renderAssistantSnapshot(assistantSnapshot);
+    }, 80);
+
+    const QUEUE_RESPONSE_TIMEOUT_MS = 95000;
+    let responseHandled = false;
+    const safetyTimeoutId = window.setTimeout(() => {
+      if (responseHandled) return;
+      responseHandled = true;
+      if (assistantQueue.length > 0 && assistantQueue[0].threadId === threadId) {
+        assistantQueue.shift();
+      }
+      assistantSending = false;
+      assistantSendingThreadId = null;
+      assistantSendStep = "";
+      if (assistantSend) assistantSend.disabled = !assistantSnapshot.activeThreadId;
+      if (assistantMeta) assistantMeta.textContent = "Request timed out. You can try again or send the next queued message.";
+      renderAssistantSnapshot(assistantSnapshot);
+      window.setTimeout(processAssistantQueue, 0);
+    }, QUEUE_RESPONSE_TIMEOUT_MS);
+
+    sendMessageToActiveTab(
+      { type: "zeta-chat-send", threadId, message: text },
+      "chat_send",
+      () => ({ threadId, chars: text.length }),
+      (response) => {
+        if (responseHandled) return;
+        responseHandled = true;
+        window.clearTimeout(safetyTimeoutId);
+        const wasThreadId = threadId;
+        if (response == null) {
+          console.warn(`${zetaLogPrefix("assistant")} chat_send response is null – tab may be inactive or extension not injected`, {
+            hint: "Focus the Overleaf tab and ensure the extension content script is loaded.",
+          });
+        }
+        console.info(`${zetaLogPrefix("assistant")} chat_send response`, {
+          ok: response?.ok,
+          error: response?.error,
+          source: response?.source,
+          threadId: response?.threadId,
+          hasAnswer: !!response?.answer,
+        });
+        if (assistantQueue.length > 0 && assistantQueue[0].threadId === wasThreadId) {
+          assistantQueue.shift();
+        }
+        assistantSending = false;
+        assistantSendingThreadId = null;
+        assistantSendStep = "";
+        if (assistantSend) assistantSend.disabled = !assistantSnapshot.activeThreadId;
+        if (!response?.ok && assistantMeta) {
+          assistantMeta.textContent = "Could not reach Overleaf tab. Focus the Overleaf editor tab and try again.";
+        }
+        if (response?.ok && response?.answer && response?.threadId) {
+          const lastMsg = { role: "assistant", text: response.answer };
+          const norm = normalizeAssistantSnapshot(assistantSnapshot);
+          const thread = norm.threads.find((t) => t.id === response.threadId);
+          if (thread) {
+            const alreadyHasAnswer = Array.isArray(thread.messages) && thread.messages.some(
+              (m) => m.role === "assistant" && String(m.text || "").trim() === String(response.answer || "").trim()
+            );
+            if (!alreadyHasAnswer) {
+              assistantSnapshot = {
+                ...norm,
+                threads: norm.threads.map((t) =>
+                  t.id !== response.threadId
+                    ? t
+                    : { ...t, messages: [...(t.messages || []), lastMsg], status: "ready" }
+                ),
+              };
+            }
+          } else {
+            const newThread = {
+              id: response.threadId,
+              title: response.threadId === "general" ? "General Assistant" : response.threadId,
+              severity: "unknown",
+              status: "ready",
+              updatedAt: Date.now(),
+              isActiveIssue: true,
+              issueMessage: "",
+              sentenceText: "",
+              messages: [lastMsg],
+              lastSource: response?.source || "",
+              lastLatencyMs: 0,
+              lastError: "",
+            };
+            assistantSnapshot = {
+              threads: [...norm.threads.filter((t) => t.id !== response.threadId), newThread],
+              activeThreadId: response.threadId,
+              updatedAt: Date.now(),
+            };
+          }
+          renderAssistantSnapshot(assistantSnapshot);
+        } else if (response?.ok) {
+          renderAssistantSnapshot(assistantSnapshot);
+        } else {
+          renderAssistantSnapshot(assistantSnapshot);
+        }
+        if (response?.ok && chrome?.storage?.local) {
+          refetchAndRender();
+          window.setTimeout(refetchAndRender, 100);
+          window.setTimeout(refetchAndRender, 350);
+        }
+        window.setTimeout(processAssistantQueue, 0);
+      }
+    );
   }
 
   function sendAssistantPrompt() {
     const threadId = String(assistantSnapshot.activeThreadId || "");
     const text = String(assistantInput?.value || "").trim();
+    console.info(`${zetaLogPrefix("assistant")} sendAssistantPrompt`, {
+      threadId: threadId || "(empty)",
+      hasText: !!text,
+      textLength: text.length,
+      activeThreadId: assistantSnapshot.activeThreadId,
+    });
     if (!threadId || !text) {
+      console.warn(`${zetaLogPrefix("assistant")} sendAssistantPrompt skipped`, { reason: !threadId ? "no threadId" : "no text" });
       return;
     }
-
-    if (assistantSend) {
-      assistantSend.disabled = true;
+    if (assistantInput) assistantInput.value = "";
+    assistantQueue.push({ threadId, message: text });
+    renderAssistantSnapshot(assistantSnapshot);
+    if (!assistantSending) {
+      processAssistantQueue();
     }
-    if (assistantInput) {
-      assistantInput.value = "";
-    }
-
-    sendMessageToActiveTab(
-      {
-        type: "zeta-chat-send",
-        threadId,
-        message: text,
-      },
-      "chat_send",
-      () => ({ threadId, chars: text.length }),
-      (response) => {
-        if (assistantSend) {
-          assistantSend.disabled = false;
-        }
-        if (!response?.ok && assistantMeta) {
-          assistantMeta.textContent = "Could not reach Overleaf tab. Focus the Overleaf editor tab and try again.";
-        }
-      }
-    );
   }
 
   function graphLabel(chunk) {
@@ -1210,11 +1553,16 @@
     if (!healthTooltip) {
       return;
     }
-    const details = breakdown && typeof breakdown === "object" ? breakdown : null;
+    const details = breakdown && typeof breakdown === "object" && !Array.isArray(breakdown) ? breakdown : null;
     if (!details) {
       healthTooltip.textContent = [
-        "Health score formula:",
-        "100 - severity penalty - density penalty - pending penalty.",
+        "Document health",
+        "",
+        "How is the score calculated?",
+        "The score starts at 100. Penalties are subtracted for issue severity, issue density, and unfinished analysis (pending sentences).",
+        "",
+        "Where are points lost?",
+        "See the breakdown below once the document has been analyzed.",
       ].join("\n");
       return;
     }
@@ -1226,10 +1574,10 @@
     const severityPenalty = Math.max(0, Number(details.normalizedSeverityPenalty) || 0);
     const densityPenalty = Math.max(0, Number(details.densityPenalty) || 0);
     const pendingPenalty = Math.max(0, Number(details.pendingPenalty) || 0);
-    const analyzedSentences = Math.max(
-      0,
-      Number(details.analyzedSentences) || (Math.max(0, cached) + Math.max(0, pending))
-    );
+    const analyzedFromBreakdown = Number(details.analyzedSentences);
+    const analyzedSentences = Number.isFinite(analyzedFromBreakdown) && analyzedFromBreakdown >= 0
+      ? analyzedFromBreakdown
+      : Math.max(0, Math.max(0, cached) + Math.max(0, pending)) || 1;
     const coverageRatio = Number.isFinite(Number(details.coverageRatio))
       ? Number(details.coverageRatio)
       : analyzedSentences > 0
@@ -1237,15 +1585,37 @@
         : 1;
     const coveragePct = Math.max(0, Math.min(100, Math.round(coverageRatio * 100)));
 
-    healthTooltip.textContent = [
-      `Health score = 100 - severity(${severityPenalty}) - density(${densityPenalty}) - pending(${pendingPenalty}) = ${Math.round(score)}`,
+    const lines = [
+      "Document health",
       "",
-      `Issues: ${issueCount} total`,
-      `error ${Number(counts.error) || 0} · warning ${Number(counts.warning) || 0} · info ${Number(counts.info) || 0} · unknown ${Number(counts.unknown) || 0}`,
+      "How is the score calculated?",
+      "The score starts at 100. Three penalties are subtracted: (1) severity — issues (errors, warnings, info) reduce the score, scaled by how much of the document was analyzed; (2) density — many issues in a small span add an extra penalty; (3) pending — sentences still being analyzed lower the score until the run completes.",
       "",
-      `Coverage: ${Math.max(0, cached)} cached / ${analyzedSentences} analyzed (${coveragePct}%)`,
-      `Pending queue: ${Math.max(0, pending)}`,
-    ].join("\n");
+      "Where are points lost?",
+      "Each issue contributes a severity weight (errors most, then warnings, then info). Those raw points are normalized by the analyzed scope so longer documents are not over-penalized. The list below shows each finding and the points deducted.",
+      "",
+    ];
+
+    const entries = Array.isArray(details.issueEntries) ? details.issueEntries : [];
+    if (entries.length > 0) {
+      lines.push("Points lost by issue:");
+      for (const e of entries.slice(0, 50)) {
+        const msg = String(e?.message || e?.severity || "issue").slice(0, 72);
+        const pts = Number(e?.points) ?? 0;
+        lines.push(`  • ${msg} (−${pts})`);
+      }
+      if (entries.length > 50) {
+        lines.push(`  … and ${entries.length - 50} more`);
+      }
+      lines.push("");
+    }
+
+    lines.push(
+      `Coverage: ${Math.max(0, cached)} of ${analyzedSentences} sentences cached (${coveragePct}%).`,
+      `Pending: ${Math.max(0, pending)} sentence(s) in queue.`
+    );
+
+    healthTooltip.textContent = lines.join("\n");
   }
 
   function normalizePreviewSpacing(value) {
@@ -1759,6 +2129,15 @@
     });
   }
 
+  if (assistantCollapseBtn && assistantLayout) {
+    assistantCollapseBtn.addEventListener("click", () => {
+      assistantThreadsCollapsed = !assistantThreadsCollapsed;
+      assistantLayout.classList.toggle("is-threads-collapsed", assistantThreadsCollapsed);
+      assistantCollapseBtn.textContent = assistantThreadsCollapsed ? ">>" : "\u00AB Collapse";
+      assistantCollapseBtn.setAttribute("aria-label", assistantThreadsCollapsed ? "Expand thread list" : "Collapse thread list");
+    });
+  }
+
   if (autocompleteEnabledToggle) {
     autocompleteEnabledToggle.addEventListener("change", () => {
       persistAutocompleteEnabledSetting();
@@ -1794,8 +2173,7 @@
   }
 
   document.addEventListener("keydown", (event) => {
-    console.info("[zeta:popup] keydown", {
-      ts: nowTs(),
+    console.info(`${zetaLogPrefix("popup")} keydown`, {
       key: event.key,
       code: event.code,
       alt: event.altKey,
@@ -1808,8 +2186,7 @@
     if (!match) {
       return;
     }
-    console.info("[zeta:popup] shortcut_detected", {
-      ts: nowTs(),
+    console.info(`${zetaLogPrefix("popup")} shortcut_detected`, {
       key: event.key,
       code: event.code,
       alt: event.altKey,
@@ -1856,8 +2233,7 @@
         renderAssistantSnapshot(changes[CHAT_SNAPSHOT_KEY].newValue);
       }
       } catch (error) {
-        console.warn("[zeta:popup] storage_change_render_error", {
-          ts: nowTs(),
+        console.warn(`${zetaLogPrefix("popup")} storage_change_render_error`, {
           message: String(error?.message || error),
         });
       }
@@ -1878,7 +2254,9 @@
   if (!IS_EMBEDDED) {
     publishSurface("popup");
     notifyActiveTabSurface("popup");
-    window.addEventListener("beforeunload", () => publishSurface("none"));
+    window.addEventListener("beforeunload", () => {
+      publishSurface("none");
+    });
   }
 
   chrome.storage.sync.get({ [MODE_KEY]: FALLBACK_MODE, [SETTINGS_KEY]: {} }, (result) => {

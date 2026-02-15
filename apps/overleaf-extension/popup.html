@@ -73,20 +73,26 @@
           <p id="zeta-mode-note" class="zeta-mode-note"></p>
         </section>
 
-        <section class="zeta-backend-section">
+        <section class="zeta-backend-section zeta-backend-section--stacked">
           <p class="zeta-section-label">Autocomplete Settings</p>
-          <label class="zeta-backend-toggle">
-            <input id="zeta-autocomplete-enabled-toggle" type="checkbox" />
-            <span>Enable autocomplete</span>
-          </label>
-          <label class="zeta-backend-toggle">
-            <input id="zeta-autocomplete-topk-toggle" type="checkbox" />
-            <span>Show Top-K autocomplete list</span>
-          </label>
-          <label class="zeta-backend-toggle">
-            <input id="zeta-autocomplete-manual-toggle" type="checkbox" />
-            <span>Manual trigger only (Alt+Shift+M)</span>
-          </label>
+          <div class="zeta-backend-toggle-row">
+            <label class="zeta-backend-toggle">
+              <input id="zeta-autocomplete-enabled-toggle" type="checkbox" />
+              <span>Enable autocomplete</span>
+            </label>
+          </div>
+          <div class="zeta-backend-toggle-row">
+            <label class="zeta-backend-toggle">
+              <input id="zeta-autocomplete-topk-toggle" type="checkbox" />
+              <span>Show Top-K autocomplete list</span>
+            </label>
+          </div>
+          <div class="zeta-backend-toggle-row">
+            <label class="zeta-backend-toggle">
+              <input id="zeta-autocomplete-manual-toggle" type="checkbox" />
+              <span>Manual trigger only (Alt+Shift+M)</span>
+            </label>
+          </div>
           <p id="zeta-backend-status" class="zeta-backend-status">Autocomplete uses the deployed Modal endpoint.</p>
         </section>
 
@@ -155,12 +161,17 @@
             <p class="zeta-section-label">Assistant</p>
             <p id="zeta-assistant-count" class="zeta-chip">0 threads</p>
           </div>
-          <div class="zeta-assistant-layout">
-            <div class="zeta-assistant-threads-wrap">
-              <ul id="zeta-assistant-threads" class="zeta-list zeta-list--assistant-threads"></ul>
-              <p id="zeta-assistant-threads-empty" class="zeta-hint">
-                No current issues to explain.
-              </p>
+          <div class="zeta-assistant-layout" id="zeta-assistant-layout">
+            <div class="zeta-assistant-threads-column">
+              <div class="zeta-assistant-threads-wrap">
+                <ul id="zeta-assistant-threads" class="zeta-list zeta-list--assistant-threads"></ul>
+                <p id="zeta-assistant-threads-empty" class="zeta-hint">
+                  No current issues to explain.
+                </p>
+              </div>
+              <div class="zeta-assistant-threads-footer">
+                <button type="button" id="zeta-assistant-collapse" class="zeta-assistant-collapse" aria-label="Collapse thread list">&#xAB; Collapse</button>
+              </div>
             </div>
             <div class="zeta-assistant-chat">
               <div id="zeta-assistant-meta" class="zeta-assistant-meta">Select an issue thread.</div>
@@ -176,6 +187,7 @@
                 />
                 <button id="zeta-assistant-send" class="zeta-assistant-send" type="submit">Send</button>
               </form>
+              <p id="zeta-assistant-queue" class="zeta-assistant-queue" aria-live="polite"></p>
             </div>
           </div>
         </section>

@@ -11,13 +11,20 @@ from fastapi import FastAPI, HTTPException, Request
 from .highlight_llm import resolve_highlights_with_llm
 from .highlight_locator import resolve_highlights
 from .lean_compile import compile_lean
-from .llm_client import explain_issue_chat, interpret_errors
+from .llm_client import (
+    explain_issue_chat,
+    interpret_errors,
+    repair_lean_compile_errors,
+    repair_lean_def_check,
+)
 from .modal_client import ModalClientError, generate_lean
 from .models import (
     ChatExplainRequest,
     ChatExplainResponse,
+    CompileResult,
     DashboardAdvice,
     Diagnostic,
+    GeneratedLean,
     HighlightChunk,
     HighlightResolveRequest,
     HighlightResolveResponse,
@@ -37,6 +44,17 @@ settings = get_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
+# Console log env-derived settings at startup so you can verify they exist
+_env_line = (
+    f"env_check ENABLE_LLM_INTERPRETATION={settings.enable_llm_interpretation} "
+    f"LLM_MODEL={settings.llm_model or '(none)'} LLM_API_KEY_set={bool(settings.llm_api_key)} "
+    f"LLM_ENDPOINT_URL={settings.llm_endpoint_url or '(default)'} "
+    f"MODAL_ENDPOINT_URL={settings.modal_endpoint_url or '(none)'} "
+    f"LAKE_PROJECT_DIR={settings.lake_project_dir or '(none)'}"
+)
+print(_env_line, flush=True)
+logger.info("%s", _env_line)
+
 app = FastAPI(title="Lean Solver Backend", version="0.1.0")
 
 _FALSE_DECL_RE = re.compile(
@@ -45,6 +63,18 @@ _FALSE_DECL_RE = re.compile(
 _FALSE_STDOUT_RE = re.compile(
     r"^\s*(?P<name>[A-Za-z0-9_'.]+)(?:\s*\([^)]*\))*\s*:\s*False\s*$"
 )
+_LEAN_CANONICAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\\mathbb\s*\{\s*N\s*\}", re.IGNORECASE), "Nat"),
+    (re.compile(r"\\mathbb\s*\{\s*Z\s*\}", re.IGNORECASE), "Int"),
+    (re.compile(r"\\mathbb\s*\{\s*Q\s*\}", re.IGNORECASE), "Rat"),
+    (re.compile(r"\\mathbb\s*\{\s*R\s*\}", re.IGNORECASE), "Real"),
+)
+_LEAN_UNICODE_SET_REPLACEMENTS = {
+    "ℕ": "Nat",
+    "ℤ": "Int",
+    "ℚ": "Rat",
+    "ℝ": "Real",
+}
 
 
 @app.middleware("http")
@@ -187,6 +217,62 @@ def _build_highlight_interpretation(
     return Interpretation(summary=summary, items=items, suggestions=[])
 
 
+def _normalize_suggestion_list(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, str):
+        value = raw_value.strip()
+        return [value] if value else []
+    if not isinstance(raw_value, list):
+        return []
+    suggestions: list[str] = []
+    for item in raw_value:
+        value = str(item).strip()
+        if value:
+            suggestions.append(value)
+    return suggestions
+
+
+def _normalize_generated_lean_code(code: str) -> str:
+    normalized = code
+    for pattern, replacement in _LEAN_CANONICAL_REPLACEMENTS:
+        normalized = pattern.sub(replacement, normalized)
+    for source, replacement in _LEAN_UNICODE_SET_REPLACEMENTS.items():
+        normalized = normalized.replace(source, replacement)
+    return normalized
+
+
+def _interpretation_from_modal_metadata(modal_metadata: dict[str, Any] | None) -> Interpretation | None:
+    metadata = modal_metadata or {}
+    raw_interpretation = metadata.get("interpretation")
+    merged_suggestions = list(
+        dict.fromkeys(
+            [
+                *_normalize_suggestion_list(metadata.get("final_feedback")),
+                *_normalize_suggestion_list(metadata.get("feedback")),
+            ]
+        )
+    )
+
+    if isinstance(raw_interpretation, dict):
+        try:
+            interpreted = Interpretation.model_validate(raw_interpretation)
+        except Exception:  # pragma: no cover - keep pipeline resilient to metadata drift
+            interpreted = None
+        if interpreted is not None:
+            merged = list(dict.fromkeys([*interpreted.suggestions, *merged_suggestions]))
+            if merged != interpreted.suggestions:
+                interpreted = interpreted.model_copy(update={"suggestions": merged})
+            return interpreted
+
+    if not merged_suggestions:
+        return None
+
+    return Interpretation(
+        summary=merged_suggestions[0],
+        items=[],
+        suggestions=merged_suggestions,
+    )
+
+
 async def _resolve_highlights_for_request(
     request: HighlightResolveRequest,
 ) -> HighlightResolveResponse:
@@ -227,7 +313,14 @@ def build_dashboard_advice(
     semantic_validation: SemanticValidation,
     highlights: HighlightResolveResponse | None,
 ) -> DashboardAdvice:
-    if compile_result.success and semantic_validation.success:
+    has_semantic_findings = bool(
+        compile_result.success
+        and semantic_validation.success
+        and interpretation is not None
+        and interpretation.items
+    )
+
+    if compile_result.success and semantic_validation.success and not has_semantic_findings:
         return DashboardAdvice(
             status="ok",
             headline="Lean compiled successfully.",
@@ -252,6 +345,11 @@ def build_dashboard_advice(
         text = _format_diagnostic_message(diag)
         if text not in messages:
             messages.append(text)
+    if has_semantic_findings and interpretation is not None:
+        for item in interpretation.items[:3]:
+            text = item.error.strip()
+            if text and text not in messages:
+                messages.append(text)
     if interpretation_error:
         messages.append(f"Interpretation fallback: {interpretation_error}")
     if highlights and highlights.unresolved_items:
@@ -284,57 +382,52 @@ def build_dashboard_advice(
 
 def build_deterministic_chat_answer(payload: ChatExplainRequest) -> str:
     issue = payload.issue
-    diagnosis = issue.message or "Lean reported a mathematical/formalization issue."
+    message = issue.message or "Lean reported a mathematical/formalization issue."
     severity = issue.severity or "unknown"
     category = issue.category or "issue"
     question = payload.question.strip()
 
-    lines: list[str] = []
-    lines.append(f"Diagnosis: {diagnosis}")
-    lines.append(f"This is classified as {severity} in category '{category}'.")
-
+    # Build one or two flowing paragraphs that answer the user's question.
+    intro: list[str] = []
+    intro.append(message.rstrip("."))
+    intro.append(f"This is classified as {severity} in category \"{category}\".")
     if issue.sentence:
-        lines.append(f"Sentence under review: {issue.sentence}")
+        intro.append(f"The sentence in question is: \"{issue.sentence}\".")
     if issue.target_text:
-        lines.append(f"Relevant text span: {issue.target_text}")
+        intro.append(f"The relevant span is: \"{issue.target_text}\".")
 
     if issue.compile_success is False:
-        lines.append(
-            "Lean compilation for this sentence did not succeed, so the generated statement or proof term is inconsistent with Lean's rules."
+        intro.append(
+            "Lean did not compile this sentence, so the statement or proof is inconsistent with Lean's rules."
         )
     elif issue.compile_success is True and severity == "error":
-        lines.append(
-            "Lean compiled but this is still marked as an error, usually due to semantic checks (for example, collapsing to False)."
+        intro.append(
+            "Lean compiled, but the result is still marked as an error, often because a semantic check failed (e.g. the proposition reduced to False)."
         )
 
-    diagnostics = issue.diagnostics[:3]
-    if diagnostics:
-        lines.append("Compiler diagnostics:")
-        for diag in diagnostics:
-            location = ""
-            if diag.line is not None and diag.column is not None:
-                location = f" (L{diag.line}:C{diag.column})"
-            lines.append(f"- {diag.message}{location}")
+    diag_bits: list[str] = []
+    for diag in issue.diagnostics[:3]:
+        loc = ""
+        if diag.line is not None and diag.column is not None:
+            loc = f" at line {diag.line}, column {diag.column}"
+        diag_bits.append(f"{diag.message}{loc}")
+    if diag_bits:
+        intro.append("The compiler reports: " + "; ".join(diag_bits) + ".")
+    for reason in (issue.semantic_reasons or [])[:3]:
+        if reason:
+            intro.append(reason.rstrip(".") + ".")
 
-    if issue.semantic_reasons:
-        lines.append("Semantic validation notes:")
-        for reason in issue.semantic_reasons[:3]:
-            if reason:
-                lines.append(f"- {reason}")
-
+    next_step: str
     if issue.replacement:
-        lines.append(f"Suggested rewrite to try next: {issue.replacement}")
+        next_step = f"A good next step is to try: {issue.replacement}"
     elif issue.target_text:
-        lines.append(
-            "Suggested next step: restate the marked span in stricter mathematical terms and re-run the checker."
-        )
+        next_step = "Restate the marked span in stricter mathematical terms and re-run the checker"
     else:
-        lines.append(
-            "Suggested next step: simplify the sentence into one claim with explicit quantifiers/types, then re-run."
-        )
+        next_step = "Simplify the sentence into one clear claim with explicit quantifiers or types, then re-run"
+    intro.append(next_step + ".")
+    intro.append(f"To answer your question (\"{question}\"): the failure is due to the above; " + next_step + ".")
 
-    lines.append(f"Answer to your question: {question}")
-    return "\n".join(lines)
+    return " ".join(intro)
 
 
 @app.post("/v1/lean/highlights", response_model=HighlightResolveResponse)
@@ -360,9 +453,11 @@ async def resolve_highlights_endpoint(payload: HighlightResolveRequest) -> Highl
 @app.post("/v1/chat/explain", response_model=ChatExplainResponse)
 async def explain_chat_issue_endpoint(payload: ChatExplainRequest) -> ChatExplainResponse:
     logger.info(
-        "received chat explain request severity=%s category=%s",
+        "chat explain request: severity=%s category=%s question_len=%s history_len=%s",
         payload.issue.severity,
         payload.issue.category,
+        len(payload.question or ""),
+        len(payload.history or []),
     )
     started_at = time.perf_counter()
     source: str = "deterministic"
@@ -371,24 +466,37 @@ async def explain_chat_issue_endpoint(payload: ChatExplainRequest) -> ChatExplai
     fallback_reason: str | None = None
 
     llm_enabled = settings.enable_llm_interpretation and bool(settings.llm_model)
+    logger.info(
+        "chat explain llm config: enable_llm=%s llm_model=%s has_llm_api_key=%s",
+        settings.enable_llm_interpretation,
+        settings.llm_model or "(none)",
+        bool(settings.llm_api_key),
+    )
     if llm_enabled:
         try:
             answer = await explain_issue_chat(payload, settings=settings)
             source = "llm"
             model = settings.llm_model
+            logger.info("chat explain llm success model=%s answer_len=%s", model, len(answer or ""))
         except Exception as exc:  # pragma: no cover - endpoint resilience
             fallback_reason = str(exc)
-            logger.warning("chat llm explanation failed, using deterministic fallback: %s", exc)
+            logger.warning(
+                "chat explain llm failed, using deterministic fallback: %s",
+                exc,
+                exc_info=True,
+            )
             answer = build_deterministic_chat_answer(payload)
     else:
+        logger.info("chat explain llm disabled, using deterministic answer")
         answer = build_deterministic_chat_answer(payload)
 
     latency_ms = (time.perf_counter() - started_at) * 1000
     logger.info(
-        "chat explain complete source=%s latency_ms=%.2f fallback=%s",
+        "chat explain complete: source=%s latency_ms=%.2f fallback_reason=%s answer_len=%s",
         source,
         latency_ms,
-        bool(fallback_reason),
+        fallback_reason or "(none)",
+        len(answer or ""),
     )
     return ChatExplainResponse(
         answer=answer,
@@ -457,6 +565,7 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             max_iters=payload.max_iters,
             settings=settings,
         )
+        generated = generated.model_copy(update={"code": _normalize_generated_lean_code(generated.code)})
     except ModalClientError as exc:
         modal_elapsed_ms = (time.perf_counter() - modal_start) * 1000
         logger.exception("modal generation failed duration_ms=%.2f", modal_elapsed_ms)
@@ -478,6 +587,203 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
 
     compile_start = time.perf_counter()
     compile_result = await compile_lean(generated.code, settings=settings)
+
+    # If the first compile failed, try once to fix with LLM (e.g. GPT 5.3): syntactical fixes only, then recompile.
+    if (
+        not compile_result.success
+        and settings.enable_llm_interpretation
+        and settings.llm_model
+    ):
+        repair_start = time.perf_counter()
+        try:
+            repaired = await repair_lean_compile_errors(
+                generated.code,
+                compile_result,
+                settings=settings,
+            )
+            repair_elapsed_ms = (time.perf_counter() - repair_start) * 1000
+            if repaired:
+                compile_repaired = await compile_lean(repaired, settings=settings)
+                if compile_repaired.success:
+                    generated = GeneratedLean(code=repaired, metadata=generated.metadata)
+                    compile_result = compile_repaired
+                    stages.append(
+                        PipelineStage(
+                            stage="llm_repair_compile",
+                            attempted=True,
+                            success=True,
+                            duration_ms=repair_elapsed_ms,
+                            details={"reason": "syntactical_fix_then_recompile"},
+                        )
+                    )
+                else:
+                    stages.append(
+                        PipelineStage(
+                            stage="llm_repair_compile",
+                            attempted=True,
+                            success=False,
+                            duration_ms=repair_elapsed_ms,
+                            details={"reason": "repaired_but_still_fails"},
+                        )
+                    )
+            else:
+                stages.append(
+                    PipelineStage(
+                        stage="llm_repair_compile",
+                        attempted=True,
+                        success=False,
+                        duration_ms=repair_elapsed_ms,
+                        details={"reason": "llm_returned_nothing"},
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            repair_elapsed_ms = (time.perf_counter() - repair_start) * 1000
+            stages.append(
+                PipelineStage(
+                    stage="llm_repair_compile",
+                    attempted=True,
+                    success=False,
+                    duration_ms=repair_elapsed_ms,
+                    details={"reason": "exception"},
+                )
+            )
+
+    # If compile failed with def-without-body / #check error and we didn't use thinking mode,
+    # retry once with iteration loop so refinement can fix the statement.
+    def _is_def_check_compile_error(code: str, result: CompileResult) -> bool:
+        if result.success:
+            return False
+        err = " ".join(d.raw or d.message for d in result.diagnostics).lower()
+        # Match common Lean errors: incomplete def (expected ':=', 'where' or '|'), #check token, etc.
+        err_matches = (
+            "expected ':=" in err
+            or "expected 'where'" in err
+            or "expected '|'" in err
+            or "#check" in err
+            or "unexpected token" in err
+            or "incomplete def" in err
+        )
+        if not err_matches:
+            return False
+        # Code has a def (possibly noncomputable/unsafe/partial) and/or #check
+        code_lower = code.lower()
+        has_def = "def " in code_lower or "noncomputable def" in code_lower
+        has_check = "#check" in code
+        return has_def or has_check
+
+    retry_with_thinking = (
+        not compile_result.success
+        and payload.max_iters <= 1
+        and _is_def_check_compile_error(generated.code, compile_result)
+    )
+    if retry_with_thinking:
+        thinking_context = {**(payload.context or {}), "mode": "thinking"}
+        try:
+            generated_retry = await generate_lean(
+                payload.nl_input,
+                context=thinking_context,
+                max_iters=3,
+                settings=settings,
+            )
+            generated_retry = generated_retry.model_copy(
+                update={"code": _normalize_generated_lean_code(generated_retry.code)}
+            )
+            compile_retry = await compile_lean(generated_retry.code, settings=settings)
+            if compile_retry.success or not _is_def_check_compile_error(
+                generated_retry.code, compile_retry
+            ):
+                generated = generated_retry
+                compile_result = compile_retry
+                stages.append(
+                    PipelineStage(
+                        stage="modal_retry_thinking",
+                        attempted=True,
+                        success=compile_retry.success,
+                        duration_ms=0,
+                        details={
+                            "reason": "def_header_fix",
+                            "resolved": compile_retry.success,
+                        },
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # If the fast /v1/generate path still returns malformed def/#check output,
+    # force one retry against /v1/analyze for higher reliability.
+    force_retry_with_analyze = (
+        not compile_result.success
+        and payload.max_iters <= 1
+        and _is_def_check_compile_error(generated.code, compile_result)
+    )
+    if force_retry_with_analyze:
+        analyze_settings = settings.model_copy(update={"modal_use_generate_endpoint": False})
+        analyze_context = {**(payload.context or {}), "mode": "fast"}
+        try:
+            generated_analyze = await generate_lean(
+                payload.nl_input,
+                context=analyze_context,
+                max_iters=1,
+                settings=analyze_settings,
+            )
+            generated_analyze = generated_analyze.model_copy(
+                update={"code": _normalize_generated_lean_code(generated_analyze.code)}
+            )
+            compile_analyze = await compile_lean(generated_analyze.code, settings=settings)
+            if compile_analyze.success or not _is_def_check_compile_error(
+                generated_analyze.code, compile_analyze
+            ):
+                generated = generated_analyze
+                compile_result = compile_analyze
+                stages.append(
+                    PipelineStage(
+                        stage="modal_retry_analyze",
+                        attempted=True,
+                        success=compile_analyze.success,
+                        duration_ms=0,
+                        details={
+                            "reason": "force_analyze_endpoint",
+                            "resolved": compile_analyze.success,
+                        },
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # If still failing with def/#check error, try one LLM repair pass to fix the Lean code.
+    if (
+        not compile_result.success
+        and settings.enable_llm_interpretation
+        and _is_def_check_compile_error(generated.code, compile_result)
+    ):
+        diag_msg = (
+            compile_result.diagnostics[0].message
+            if compile_result.diagnostics
+            else "unexpected token '#check'; expected ':=', 'where' or '|'"
+        )
+        try:
+            repaired = await repair_lean_def_check(
+                generated.code,
+                diag_msg,
+                settings=settings,
+            )
+            if repaired:
+                compile_repaired = await compile_lean(repaired, settings=settings)
+                if compile_repaired.success:
+                    generated = GeneratedLean(code=repaired, metadata=generated.metadata)
+                    compile_result = compile_repaired
+                    stages.append(
+                        PipelineStage(
+                            stage="llm_repair_def_check",
+                            attempted=True,
+                            success=True,
+                            duration_ms=0,
+                            details={"reason": "def_check_fixed"},
+                        )
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+
     compile_elapsed_ms = (time.perf_counter() - compile_start) * 1000
     logger.info(
         "stage_complete stage=lean_compile duration_ms=%.2f success=%s",
@@ -544,11 +850,29 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
         else:
             compile_result.stderr = error_message
 
-    interpretation = None
+    interpretation = _interpretation_from_modal_metadata(generated.metadata)
     interpretation_error: str | None = None
     llm_attempted = False
 
     if (
+        not compile_result.success
+        and interpretation is not None
+        and interpretation.items
+    ):
+        logger.info(
+            "stage_skipped stage=llm_interpretation reason=modal_metadata item_count=%s",
+            len(interpretation.items),
+        )
+        stages.append(
+            PipelineStage(
+                stage="llm_interpretation",
+                attempted=False,
+                success=None,
+                duration_ms=None,
+                details={"reason": "modal_metadata", "item_count": len(interpretation.items)},
+            )
+        )
+    elif (
         not compile_result.success
         and settings.enable_llm_interpretation
         and not semantic_validation.collapsed_to_false
@@ -616,19 +940,25 @@ async def solve_lean(payload: SolveRequest) -> SolveResponse:
             )
         )
     else:
-        logger.info("stage_skipped stage=llm_interpretation reason=compile_success")
+        skip_reason = "compile_success"
+        if interpretation is not None and interpretation.items:
+            skip_reason = "modal_metadata"
+        logger.info("stage_skipped stage=llm_interpretation reason=%s", skip_reason)
         stages.append(
             PipelineStage(
                 stage="llm_interpretation",
                 attempted=False,
                 success=None,
                 duration_ms=None,
-                details={"reason": "compile_success"},
+                details={"reason": skip_reason},
             )
         )
 
     highlights: HighlightResolveResponse | None = None
-    if not compile_result.success:
+    should_resolve_highlights = (not compile_result.success) or bool(
+        interpretation is not None and interpretation.items
+    )
+    if should_resolve_highlights:
         highlight_start = time.perf_counter()
         highlight_chunks = _parse_chunks_from_context(payload.context, payload.nl_input)
         active_chunk_id = str(

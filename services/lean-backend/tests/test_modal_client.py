@@ -94,12 +94,17 @@ def test_build_payload_for_generate_endpoint_matches_expected_shape() -> None:
     }
 
 
-def test_resolve_modal_endpoint_keeps_root_path() -> None:
-    endpoint = _resolve_modal_endpoint(
+def test_resolve_modal_endpoint_root_gets_generate_or_analyze_path() -> None:
+    endpoint_generate = _resolve_modal_endpoint(
         "https://example.modal.run",
         use_generate=True,
     )
-    assert endpoint == "https://example.modal.run"
+    assert endpoint_generate == "https://example.modal.run/v1/generate"
+    endpoint_analyze = _resolve_modal_endpoint(
+        "https://example.modal.run",
+        use_generate=False,
+    )
+    assert endpoint_analyze == "https://example.modal.run/v1/analyze"
 
 
 def test_build_payload_for_root_endpoint_uses_backend_shape() -> None:

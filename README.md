@@ -1,27 +1,14 @@
-# treehacks-2026 monorepo
+# Zeta
 
-This repo currently contains:
+**Grammarly for math.**
 
-- A Modal backend for NL -> Lean checking using `FrenzyMath/Herald_translator`
-- A Chrome extension MVP that runs on Overleaf and highlights placeholder tokens
+Zeta checks your mathematical writing (e.g. in Overleaf) and suggests fixes, like a proofreader for LaTeX and formal math.
 
-## Layout
+## How to download / install
 
-```text
-apps/
-  overleaf-extension/        # Chrome extension MVP
-services/
-  translator-modal/          # Modal + FastAPI + Lean checker backend
-```
+1. Open Chrome and go to `chrome://extensions`.
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked**.
+4. Choose the folder: `apps/overleaf-extension` inside this repo.
 
-## Backend first
-
-Deploy and query the backend via:
-
-- `/Users/aryan/Desktop/treehacks-2026/services/translator-modal/README.md`
-
-## Extension MVP
-
-Load the extension and test word-highlighting via:
-
-- `/Users/aryan/Desktop/treehacks-2026/apps/overleaf-extension/README.md`
+After that, open an Overleaf project and use the Zeta panel to run checks and see suggestions.

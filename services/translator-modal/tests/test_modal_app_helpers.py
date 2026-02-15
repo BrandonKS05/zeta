@@ -33,6 +33,95 @@ def test_normalize_statement_type_rewrites_unicode_sets() -> None:
     assert normalized == "∀ n : Nat, n + 0 = n"
 
 
+def test_normalize_statement_type_rewrites_incomplete_def_header() -> None:
+    """Herald-style def with no body becomes a type (params) → type for axiom _ : type."""
+    statement = "def zeta_candidate (x : ℝ) : Set (ℤ × ℕ)"
+    normalized = app._normalize_statement_type(statement)
+    assert "def " not in normalized and "zeta_candidate" not in normalized
+    assert "Set" in normalized and "→" in normalized
+    assert "(x :" in normalized and ("Real" in normalized or "ℝ" in normalized)
+
+
+def test_normalize_statement_type_incomplete_def_ignores_trailing_check() -> None:
+    """Trailing #check line is not included in the extracted type."""
+    statement = "def zeta_candidate (x : ℝ) : Set (ℤ × ℕ)\n#check zeta_candidate"
+    normalized = app._normalize_statement_type(statement)
+    assert "#check" not in normalized
+    assert "→" in normalized and "Set" in normalized
+
+
+def test_normalize_statement_type_extracts_def_from_full_lean_file() -> None:
+    """When model returns a full Lean file (import, namespace, def, #check), extract def header as type."""
+    statement = (
+        "import Std\n\n"
+        "set_option autoImplicit false\n\n"
+        "namespace MathGrammar\n"
+        "def zeta_candidate (x : ℝ) : Option (ℤ × ℤ)\n"
+        "#check zeta_candidate\n"
+        "end MathGrammar\n"
+    )
+    normalized = app._normalize_statement_type(statement)
+    assert "def " not in normalized and "zeta_candidate" not in normalized
+    assert "import " not in normalized and "namespace " not in normalized and "#check" not in normalized
+    assert "→" in normalized and "Option" in normalized
+
+
+def test_normalize_statement_type_rewrites_noncomputable_def_header() -> None:
+    """Lean 4 'noncomputable def name (n : ℕ) : ℝ' (no body) is normalized to a type."""
+    statement = "noncomputable def zeta_candidate (n : ℕ) : ℝ"
+    normalized = app._normalize_statement_type(statement)
+    assert "noncomputable" not in normalized and "def " not in normalized and "zeta_candidate" not in normalized
+    assert "→" in normalized and ("Real" in normalized or "ℝ" in normalized)
+
+
+def test_normalize_statement_type_noncomputable_def_in_full_file() -> None:
+    """Full file with 'noncomputable def ...' line is normalized (line-by-line fallback)."""
+    statement = (
+        "import Std\n\n"
+        "set_option autoImplicit false\n\n"
+        "namespace MathGrammar\n"
+        "noncomputable def zeta_candidate (n : ℕ) : ℝ\n"
+        "#check zeta_candidate\n"
+        "end MathGrammar\n"
+    )
+    normalized = app._normalize_statement_type(statement)
+    assert "def " not in normalized and "noncomputable" not in normalized and "zeta_candidate" not in normalized
+    assert "→" in normalized
+
+
+def test_sanitize_lean_source_def_headers_replaces_def_line_with_axiom() -> None:
+    """Safety net: full file with 'def name (...) : type' line gets that line replaced by axiom."""
+    lean_source = (
+        "import Std\n\n"
+        "set_option autoImplicit false\n\n"
+        "namespace MathGrammar\n"
+        "def zeta_candidate (x : ℝ) : Set (ℤ × ℤ)\n"
+        "#check zeta_candidate\n"
+        "end MathGrammar\n"
+    )
+    out = app._sanitize_lean_source_def_headers(lean_source, "zeta_candidate")
+    assert "def zeta_candidate" not in out
+    assert "axiom zeta_candidate :" in out
+    assert "→" in out and "Set" in out
+    assert "#check zeta_candidate" in out
+
+
+def test_refine_statement_type_rewrites_incomplete_let_when_diagnostic_has_check() -> None:
+    refined, notes = app._refine_statement_type(
+        statement_type="let x : ℝ",
+        diagnostics=[
+            app.LeanDiagnostic(
+                severity="error",
+                message="unexpected token '#check'; expected ':=', 'where' or '|'",
+                line=4,
+                column=1,
+            ),
+        ],
+    )
+    assert refined == "∀ x : Real, True"
+    assert any("let" in n.lower() or "axiom" in n.lower() for n in notes)
+
+
 def test_resolve_effective_imports_auto_enables_mathlib() -> None:
     imports, auto_enabled = app._resolve_effective_imports(["Std"], "∀ x : Real, x ^ 2 ≥ 0")
     assert auto_enabled is True

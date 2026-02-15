@@ -42,7 +42,11 @@ class SemanticValidation(BaseModel):
 class PipelineStage(BaseModel):
     stage: Literal[
         "modal_generation",
+        "modal_retry_thinking",
+        "modal_retry_analyze",
         "lean_compile",
+        "llm_repair_compile",
+        "llm_repair_def_check",
         "semantic_validation",
         "llm_interpretation",
         "highlight_resolution",
