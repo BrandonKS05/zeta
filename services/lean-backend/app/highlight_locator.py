@@ -45,6 +45,20 @@ _STOPWORDS = {
     "theorem",
 }
 
+# Spans that are context/symbols only, not the wrong formula - don't highlight these
+def _is_boilerplate_highlight(text: str) -> bool:
+    if not text or not text.strip():
+        return True
+    s = text.strip()
+    lower = s.lower()
+    if lower == "we have" or lower.startswith("we have ") or s == "we have":
+        return True
+    if "\\mathbb" in s and "=" not in s and "≥" not in s and "≤" not in s and "+" not in s:
+        return True
+    if len(s) <= 4 and "=" not in s and "≥" not in s and "≤" not in s:
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class _SpanMatch:
@@ -97,6 +111,12 @@ _LATEX_TO_UNICODE = (
     (r"\in", "∈"),
     (r"\forall", "∀"),
     (r"\exists", "∃"),
+    (r"\leftrightarrow", "↔"),
+    (r"\iff", "↔"),
+    (r"\wedge", "∧"),
+    (r"\land", "∧"),
+    (r"\vee", "∨"),
+    (r"\lor", "∨"),
 )
 
 
@@ -107,14 +127,21 @@ def _excerpt_search_variants(query: str) -> list[str]:
         return []
     seen = {q}
     out = [q]
-    # Unicode -> LaTeX (so if LLM returns "≥" we also try "\geq" in chunk)
+    # One variant with all Unicode -> LaTeX (so "↔" and "∧" both become \leftrightarrow, \wedge)
+    all_unicode_to_latex = q
+    for latex, unicode_char in _LATEX_TO_UNICODE:
+        if unicode_char in all_unicode_to_latex:
+            all_unicode_to_latex = all_unicode_to_latex.replace(unicode_char, latex)
+    if all_unicode_to_latex not in seen:
+        seen.add(all_unicode_to_latex)
+        out.append(all_unicode_to_latex)
+    # Single replacements (in case chunk mixes Unicode and LaTeX)
     for latex, unicode_char in _LATEX_TO_UNICODE:
         if unicode_char in q:
             v = q.replace(unicode_char, latex)
             if v not in seen:
                 seen.add(v)
                 out.append(v)
-    # LaTeX -> Unicode
     for latex, unicode_char in _LATEX_TO_UNICODE:
         if latex in q:
             v = q.replace(latex, unicode_char)
@@ -307,13 +334,17 @@ def _extract_keywords(item: InterpretationItem) -> list[str]:
     return tokens
 
 
+def _matched_text(match: _SpanMatch) -> str:
+    return match.chunk.text[match.start_in_chunk : match.end_in_chunk]
+
+
 def _resolve_item(
     item: InterpretationItem,
     chunks: list[HighlightChunk],
     active_chunk_id: str | None,
 ) -> _SpanMatch | None:
     by_span = _resolve_by_latex_span(item, chunks, active_chunk_id)
-    if by_span is not None:
+    if by_span is not None and not _is_boilerplate_highlight(_matched_text(by_span)):
         return by_span
 
     by_excerpt = _resolve_by_text(
@@ -323,7 +354,7 @@ def _resolve_item(
         source="latex_excerpt",
         confidence=0.9,
     )
-    if by_excerpt is not None:
+    if by_excerpt is not None and not _is_boilerplate_highlight(_matched_text(by_excerpt)):
         return by_excerpt
 
     for candidate in _extract_quoted_candidates(item):
@@ -334,7 +365,7 @@ def _resolve_item(
             source="quoted_text",
             confidence=0.8,
         )
-        if by_quote is not None:
+        if by_quote is not None and not _is_boilerplate_highlight(_matched_text(by_quote)):
             return by_quote
 
     by_replacement = _resolve_by_text(
@@ -344,7 +375,7 @@ def _resolve_item(
         source="replacement_text",
         confidence=0.72,
     )
-    if by_replacement is not None:
+    if by_replacement is not None and not _is_boilerplate_highlight(_matched_text(by_replacement)):
         return by_replacement
 
     for keyword in _extract_keywords(item):
@@ -355,7 +386,7 @@ def _resolve_item(
             source="keyword",
             confidence=0.6,
         )
-        if by_keyword is not None:
+        if by_keyword is not None and not _is_boilerplate_highlight(_matched_text(by_keyword)):
             return by_keyword
 
     return None
