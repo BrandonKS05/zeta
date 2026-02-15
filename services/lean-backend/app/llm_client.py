@@ -22,6 +22,12 @@ class _RetriableLLMError(LLMClientError):
 
 
 _ALLOWED_SOURCES = {"latex", "lean", "both", "unknown"}
+_INTERPRET_MAX_DIAGNOSTICS = 8
+_INTERPRET_NL_INPUT_MAX_CHARS = 2_500
+_INTERPRET_CODE_MAX_CHARS = 3_500
+_INTERPRET_STDERR_MAX_CHARS = 2_000
+_INTERPRET_STDOUT_MAX_CHARS = 1_200
+_INTERPRET_DIAGNOSTICS_MAX_CHARS = 2_500
 
 
 def _endpoint_url(settings: Settings) -> str:
@@ -261,7 +267,8 @@ async def interpret_errors(
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
     diagnostics_json = json.dumps(
-        [diag.model_dump() for diag in compile_result.diagnostics], ensure_ascii=False
+        [diag.model_dump() for diag in compile_result.diagnostics[:_INTERPRET_MAX_DIAGNOSTICS]],
+        ensure_ascii=False,
     )
 
     user_prompt = (
@@ -270,13 +277,14 @@ async def interpret_errors(
         "Each item should include: error, probable_cause, suggested_fix, source (latex|lean|both|unknown), "
         "latex_start (0-based char offset in original NL/LaTeX), latex_end, latex_excerpt, lean_line, lean_column, "
         "replacement (optional edit text), confidence (0-1).\n\n"
+        "Keep output compact: at most 2 items and at most 3 suggestions.\n\n"
         "If you can map the issue to the original NL/LaTeX input, provide accurate latex_start/latex_end. "
         "If uncertain, use null for those fields.\n\n"
-        f"Original NL/LaTeX input:\n{truncate_text(nl_input, 8_000)}\n\n"
-        f"Lean code:\n{truncate_text(code, 8_000)}\n\n"
-        f"Compiler stderr:\n{truncate_text(compile_result.stderr, 8_000)}\n\n"
-        f"Compiler stdout:\n{truncate_text(compile_result.stdout, 8_000)}\n\n"
-        f"Structured diagnostics:\n{truncate_text(diagnostics_json, 8_000)}"
+        f"Original NL/LaTeX input:\n{truncate_text(nl_input, _INTERPRET_NL_INPUT_MAX_CHARS)}\n\n"
+        f"Lean code:\n{truncate_text(code, _INTERPRET_CODE_MAX_CHARS)}\n\n"
+        f"Compiler stderr:\n{truncate_text(compile_result.stderr, _INTERPRET_STDERR_MAX_CHARS)}\n\n"
+        f"Compiler stdout:\n{truncate_text(compile_result.stdout, _INTERPRET_STDOUT_MAX_CHARS)}\n\n"
+        f"Structured diagnostics:\n{truncate_text(diagnostics_json, _INTERPRET_DIAGNOSTICS_MAX_CHARS)}"
     )
 
     payload = {
@@ -291,6 +299,8 @@ async def interpret_errors(
             {"role": "user", "content": user_prompt},
         ],
     }
+    if settings.llm_max_completion_tokens > 0:
+        payload["max_completion_tokens"] = settings.llm_max_completion_tokens
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
 
