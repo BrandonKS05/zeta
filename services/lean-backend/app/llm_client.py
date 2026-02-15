@@ -58,7 +58,19 @@ def _interpret_json_response_format() -> dict[str, Any]:
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "required": ["error", "source"],
+                            "required": [
+                                "error",
+                                "probable_cause",
+                                "suggested_fix",
+                                "source",
+                                "latex_start",
+                                "latex_end",
+                                "latex_excerpt",
+                                "lean_line",
+                                "lean_column",
+                                "replacement",
+                                "confidence",
+                            ],
                             "properties": {
                                 "error": {"type": "string"},
                                 "probable_cause": {"type": ["string", "null"]},
