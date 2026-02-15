@@ -82,7 +82,7 @@ Note on toolchain persistence:
   - `LLM_ENDPOINT_URL` (full endpoint override)
   - `LLM_BASE_URL` (default `https://api.openai.com/v1`)
   - `LLM_API_KEY`
-  - `LLM_MODEL` (default `gpt-4o-mini`)
+  - `LLM_MODEL` (default `gpt-5-nano`)
   - `LLM_TIMEOUT_SECONDS` (default `30`)
   - `LLM_MAX_RETRIES` (default `1`)
   - `LLM_HIGHLIGHT_TIMEOUT_SECONDS` (default `12`)

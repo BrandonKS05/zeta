@@ -29,7 +29,7 @@ class Settings(BaseModel):
     llm_endpoint_url: str | None = None
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-5-nano"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 1
     enable_llm_highlights: bool = True
@@ -66,7 +66,7 @@ def get_settings() -> Settings:
         llm_endpoint_url=_env("LLM_ENDPOINT_URL"),
         llm_base_url=_env("LLM_BASE_URL", "https://api.openai.com/v1"),
         llm_api_key=_env("LLM_API_KEY"),
-        llm_model=_env("LLM_MODEL", "gpt-4o-mini"),
+        llm_model=_env("LLM_MODEL", "gpt-5-nano"),
         llm_timeout_seconds=_env("LLM_TIMEOUT_SECONDS", "30"),
         llm_max_retries=_env("LLM_MAX_RETRIES", "1"),
         enable_llm_highlights=_env("ENABLE_LLM_HIGHLIGHTS", "true"),

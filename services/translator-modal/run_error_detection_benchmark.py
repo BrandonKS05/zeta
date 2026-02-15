@@ -625,7 +625,7 @@ def main() -> None:
     parser.add_argument("--herald-max-poll-seconds", type=int, default=600)
 
     parser.add_argument("--openai-base-url", default="https://api.openai.com/v1")
-    parser.add_argument("--openai-model", default="gpt-5-mini")
+    parser.add_argument("--openai-model", default="gpt-5-nano")
     parser.add_argument("--openai-api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--openai-timeout-seconds", type=int, default=60)
 
