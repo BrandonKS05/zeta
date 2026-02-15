@@ -2649,9 +2649,12 @@ class ZetaApp {
   }
 
   buildChatPrimerMessage(issue) {
-    const target = String(issue?.targetText || "").trim();
-    const subject = target ? `for "${target}"` : "for this issue";
-    return `I can explain why Lean flagged this ${subject}. Ask for a simpler rewrite if needed.`;
+    const sentence = String(issue?.sentenceText || "").trim();
+    const cleanSentence = this.toActivityMathText(sentence);
+    if (cleanSentence) {
+      return `I can explain why this sentence was flagged: "${this.truncateActivityText(cleanSentence, 140)}". Ask for a simpler rewrite if needed.`;
+    }
+    return "I can explain why this sentence was flagged and suggest a simpler rewrite if needed.";
   }
 
   buildGeneralChatPrimerMessage(issueCount = 0) {
@@ -5518,6 +5521,22 @@ class ZetaApp {
     return markers.some((marker) => text.includes(marker));
   }
 
+  isTrivialLeanDiagnosticMessage(message) {
+    const text = String(message || "");
+    const lower = text.toLowerCase();
+    if (!lower) {
+      return false;
+    }
+    // Ignore noisy unknown-identifier diagnostics that are not useful to users.
+    if (/unknown identifier\s+[`'"]?zeta_[a-z0-9_'.-]+[`'"]?/i.test(text)) {
+      return true;
+    }
+    if (/unknown (?:identifier|constant)\s+[`'"]?(r|q|z|n)[`'"]?/i.test(text)) {
+      return true;
+    }
+    return false;
+  }
+
   resolveCompileSuccess(response, diagnostics = []) {
     if (typeof response?.compile?.success === "boolean") {
       return response.compile.success;
@@ -5745,9 +5764,11 @@ class ZetaApp {
       ensureArray(response.compile?.diagnostics).length > 0
         ? ensureArray(response.compile?.diagnostics)
         : ensureArray(response.diagnostics);
-    const inlineDiagnostics = diagnostics.filter(
-      (diag) => !this.isInfrastructureDiagnosticMessage(diag?.message)
-    );
+    const inlineDiagnostics = diagnostics.filter((diag) => {
+      const message = diag?.message;
+      return !this.isInfrastructureDiagnosticMessage(message)
+        && !this.isTrivialLeanDiagnosticMessage(message);
+    });
     const compileSuccess = this.resolveCompileSuccess(response, diagnostics);
 
     const interpretationItems = ensureArray(response.interpretation?.items);
@@ -6462,13 +6483,14 @@ class ZetaApp {
       : null;
     const diagnostics = ensureArray(normalized?.diagnostics);
     const compileSuccess = this.resolveCompileSuccess(responsePayload || {}, diagnostics);
-    const level = errorMessage || normalized?.hasError ? "error" : "success";
+    const needsAttention = !!(errorMessage || normalized?.hasError);
+    const level = needsAttention ? "error" : "success";
     const sentenceSourceText = this.resolveActivitySentenceText(sentenceEntry, responsePayload);
     const sentenceDisplayText = this.toActivityMathText(sentenceSourceText) || sentenceSourceText;
     const sentenceLabel = this.formatSentenceLabel(sentenceSourceText);
-    const statusLabel = compileSuccess
-      ? (translatorTypecheckOnly ? "typechecked" : "compiled")
-      : "needs attention";
+    const statusLabel = needsAttention
+      ? "needs attention"
+      : (translatorTypecheckOnly ? "typechecked" : "checked");
     const message = `${statusLabel} · ${sentenceLabel}`;
 
     const detailLines = [
@@ -6482,7 +6504,7 @@ class ZetaApp {
     if (errorMessage) {
       detailLines.push("", "Error", this.truncateActivityText(errorMessage, 1200));
     }
-    if (!compileSuccess) {
+    if (needsAttention && !compileSuccess) {
       detailLines.push("", "Compile", "success: false", `diagnostics: ${diagnostics.length}`);
     }
     if (diagnostics.length > 0) {
