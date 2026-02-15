@@ -49,6 +49,18 @@ def _endpoint_url(settings: Settings) -> str:
     return f"{base}/chat/completions"
 
 
+def _interpretation_endpoint_and_api(
+    settings: Settings,
+) -> tuple[str, bool]:
+    """Endpoint and use_responses_api for interpretation/semantic-sanity. Prefer Chat Completions for reliable JSON."""
+    if getattr(settings, "llm_interpretation_use_chat_completions", True):
+        base = (settings.llm_base_url or "https://api.openai.com/v1").rstrip("/")
+        if settings.llm_endpoint_url:
+            base = settings.llm_endpoint_url.rstrip("/").rsplit("/", 1)[0]
+        return f"{base}/chat/completions", False
+    return _endpoint_url(settings), _use_responses_api(settings)
+
+
 def _token_limit_key(*, use_responses_api: bool) -> str:
     """Use API-specific output token key."""
     return "max_output_tokens" if use_responses_api else "max_completion_tokens"
@@ -644,7 +656,7 @@ async def interpret_errors(
     if not settings.llm_model:
         raise LLMClientError("LLM_MODEL is not configured")
 
-    endpoint = _endpoint_url(settings)
+    endpoint, use_responses_api = _interpretation_endpoint_and_api(settings)
     headers = {"Content-Type": "application/json"}
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
@@ -670,7 +682,6 @@ async def interpret_errors(
         f"Structured diagnostics:\n{truncate_text(diagnostics_json, _INTERPRET_DIAGNOSTICS_MAX_CHARS)}"
     )
 
-    use_responses_api = _use_responses_api(settings)
     system_content = "You are an expert Lean 4 engineer. Respond only with valid compact JSON."
     if use_responses_api:
         payload = {
@@ -787,7 +798,7 @@ async def interpret_semantic_sanity(
     if not settings.llm_api_key:
         return None
 
-    endpoint = _endpoint_url(settings)
+    endpoint, use_responses_api = _interpretation_endpoint_and_api(settings)
     headers = {"Content-Type": "application/json"}
     if settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
@@ -806,7 +817,6 @@ async def interpret_semantic_sanity(
         f"#check output:\n{truncate_text(compile_stdout, 500)}"
     )
 
-    use_responses_api = _use_responses_api(settings)
     system_content = "You are a math semantics checker. Respond only with valid compact JSON. Use items=[] when the statement is not obviously false."
     if use_responses_api:
         payload = {

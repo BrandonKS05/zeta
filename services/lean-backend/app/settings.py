@@ -32,6 +32,7 @@ class Settings(BaseModel):
     compiler_output_max_chars: int = 20_000
 
     enable_llm_interpretation: bool = True
+    llm_interpretation_use_chat_completions: bool = True
     llm_endpoint_url: str | None = None
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str | None = None
@@ -84,6 +85,9 @@ def get_settings() -> Settings:
         lean_timeout_seconds=_env("LEAN_TIMEOUT_SECONDS", "15"),
         compiler_output_max_chars=_env("COMPILER_OUTPUT_MAX_CHARS", "20000"),
         enable_llm_interpretation=_env("ENABLE_LLM_INTERPRETATION", "true"),
+        llm_interpretation_use_chat_completions=_env(
+            "LLM_INTERPRETATION_USE_CHAT_COMPLETIONS", "true"
+        ),
         llm_endpoint_url=_env("LLM_ENDPOINT_URL"),
         llm_base_url=_env("LLM_BASE_URL", "https://api.openai.com/v1"),
         llm_api_key=_env("LLM_API_KEY"),
