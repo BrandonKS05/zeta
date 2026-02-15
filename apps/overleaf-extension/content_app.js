@@ -2252,6 +2252,134 @@ class ZetaApp {
     return lines.join("\n");
   }
 
+  resolveLogicalAutocompleteInsertIndex(sourceText, liveContext = null, requestMeta = null) {
+    const text = String(sourceText || "");
+    const liveIndex = Number.isInteger(liveContext?.prefixText?.length)
+      ? clamp(liveContext.prefixText.length, 0, text.length)
+      : null;
+    const candidates = [];
+    const pushCandidate = (index, score) => {
+      if (!Number.isInteger(index)) {
+        return;
+      }
+      const clampedIndex = clamp(index, 0, text.length);
+      const numericScore = Number.isFinite(Number(score)) ? Number(score) : 0;
+      candidates.push({ index: clampedIndex, score: numericScore });
+    };
+
+    if (liveIndex !== null) {
+      // Cursor-only insertion is fallback, not primary.
+      pushCandidate(liveIndex, 1000);
+    }
+
+    const meta = requestMeta && typeof requestMeta === "object" ? requestMeta : {};
+    const windowText = String(meta.textWindow || "");
+    const localOffset = Number.isInteger(meta.localCursorOffset) ? meta.localCursorOffset : null;
+    const prefixTail = String(meta.prefixTail || "");
+    const suffixHead = String(meta.suffixHead || "");
+    if (windowText && localOffset !== null) {
+      let idx = text.indexOf(windowText);
+      let count = 0;
+      while (idx !== -1 && count < 48) {
+        const insertAt = clamp(idx + localOffset, 0, text.length);
+        let score = liveIndex === null ? 0 : Math.abs(insertAt - liveIndex);
+        const candidatePrefix = text.slice(Math.max(0, insertAt - prefixTail.length), insertAt);
+        const candidateSuffix = text.slice(insertAt, insertAt + suffixHead.length);
+        if (prefixTail && candidatePrefix.endsWith(prefixTail)) {
+          score -= 300;
+        }
+        if (suffixHead && candidateSuffix.startsWith(suffixHead)) {
+          score -= 300;
+        }
+        pushCandidate(insertAt, score);
+        idx = text.indexOf(windowText, idx + 1);
+        count += 1;
+      }
+    }
+
+    if (prefixTail) {
+      let idx = text.indexOf(prefixTail);
+      let count = 0;
+      while (idx !== -1 && count < 48) {
+        const insertAt = clamp(idx + prefixTail.length, 0, text.length);
+        const candidateSuffix = text.slice(insertAt, insertAt + suffixHead.length);
+        let score = liveIndex === null ? 120 : 120 + Math.abs(insertAt - liveIndex);
+        if (suffixHead && candidateSuffix.startsWith(suffixHead)) {
+          score -= 120;
+        }
+        pushCandidate(insertAt, score);
+        idx = text.indexOf(prefixTail, idx + 1);
+        count += 1;
+      }
+    }
+
+    if (candidates.length === 0) {
+      return liveIndex !== null ? liveIndex : text.length;
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    return candidates[0].index;
+  }
+
+  trimAutocompleteOverlapAtIndex(sourceText, index, insertionText) {
+    const text = String(sourceText || "");
+    const insertAt = clamp(Number(index) || 0, 0, text.length);
+    const prefix = text.slice(0, insertAt);
+    const suffix = text.slice(insertAt);
+    let value = String(insertionText || "");
+    if (!value) {
+      return "";
+    }
+
+    let leadingOverlap = 0;
+    for (let size = Math.min(prefix.length, value.length); size >= 1; size -= 1) {
+      if (prefix.slice(-size) === value.slice(0, size)) {
+        leadingOverlap = size;
+        break;
+      }
+    }
+    if (leadingOverlap > 0) {
+      value = value.slice(leadingOverlap);
+    }
+
+    let trailingOverlap = 0;
+    for (let size = Math.min(suffix.length, value.length); size >= 1; size -= 1) {
+      if (value.slice(-size) === suffix.slice(0, size)) {
+        trailingOverlap = size;
+        break;
+      }
+    }
+    if (trailingOverlap > 0) {
+      value = value.slice(0, -trailingOverlap);
+    }
+
+    return value;
+  }
+
+  insertAutocompleteAtLogicalIndex(documentSnapshot, index, insertionText) {
+    if (!this.activeAdapter || !documentSnapshot) {
+      return false;
+    }
+    const text = String(insertionText || "");
+    if (!text) {
+      return false;
+    }
+    if (
+      this.activeAdapter.supportsDirectRangeReplace
+      && typeof this.activeAdapter.replaceIssue === "function"
+    ) {
+      return this.activeAdapter.replaceIssue(
+        {
+          start: index,
+          end: index,
+          targetText: "",
+        },
+        text,
+        documentSnapshot
+      );
+    }
+    return this.activeAdapter.insertAtCaret(text);
+  }
+
   acceptActiveAutocomplete(trigger = "tab") {
     if (!this.activeAutocomplete || !this.activeAdapter || !this.activeAdapter.isConnected()) {
       return false;
@@ -2262,8 +2390,16 @@ class ZetaApp {
 
     const requestContext = this.collectAutocompleteContext();
     const liveContext = this.getLiveAutocompleteBoundaryContext();
-    const contextPrefix = String(liveContext?.prefixText ?? requestContext?.prefixText ?? "");
-    const contextSuffix = String(liveContext?.suffixText ?? requestContext?.suffixText ?? "");
+    const documentSnapshot = this.activeAdapter.getScopeSnapshot("document");
+    const documentText = String(documentSnapshot?.sourceText || documentSnapshot?.context || documentSnapshot?.text || "");
+    const requestMeta = this.activeAutocomplete?.requestContext || requestContext || null;
+    const logicalInsertIndex = this.resolveLogicalAutocompleteInsertIndex(
+      documentText,
+      liveContext,
+      requestMeta
+    );
+    const contextPrefix = documentText.slice(0, logicalInsertIndex);
+    const contextSuffix = documentText.slice(logicalInsertIndex);
     if (this.isSentenceCompleteForAutocomplete(contextPrefix)) {
       this.clearAutocompleteSuggestion();
       return false;
@@ -2296,6 +2432,12 @@ class ZetaApp {
       insertion,
       contextSuffix
     );
+    insertion = this.trimAutocompleteOverlapAtIndex(documentText, logicalInsertIndex, insertion);
+    insertion = this.normalizeAutocompleteBoundarySpacing(
+      contextPrefix,
+      insertion,
+      contextSuffix
+    );
     const leftBoundaryChar = contextPrefix.slice(-1);
     const rightBoundaryChar = contextSuffix.slice(0, 1);
     if (/\s$/.test(contextPrefix) || /\s/.test(leftBoundaryChar)) {
@@ -2309,7 +2451,11 @@ class ZetaApp {
       return false;
     }
 
-    const inserted = this.activeAdapter.insertAtCaret(insertion);
+    const inserted = this.insertAutocompleteAtLogicalIndex(
+      documentSnapshot,
+      logicalInsertIndex,
+      insertion
+    );
     if (!inserted) {
       return false;
     }

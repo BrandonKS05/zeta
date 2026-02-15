@@ -644,7 +644,7 @@ class DomLineAdapter extends AdapterBase {
       }
     }
 
-    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) {
       return false;
     }
 

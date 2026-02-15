@@ -77,6 +77,19 @@ _LEAN_UNICODE_SET_REPLACEMENTS = {
     "ℚ": "Rat",
     "ℝ": "Real",
 }
+_CHAT_INLINE_MATH_RE = re.compile(r"[=<>+\-*/^|]|[≤≥≠∈∀∃ℕℤℚℝ]")
+
+
+def _format_chat_math_inline(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "$" in text or "`" in text:
+        return text
+    # Wrap compact math-like expressions, e.g. |a-b|=|b-a|.
+    if len(text) <= 120 and _CHAT_INLINE_MATH_RE.search(text):
+        return f"${text}$"
+    return text
 
 
 @app.middleware("http")
@@ -396,7 +409,7 @@ def build_deterministic_chat_answer(payload: ChatExplainRequest) -> str:
     if issue.sentence:
         intro.append(f"The sentence in question is: \"{issue.sentence}\".")
     if issue.target_text:
-        intro.append(f"The relevant span is: \"{issue.target_text}\".")
+        intro.append(f"The relevant span is: \"{_format_chat_math_inline(issue.target_text)}\".")
 
     if issue.compile_success is False:
         intro.append(
@@ -421,7 +434,7 @@ def build_deterministic_chat_answer(payload: ChatExplainRequest) -> str:
 
     next_step: str
     if issue.replacement:
-        next_step = f"A good next step is to try: {issue.replacement}"
+        next_step = f"A good next step is to try: {_format_chat_math_inline(issue.replacement)}"
     elif issue.target_text:
         next_step = "Restate the marked span in stricter mathematical terms and re-run the checker"
     else:
