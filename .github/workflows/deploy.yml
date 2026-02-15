@@ -19,7 +19,24 @@ jobs:
             cd /home/ubuntu/treehacks-2026/services/lean-backend
             git fetch --all
             git reset --hard origin/main
-            docker compose pull || true
-            docker compose up -d --build
-            docker image prune -f
+            docker compose pull lean-backend || true
+            docker compose up -d --build lean-backend
 
+            # Wait for the API to accept connections before declaring success.
+            HEALTH_URL="http://127.0.0.1:8000/healthz"
+            ATTEMPTS=30
+            SLEEP_SECS=2
+            i=1
+            until curl -fsS "$HEALTH_URL" >/dev/null; do
+              if [ "$i" -ge "$ATTEMPTS" ]; then
+                echo "Health check failed after $ATTEMPTS attempts."
+                docker compose ps
+                docker compose logs --tail=200 lean-backend || true
+                exit 1
+              fi
+              echo "Waiting for service health ($i/$ATTEMPTS)..."
+              i=$((i + 1))
+              sleep "$SLEEP_SECS"
+            done
+
+            docker image prune -f
