@@ -1850,6 +1850,17 @@ class ZetaApp {
         }
         const debug = result?.payload?.no_suggestion_debug;
         if (debug && typeof debug === "object") {
+          const backup = debug.backup_llm;
+          if (backup && typeof backup === "object") {
+            const attempted = backup.attempted === true ? "yes" : "no";
+            const success = backup.success === true ? "yes" : "no";
+            const model = typeof backup.model === "string" ? backup.model : "--";
+            const reason = typeof backup.reason === "string" ? backup.reason : "--";
+            lines.push(`backup llm: attempted=${attempted} success=${success} model=${model} reason=${reason}`);
+            if (typeof backup.endpoint === "string" && backup.endpoint.trim()) {
+              lines.push(`backup llm endpoint: ${backup.endpoint}`);
+            }
+          }
           const upstreamKeys = Array.isArray(debug.upstream_keys)
             ? debug.upstream_keys.join(", ")
             : "";
