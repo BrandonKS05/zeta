@@ -292,7 +292,6 @@ async def resolve_highlights_with_llm(
 
     request_payload = {
         "model": settings.llm_model,
-        "temperature": 0,
         "messages": [
             {
                 "role": "system",

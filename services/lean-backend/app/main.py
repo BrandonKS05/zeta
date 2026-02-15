@@ -330,10 +330,12 @@ def run_semantic_validation(
 
     metadata = modal_metadata or {}
     modal_valid = metadata.get("is_valid_lean")
-    if modal_valid is False:
+    modal_status = str(metadata.get("status") or "").strip().lower()
+    modal_is_unchecked = modal_status == "unchecked"
+    if modal_valid is False and not modal_is_unchecked:
         reasons.append("Modal metadata reported is_valid_lean=false.")
 
-    success = not collapsed_to_false and modal_valid is not False
+    success = not collapsed_to_false and (modal_valid is not False or modal_is_unchecked)
     return SemanticValidation(
         success=success,
         collapsed_to_false=collapsed_to_false,

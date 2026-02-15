@@ -324,3 +324,58 @@ def test_solve_includes_highlights_and_dashboard(monkeypatch: pytest.MonkeyPatch
         assert highlight_stage["success"] is True
 
     asyncio.run(_run())
+
+
+def test_solve_unchecked_modal_metadata_does_not_fail_semantic(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_lean(
+        prompt: str,
+        context: dict | None = None,
+        max_iters: int = 1,
+        settings=None,
+    ) -> GeneratedLean:
+        return GeneratedLean(
+            code=(
+                "import Mathlib.Data.Real.Basic\n\n"
+                "namespace MathGrammar\n"
+                "axiom real_refl : ∀ (x : Real), x = x\n"
+                "#check real_refl\n"
+                "end MathGrammar\n"
+            ),
+            metadata={"status": "unchecked", "is_valid_lean": False},
+        )
+
+    async def fake_compile_lean(code: str, settings=None) -> CompileResult:
+        return CompileResult(
+            success=True,
+            stdout="MathGrammar.real_refl (x : ℝ) : x = x\n",
+            stderr="",
+            diagnostics=[],
+        )
+
+    async def fake_interpret_errors(
+        code: str,
+        compile_result: CompileResult,
+        nl_input: str,
+        settings=None,
+    ) -> Interpretation:
+        raise AssertionError("Interpretation should not run when compile succeeds.")
+
+    monkeypatch.setattr("app.main.generate_lean", fake_generate_lean)
+    monkeypatch.setattr("app.main.compile_lean", fake_compile_lean)
+    monkeypatch.setattr("app.main.interpret_errors", fake_interpret_errors)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/lean/solve",
+                json={"nl_input": "For all real numbers x, x = x."},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compile"]["success"] is True
+        assert payload["pipeline"]["semantic"]["success"] is True
+        assert payload["pipeline"]["semantic"]["reasons"] == []
+
+    asyncio.run(_run())

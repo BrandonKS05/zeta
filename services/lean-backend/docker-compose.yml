@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       LEAN_TEMP_DIR: ${LEAN_TEMP_DIR:-/lean-state/tmp}
+      ELAN_HOME: ${ELAN_HOME:-/lean-state/elan}
     ports:
       - "8000:8000"
     volumes:

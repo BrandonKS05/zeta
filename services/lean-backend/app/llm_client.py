@@ -281,7 +281,6 @@ async def interpret_errors(
 
     payload = {
         "model": settings.llm_model,
-        "temperature": 0,
         "messages": [
             {
                 "role": "system",
