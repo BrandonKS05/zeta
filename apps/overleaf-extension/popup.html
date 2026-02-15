@@ -9,68 +9,106 @@
   <body>
     <main class="zeta-popup">
       <header class="zeta-brand">
-        <img
-          class="zeta-logo"
-          src="assets/zeta-black-white-2048.png"
-          alt="zeta logo"
-          width="56"
-          height="56"
-        />
-        <div class="zeta-brand-copy">
-          <h1>zeta</h1>
-          <p>Grammarly for Math</p>
+        <div class="zeta-brand-left">
+          <img
+            class="zeta-logo"
+            src="assets/zeta-black-white-2048.png"
+            alt="zeta logo"
+            width="56"
+            height="56"
+          />
+          <div class="zeta-brand-copy">
+            <h1>zeta</h1>
+            <p>Grammarly for Math</p>
+          </div>
+        </div>
+        <div class="zeta-brand-inference">
+          <p class="zeta-brand-inference-label">Last Inference</p>
+          <p id="zeta-last-inference" class="zeta-brand-inference-value">--</p>
+          <p id="zeta-last-status" class="zeta-brand-inference-subtle">waiting for a run</p>
         </div>
       </header>
 
-      <section class="zeta-mode-section">
-        <p class="zeta-section-label">Inference Mode</p>
-        <div class="zeta-mode-toggle" role="tablist" aria-label="zeta speed mode">
-          <span class="zeta-mode-indicator" aria-hidden="true"></span>
-          <button
-            type="button"
-            class="zeta-mode-btn"
-            data-mode="fast"
-            role="tab"
-            aria-selected="false"
-          >
-            fast
-          </button>
-          <button
-            type="button"
-            class="zeta-mode-btn"
-            data-mode="accurate"
-            role="tab"
-            aria-selected="false"
-          >
-            accurate
-          </button>
-          <button
-            type="button"
-            class="zeta-mode-btn"
-            data-mode="auto"
-            role="tab"
-            aria-selected="false"
-          >
-            auto
-          </button>
-        </div>
-        <p id="zeta-mode-note" class="zeta-mode-note"></p>
+      <nav class="zeta-top-nav" aria-label="zeta sections">
+        <span class="zeta-top-nav-indicator" aria-hidden="true"></span>
+        <button type="button" class="zeta-top-nav-btn is-active" data-panel="main">Main</button>
+        <button type="button" class="zeta-top-nav-btn" data-panel="history">History</button>
+        <button type="button" class="zeta-top-nav-btn" data-panel="graph">Graph View</button>
+      </nav>
+
+      <section class="zeta-panel is-active" data-panel-content="main">
+        <section class="zeta-mode-section">
+          <p class="zeta-section-label">Inference Mode</p>
+          <div class="zeta-mode-toggle" role="tablist" aria-label="zeta speed mode">
+            <span class="zeta-mode-indicator" aria-hidden="true"></span>
+            <button
+              type="button"
+              class="zeta-mode-btn"
+              data-mode="fast"
+              role="tab"
+              aria-selected="false"
+            >
+              fast
+            </button>
+            <button
+              type="button"
+              class="zeta-mode-btn"
+              data-mode="accurate"
+              role="tab"
+              aria-selected="false"
+            >
+              accurate
+            </button>
+            <button
+              type="button"
+              class="zeta-mode-btn"
+              data-mode="auto"
+              role="tab"
+              aria-selected="false"
+            >
+              auto
+            </button>
+          </div>
+          <p id="zeta-mode-note" class="zeta-mode-note"></p>
+        </section>
+
+        <section class="zeta-legend">
+          <div class="zeta-row">
+            <p class="zeta-section-label">Document Health</p>
+            <p id="zeta-health-stats" class="zeta-chip">0 cached · 0 pending</p>
+          </div>
+          <div class="zeta-health">
+            <div class="zeta-health-meter"><span id="zeta-health-fill"></span></div>
+            <span id="zeta-health-label">100</span>
+          </div>
+        </section>
+
+        <section class="zeta-legend">
+          <div class="zeta-row">
+            <p class="zeta-section-label">Command Macros</p>
+            <p id="zeta-macros-count" class="zeta-chip">0 actions</p>
+          </div>
+          <ul id="zeta-macros-list" class="zeta-list zeta-list--macros"></ul>
+          <p id="zeta-macros-empty" class="zeta-hint">No command macros available.</p>
+        </section>
       </section>
 
-      <section class="zeta-legend">
-        <p class="zeta-section-label">Last Inference</p>
-        <div class="zeta-metric">
-          <p id="zeta-last-inference" class="zeta-metric-value">--</p>
-          <p id="zeta-last-status" class="zeta-metric-subtle">waiting for a run</p>
-        </div>
+      <section class="zeta-panel" data-panel-content="history">
+        <section class="zeta-legend">
+          <div class="zeta-row">
+            <p class="zeta-section-label">Activity History</p>
+            <p id="zeta-activity-count" class="zeta-chip">0</p>
+          </div>
+          <ul id="zeta-activity-list" class="zeta-list"></ul>
+          <p id="zeta-activity-empty" class="zeta-hint">No activity yet.</p>
+        </section>
       </section>
 
-      <section class="zeta-legend">
-        <p class="zeta-section-label">Quick Controls</p>
-        <p class="zeta-hint">
-          Open Overleaf and zeta will check while you type. Mode changes here sync
-          to the injected panel.
-        </p>
+      <section class="zeta-panel" data-panel-content="graph">
+        <section class="zeta-legend">
+          <p class="zeta-section-label">Graph View</p>
+          <p class="zeta-hint">Graph timeline and dependency visualization will appear here.</p>
+        </section>
       </section>
     </main>
 

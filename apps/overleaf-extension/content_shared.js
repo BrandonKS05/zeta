@@ -7,6 +7,7 @@
   const MODE_KEY = "zetaMode";
   const IGNORED_KEY = "zetaIgnoredIssueKeys";
   const TELEMETRY_KEY = "zetaTelemetry";
+  const PANEL_SNAPSHOT_KEY = "zetaPanelSnapshot";
   const CACHE_TTL_MS = 90 * 1000;
   const MAX_HIGHLIGHT_RECTS = 120;
 
@@ -14,13 +15,13 @@
     backendUrl: "http://13.57.35.202:8000/v1/lean/solve",
     mode: "auto",
     scope: "document",
-    theme: "dark",
+    theme: "light",
     checkOnType: true,
     requestTimeoutMs: 18000,
     retries: 1,
     notationStrictness: "balanced",
-    panelOpen: true,
-  }; 
+    panelOpen: false,
+  };
   
   const MODE_SET = new Set(["fast", "accurate", "auto"]);
   const SCOPE_SET = new Set(["selection", "paragraph", "document"]);
@@ -156,6 +157,7 @@
     MODE_KEY,
     IGNORED_KEY,
     TELEMETRY_KEY,
+    PANEL_SNAPSHOT_KEY,
     CACHE_TTL_MS,
     MAX_HIGHLIGHT_RECTS,
     DEFAULT_SETTINGS,

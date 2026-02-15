@@ -7,6 +7,7 @@
     MODE_KEY,
     IGNORED_KEY,
     TELEMETRY_KEY,
+    PANEL_SNAPSHOT_KEY,
     CACHE_TTL_MS,
     DEFAULT_SETTINGS,
     SEVERITY_WEIGHT,
@@ -14,7 +15,6 @@
     shortHash,
     normalizeMode,
     normalizeScope,
-    normalizeTheme,
     modeToDebounce,
     modeToLabel,
     ensureArray,
@@ -44,7 +44,6 @@ class ZetaApp {
     );
 
     this.panel = new ZetaPanel({
-      onToggleTheme: () => this.toggleTheme(),
       onRunNow: () => this.runAnalysis("manual", true),
       onRegenerate: () => this.runAnalysis("regenerate", true),
       onUndoLast: () => this.undoLastAction(),
@@ -71,31 +70,42 @@ class ZetaApp {
     this.sentenceCache = new Map();
     this.lastInferenceMs = null;
     this.lastTelemetry = null;
+    this.lastPanelSnapshotSignature = "";
+    this.currentHealthScore = 100;
+    this.currentSentenceCached = 0;
+    this.currentSentencePending = 0;
+    this.currentMacroList = [];
     this.activityEntries = [];
     this.undoStack = [];
+    this.lastShortcut = "";
+    this.shortcutPulseId = 0;
 
     this.boundSelectionChange = this.handleSelectionChange.bind(this);
     this.boundFocusIn = this.handleFocusIn.bind(this);
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundScheduleByScroll = this.scheduleRender.bind(this);
     this.boundStorageChange = this.handleStorageChange.bind(this);
+    this.boundRuntimeMessage = this.handleRuntimeMessage.bind(this);
   }
 
   async init() {
     await this.loadSettings();
-    this.settings.panelOpen = true;
     this.panel.setSettings(this.settings);
-    this.panel.setOpen(true);
+    this.panel.setOpen(!!this.settings.panelOpen);
     this.panel.setStatus("idle", "Idle");
     this.panel.setGlobalState("ready", "global · waiting");
     this.panel.setInferenceTime(null, 0);
-    this.panel.setSentenceStats(0, 0);
+    this.setSentenceStats(0, 0);
     this.panel.setHealth(100);
     this.panel.setActivity(this.activityEntries, false);
     this.persistTelemetry({
       status: "idle",
       pendingCount: 0,
       inferenceMs: null,
+    });
+    this.persistPanelSnapshot({
+      status: "idle",
+      issueCount: 0,
     });
 
     this.refreshAdapters();
@@ -134,13 +144,15 @@ class ZetaApp {
     };
     merged.mode = normalizeMode(syncValues[MODE_KEY] || merged.mode);
     merged.scope = normalizeScope(merged.scope);
-    merged.theme = normalizeTheme(merged.theme);
+    merged.theme = "light";
     merged.requestTimeoutMs = clamp(Number(merged.requestTimeoutMs) || DEFAULT_SETTINGS.requestTimeoutMs, 2000, 120000);
     merged.retries = clamp(Number(merged.retries) || 0, 0, 4);
     merged.backendUrl = merged.backendUrl || DEFAULT_SETTINGS.backendUrl;
     merged.notationStrictness = ["relaxed", "balanced", "strict"].includes(merged.notationStrictness)
       ? merged.notationStrictness
       : "balanced";
+    // Always start minimized to keep the editor unobstructed by default.
+    merged.panelOpen = false;
 
     this.settings = merged;
     this.ignoredKeys = new Set(ensureArray(localValues[IGNORED_KEY]).filter(Boolean));
@@ -157,6 +169,9 @@ class ZetaApp {
     if (chrome?.storage?.onChanged) {
       chrome.storage.onChanged.addListener(this.boundStorageChange);
     }
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(this.boundRuntimeMessage);
+    }
   }
 
   detachGlobalListeners() {
@@ -170,6 +185,59 @@ class ZetaApp {
     if (chrome?.storage?.onChanged) {
       chrome.storage.onChanged.removeListener(this.boundStorageChange);
     }
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.removeListener(this.boundRuntimeMessage);
+    }
+  }
+
+  handleRuntimeMessage(message, _sender, sendResponse) {
+    if (!message || message.type !== "zeta-popup-action") {
+      return false;
+    }
+
+    const action = String(message.action || "");
+    console.info("[zeta:content] popup_action_received", {
+      ts: new Date().toISOString(),
+      action,
+    });
+
+    const run = async () => {
+      if (action === "refresh-checker") {
+        this.runAnalysis("popup-macro", true);
+        this.addActivity("Macro: refresh checker.", "info");
+        return;
+      }
+      if (action === "undo-last") {
+        await this.undoLastAction();
+        return;
+      }
+      if (action === "clear-history") {
+        this.clearActivityHistory();
+        this.addActivity("Macro: cleared activity history.", "info");
+        return;
+      }
+      if (action === "next-issue") {
+        this.focusNextIssue();
+        this.addActivity("Macro: focused next issue.", "info");
+        return;
+      }
+      if (action === "prev-issue") {
+        this.focusPrevIssue();
+        this.addActivity("Macro: focused previous issue.", "info");
+        return;
+      }
+      this.addActivity(`Macro not recognized: ${action}`, "error");
+    };
+
+    run()
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: String(error?.message || error || "Unknown macro action error"),
+        });
+      });
+    return true;
   }
 
   handleStorageChange(changes, areaName) {
@@ -194,13 +262,15 @@ class ZetaApp {
       };
       nextSettings.mode = normalizeMode(nextSettings.mode);
       nextSettings.scope = normalizeScope(nextSettings.scope);
-      nextSettings.theme = normalizeTheme(nextSettings.theme);
+      nextSettings.theme = "light";
+      nextSettings.panelOpen = false;
       this.settings = nextSettings;
       changed = true;
     }
 
     if (changed) {
       this.panel.setSettings(this.settings);
+      this.panel.setOpen(!!this.settings.panelOpen);
       this.scheduleAnalysis("storage-change", true);
     }
   }
@@ -356,19 +426,50 @@ class ZetaApp {
   }
 
   handleKeyDown(event) {
-    if (event.altKey && event.shiftKey && event.key.toLowerCase() === "n") {
+    const key = String(event.key || "").toLowerCase();
+    const code = String(event.code || "");
+    const metaHeld = event.metaKey || event.getModifierState?.("Meta");
+    const ctrlHeld = event.ctrlKey || event.getModifierState?.("Control");
+    const altHeld = event.altKey || event.getModifierState?.("Alt");
+    const shiftHeld = event.shiftKey || event.getModifierState?.("Shift");
+    const ts = new Date().toISOString();
+
+    console.info("[zeta:content] keydown", {
+      ts,
+      key: event.key,
+      code,
+      alt: altHeld,
+      shift: shiftHeld,
+      meta: metaHeld,
+      ctrl: ctrlHeld,
+      target: event.target && event.target.constructor ? event.target.constructor.name : "unknown",
+    });
+
+    if (altHeld && shiftHeld && (key === "n" || code === "KeyN")) {
       event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+N",
+        action: "next-issue",
+      });
+      this.markShortcutTriggered("Alt+Shift+N");
       this.focusNextIssue();
       return;
     }
 
-    if (event.altKey && event.shiftKey && event.key.toLowerCase() === "p") {
+    if (altHeld && shiftHeld && (key === "p" || code === "KeyP")) {
       event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+P",
+        action: "prev-issue",
+      });
+      this.markShortcutTriggered("Alt+Shift+P");
       this.focusPrevIssue();
       return;
     }
 
-    if (event.altKey && event.shiftKey && event.key.toLowerCase() === "a") {
+    if (altHeld && shiftHeld && (key === "a" || code === "KeyA")) {
       event.preventDefault();
       if (this.focusedIssueIndex >= 0) {
         this.applyIssueByIndex(this.focusedIssueIndex);
@@ -376,16 +477,61 @@ class ZetaApp {
       return;
     }
 
-    if (event.altKey && event.shiftKey && event.key.toLowerCase() === "u") {
+    if (altHeld && shiftHeld && (key === "u" || code === "KeyU")) {
       event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+U",
+        action: "undo-last",
+      });
+      this.markShortcutTriggered("Alt+Shift+U");
       this.undoLastAction();
       return;
     }
 
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (altHeld && shiftHeld && (key === "r" || code === "KeyR")) {
       event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+R",
+        action: "refresh-checker",
+      });
+      this.markShortcutTriggered("Alt+Shift+R");
+      this.runAnalysis("shortcut-refresh", true);
+      return;
+    }
+
+    if (altHeld && shiftHeld && (key === "h" || code === "KeyH")) {
+      event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Alt+Shift+H",
+        action: "clear-history",
+      });
+      this.markShortcutTriggered("Alt+Shift+H");
+      this.clearActivityHistory();
+      return;
+    }
+
+    if ((metaHeld || ctrlHeld) && (key === "enter" || code === "Enter")) {
+      event.preventDefault();
+      console.info("[zeta:content] shortcut_match", {
+        ts,
+        shortcut: "Ctrl/Cmd+Enter",
+        action: "refresh-checker",
+      });
+      this.markShortcutTriggered("Ctrl/Cmd+Enter");
       this.runAnalysis("shortcut", true);
     }
+  }
+
+  markShortcutTriggered(shortcut) {
+    this.lastShortcut = String(shortcut || "");
+    this.shortcutPulseId = Date.now();
+    this.persistPanelSnapshot({
+      lastShortcut: this.lastShortcut,
+      shortcutPulseId: this.shortcutPulseId,
+    });
   }
 
   async updateSettings(nextPartial, rerun) {
@@ -395,7 +541,8 @@ class ZetaApp {
     };
     next.mode = normalizeMode(next.mode);
     next.scope = normalizeScope(next.scope);
-    next.theme = normalizeTheme(next.theme);
+    next.theme = "light";
+    next.panelOpen = false;
 
     await storageSyncSet({
       [SETTINGS_KEY]: next,
@@ -408,13 +555,6 @@ class ZetaApp {
     if (rerun) {
       this.scheduleAnalysis("settings", true);
     }
-  }
-
-  async toggleTheme() {
-    const nextTheme = this.settings.theme === "dark" ? "light" : "dark";
-    await this.updateSettings({ theme: nextTheme }, false);
-    this.panel.setStatus("idle", `Theme switched to ${nextTheme}.`);
-    this.panel.setGlobalState("ready", "global · theme updated");
   }
 
   async saveSettingsFromPanel(nextValues) {
@@ -435,10 +575,92 @@ class ZetaApp {
     this.scheduleAnalysis("settings-save", true);
   }
 
-  togglePanel() {
-    // Floating launcher is removed; keep panel visible.
-    this.settings.panelOpen = true;
-    this.panel.setOpen(true);
+  async togglePanel(forceOpen) {
+    const nextOpen = !!forceOpen;
+    if (nextOpen) {
+      this.panel.setOpen(false);
+      return;
+    }
+    await this.updateSettings({ panelOpen: false }, false);
+    this.panel.setOpen(false);
+  }
+
+  setSentenceStats(cachedCount, pendingCount) {
+    this.currentSentenceCached = Math.max(0, Number(cachedCount) || 0);
+    this.currentSentencePending = Math.max(0, Number(pendingCount) || 0);
+    this.panel.setSentenceStats(this.currentSentenceCached, this.currentSentencePending);
+    this.persistPanelSnapshot();
+  }
+
+  extractMacroNames(text) {
+    const source = String(text || "");
+    if (!source) {
+      return [];
+    }
+
+    const names = new Set();
+    const patterns = [
+      /\\(?:re)?newcommand\s*\{\\([A-Za-z@]+)\}/g,
+      /\\providecommand\s*\{\\([A-Za-z@]+)\}/g,
+      /\\def\s*\\([A-Za-z@]+)/g,
+      /\\DeclareMathOperator\s*\{\\([A-Za-z@]+)\}/g,
+    ];
+
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(source)) !== null) {
+        const name = String(match[1] || "").trim();
+        if (name) {
+          names.add(`\\${name}`);
+        }
+      }
+    }
+
+    return Array.from(names).sort().slice(0, 80);
+  }
+
+  persistPanelSnapshot(partial = {}) {
+    const next = {
+      healthScore: Math.round(this.currentHealthScore),
+      sentenceCached: this.currentSentenceCached,
+      sentencePending: this.currentSentencePending,
+      issueCount: ensureArray(this.lastRun?.issues).length,
+      inferenceMs: Number.isFinite(this.lastInferenceMs) ? Math.round(this.lastInferenceMs) : null,
+      status: this.lastTelemetry?.status || "idle",
+      queuePending: Number(this.lastTelemetry?.pendingCount) || 0,
+      activity: this.activityEntries.slice(0, 24),
+      macros: this.currentMacroList.slice(0, 80),
+      lastShortcut: this.lastShortcut,
+      shortcutPulseId: this.shortcutPulseId,
+      updatedAt: Date.now(),
+      ...partial,
+    };
+
+    const signature = shortHash(
+      JSON.stringify({
+        healthScore: next.healthScore,
+        sentenceCached: next.sentenceCached,
+        sentencePending: next.sentencePending,
+        issueCount: next.issueCount,
+        inferenceMs: next.inferenceMs,
+        status: next.status,
+        queuePending: next.queuePending,
+        activity: next.activity.map((entry) => `${entry.id}|${entry.level}|${entry.message}`),
+        macros: next.macros,
+        lastShortcut: next.lastShortcut,
+        shortcutPulseId: next.shortcutPulseId,
+      })
+    );
+
+    if (signature === this.lastPanelSnapshotSignature) {
+      return;
+    }
+
+    this.lastPanelSnapshotSignature = signature;
+    storageLocalSet({
+      [PANEL_SNAPSHOT_KEY]: next,
+    });
   }
 
   persistTelemetry(partial = {}) {
@@ -466,6 +688,11 @@ class ZetaApp {
     this.lastTelemetry = next;
     storageLocalSet({
       [TELEMETRY_KEY]: next,
+    });
+    this.persistPanelSnapshot({
+      inferenceMs: next.inferenceMs,
+      status: next.status,
+      queuePending: next.pendingCount,
     });
   }
 
@@ -508,6 +735,7 @@ class ZetaApp {
 
     const effectiveScope = this.resolveScopeForReason(reason);
     const snapshot = adapter.getScopeSnapshot(effectiveScope);
+    this.currentMacroList = this.extractMacroNames(snapshot.context || snapshot.text || "");
     const scopeText = String(snapshot.text || "");
     logTrace("analysis_begin", {
       reason,
@@ -528,18 +756,23 @@ class ZetaApp {
       this.panel.setHealth(100);
       this.panel.setGlobalState("ready", "global · waiting");
       this.panel.setInferenceTime(this.lastInferenceMs, 0);
-      this.panel.setSentenceStats(0, 0);
+      this.setSentenceStats(0, 0);
       this.persistTelemetry({
         status: "idle",
         pendingCount: 0,
+      });
+      this.persistPanelSnapshot({
+        healthScore: 100,
+        issueCount: 0,
       });
       this.overlay.clear();
       this.popover.close();
       return;
     }
 
-    const localIssues = this.detectLocalMathTypos(scopeText);
-    const sentencePlan = this.buildSentencePlan(snapshot, force);
+    const proseSpans = this.extractProseSpans(scopeText);
+    const localIssues = this.detectLocalMathTypos(scopeText, proseSpans);
+    const sentencePlan = this.buildSentencePlan(snapshot, force, proseSpans);
     logTrace("analysis_plan", {
       cachedSentences: sentencePlan.cachedCount,
       pendingSentences: sentencePlan.pending.length,
@@ -585,7 +818,7 @@ class ZetaApp {
       this.renderState(this.lastRun);
     };
 
-    this.panel.setSentenceStats(sentencePlan.cachedCount, sentencePlan.pending.length);
+    this.setSentenceStats(sentencePlan.cachedCount, sentencePlan.pending.length);
     this.panel.setInferenceTime(this.lastInferenceMs, sentencePlan.pending.length);
     this.persistTelemetry({
       status: sentencePlan.pending.length > 0 ? "analyzing" : "ready",
@@ -641,7 +874,7 @@ class ZetaApp {
       }
 
       const pendingLeft = sentencePlan.pending.length - i - 1;
-      this.panel.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
+      this.setSentenceStats(sentencePlan.cachedCount, pendingLeft);
       this.panel.setInferenceTime(this.lastInferenceMs, pendingLeft);
       this.persistTelemetry({
         status: pendingLeft > 0 ? "analyzing" : "ready",
@@ -675,8 +908,8 @@ class ZetaApp {
     this.syncPopoverWithCaret();
   }
 
-  buildSentencePlan(snapshot, force) {
-    const segments = this.splitLatexAwareSentences(snapshot.text);
+  buildSentencePlan(snapshot, force, proseSpans) {
+    const segments = this.splitLatexAwareSentences(snapshot.text, proseSpans);
     const now = Date.now();
     const activeKeys = [];
     const activeSignatures = [];
@@ -756,15 +989,172 @@ class ZetaApp {
     };
   }
 
-  splitLatexAwareSentences(text) {
-    const source = String(text || "");
-    const segments = [];
-    if (!source.trim()) {
-      return segments;
+  stripLatexComment(line) {
+    const input = String(line || "");
+    for (let i = 0; i < input.length; i += 1) {
+      if (input[i] !== "%") {
+        continue;
+      }
+
+      let backslashes = 0;
+      for (let j = i - 1; j >= 0 && input[j] === "\\"; j -= 1) {
+        backslashes += 1;
+      }
+
+      if (backslashes % 2 === 0) {
+        return input.slice(0, i);
+      }
+    }
+    return input;
+  }
+
+  isAnalyzableLatexLine(rawLine) {
+    const line = this.stripLatexComment(rawLine).trim();
+    if (!line) {
+      return false;
     }
 
-    let rawStart = 0;
-    let i = 0;
+    const commandMatch = line.match(/^\\([a-zA-Z@]+)\*?/);
+    if (commandMatch) {
+      const command = String(commandMatch[1] || "").toLowerCase();
+      const structuralCommands = new Set([
+        "documentclass",
+        "usepackage",
+        "title",
+        "author",
+        "date",
+        "maketitle",
+        "tableofcontents",
+        "begin",
+        "end",
+        "chapter",
+        "part",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+        "newpage",
+        "pagebreak",
+        "clearpage",
+        "vspace",
+        "hspace",
+        "smallskip",
+        "medskip",
+        "bigskip",
+        "bibliography",
+        "bibliographystyle",
+        "label",
+        "ref",
+        "eqref",
+        "cite",
+      ]);
+      if (structuralCommands.has(command)) {
+        return false;
+      }
+    }
+
+    const probe = line
+      .replace(/\\[a-zA-Z@]+\*?(?:\s*\[[^\]]*\])?(?:\s*\{[^{}]*\})?/g, " ")
+      .replace(/\$[^$]*\$/g, " ")
+      .replace(/\\\(|\\\)|\\\[|\\\]/g, " ")
+      .replace(/[{}[\]^_~&]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const wordCount = (probe.match(/[A-Za-z]{2,}/g) || []).length;
+    if (wordCount >= 2) {
+      return true;
+    }
+    if (wordCount === 1 && /[.!?]/.test(line)) {
+      return true;
+    }
+    return false;
+  }
+
+  extractProseSpans(sourceText) {
+    const source = String(sourceText || "");
+    const spans = [];
+    if (!source.trim()) {
+      return spans;
+    }
+
+    const pushSpan = (rawStart, rawEnd) => {
+      let start = clamp(rawStart, 0, source.length);
+      let end = clamp(rawEnd, 0, source.length);
+      while (start < end && /\s/.test(source[start])) {
+        start += 1;
+      }
+      while (end > start && /\s/.test(source[end - 1])) {
+        end -= 1;
+      }
+      if (end > start) {
+        spans.push({
+          start,
+          end,
+          text: source.slice(start, end),
+        });
+      }
+    };
+
+    let lineStart = 0;
+    let spanStart = null;
+    let spanEnd = null;
+
+    while (lineStart <= source.length) {
+      const newlineIndex = source.indexOf("\n", lineStart);
+      const lineEnd = newlineIndex === -1 ? source.length : newlineIndex;
+      const nextLineStart = newlineIndex === -1 ? source.length + 1 : newlineIndex + 1;
+      const lineText = source.slice(lineStart, lineEnd);
+      const keepLine = this.isAnalyzableLatexLine(lineText);
+
+      if (keepLine) {
+        if (spanStart === null) {
+          spanStart = lineStart;
+        }
+        spanEnd = newlineIndex === -1 ? lineEnd : newlineIndex + 1;
+      } else if (spanStart !== null && spanEnd !== null) {
+        pushSpan(spanStart, spanEnd);
+        spanStart = null;
+        spanEnd = null;
+      }
+
+      if (newlineIndex === -1) {
+        break;
+      }
+      lineStart = nextLineStart;
+    }
+
+    if (spanStart !== null && spanEnd !== null) {
+      pushSpan(spanStart, spanEnd);
+    }
+
+    return spans;
+  }
+
+  splitLatexAwareSentences(text, proseSpans) {
+    const source = String(text || "");
+    if (!source.trim()) {
+      return [];
+    }
+
+    const spans = Array.isArray(proseSpans) ? proseSpans : this.extractProseSpans(source);
+    const segments = [];
+    for (const span of spans) {
+      if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end) || span.end <= span.start) {
+        continue;
+      }
+      const sentenceSegments = this.splitSpanIntoSentences(source, span.start, span.end);
+      for (const segment of sentenceSegments) {
+        segments.push(segment);
+      }
+    }
+    return segments;
+  }
+
+  splitSpanIntoSentences(source, spanStart, spanEnd) {
+    const segments = [];
+    let rawStart = spanStart;
+    let i = spanStart;
     let inInlineDollar = false;
     let inDoubleDollar = false;
     let inParenMath = false;
@@ -773,8 +1163,8 @@ class ZetaApp {
     const mathEnvPattern = /^(equation|align|gather|multline|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|split|math|displaymath|eqnarray|array)\*?$/;
 
     const pushSegment = (rawEnd) => {
-      let start = clamp(rawStart, 0, source.length);
-      let end = clamp(rawEnd, 0, source.length);
+      let start = clamp(rawStart, spanStart, spanEnd);
+      let end = clamp(rawEnd, spanStart, spanEnd);
 
       while (start < end && /\s/.test(source[start])) {
         start += 1;
@@ -790,10 +1180,10 @@ class ZetaApp {
           text: source.slice(start, end),
         });
       }
-      rawStart = rawEnd;
+      rawStart = clamp(rawEnd, spanStart, spanEnd);
     };
 
-    while (i < source.length) {
+    while (i < spanEnd) {
       if (source.startsWith("\\begin{", i)) {
         const close = source.indexOf("}", i + 7);
         const envName = close === -1 ? "" : source.slice(i + 7, close).trim();
@@ -870,18 +1260,23 @@ class ZetaApp {
       i += 1;
     }
 
-    pushSegment(source.length);
-    if (segments.length === 0 && source.trim()) {
-      const first = source.search(/\S/);
-      let last = source.length;
-      while (last > 0 && /\s/.test(source[last - 1])) {
-        last -= 1;
+    pushSegment(spanEnd);
+    if (segments.length === 0 && source.slice(spanStart, spanEnd).trim()) {
+      let start = clamp(spanStart, 0, source.length);
+      let end = clamp(spanEnd, 0, source.length);
+      while (start < end && /\s/.test(source[start])) {
+        start += 1;
       }
-      segments.push({
-        start: first === -1 ? 0 : first,
-        end: last,
-        text: source.slice(first === -1 ? 0 : first, last),
-      });
+      while (end > start && /\s/.test(source[end - 1])) {
+        end -= 1;
+      }
+      if (end > start) {
+        segments.push({
+          start,
+          end,
+          text: source.slice(start, end),
+        });
+      }
     }
     return segments;
   }
@@ -1144,12 +1539,16 @@ class ZetaApp {
     });
   }
 
-  detectLocalMathTypos(scopeText) {
+  detectLocalMathTypos(scopeText, proseSpans) {
+    const source = String(scopeText || "");
+    const spans = Array.isArray(proseSpans) ? proseSpans : this.extractProseSpans(source);
     const issues = [];
 
     const pushIssue = (start, end, message, replacement, category = "math-typo", severity = "warning") => {
-      const targetText = scopeText.slice(start, end);
-      const issue = {
+      const safeStart = clamp(Number(start) || 0, 0, source.length);
+      const safeEnd = clamp(Number(end) || safeStart, safeStart, source.length);
+      const targetText = source.slice(safeStart, safeEnd);
+      issues.push({
         id: `local-${issues.length + 1}`,
         key: this.buildIssueKey({
           category,
@@ -1160,13 +1559,12 @@ class ZetaApp {
         category,
         severity,
         message,
-        start,
-        end,
+        start: safeStart,
+        end: safeEnd,
         targetText,
         replacement: replacement || null,
         source: "local",
-      };
-      issues.push(issue);
+      });
     };
 
     const patternRules = [
@@ -1178,62 +1576,77 @@ class ZetaApp {
       { regex: /\^\^/g, replacement: "^", message: "Duplicate exponent marker '^' detected." },
     ];
 
-    for (const rule of patternRules) {
-      rule.regex.lastIndex = 0;
-      let match;
-      while ((match = rule.regex.exec(scopeText)) !== null) {
-        pushIssue(match.index, match.index + match[0].length, rule.message, rule.replacement);
-      }
-    }
-
-    const stack = [];
-    const openers = {
-      "(": ")",
-      "[": "]",
-      "{": "}",
-    };
-    const closers = {
-      ")": "(",
-      "]": "[",
-      "}": "{",
-    };
-
-    for (let i = 0; i < scopeText.length; i += 1) {
-      const ch = scopeText[i];
-      if (openers[ch]) {
-        stack.push({ ch, index: i });
-      } else if (closers[ch]) {
-        const top = stack[stack.length - 1];
-        if (!top || top.ch !== closers[ch]) {
-          pushIssue(i, i + 1, `Unbalanced '${ch}' bracket.`, null, "math-typo", "error");
-        } else {
-          stack.pop();
+    const scanChunk = (chunkText, baseOffset) => {
+      for (const rule of patternRules) {
+        rule.regex.lastIndex = 0;
+        let match;
+        while ((match = rule.regex.exec(chunkText)) !== null) {
+          const start = baseOffset + match.index;
+          const end = start + match[0].length;
+          pushIssue(start, end, rule.message, rule.replacement);
         }
       }
-    }
 
-    for (const unclosed of stack) {
-      pushIssue(
-        unclosed.index,
-        unclosed.index + 1,
-        `Unclosed '${unclosed.ch}' bracket.`,
-        null,
-        "math-typo",
-        "error"
-      );
-    }
+      const stack = [];
+      const openers = {
+        "(": ")",
+        "[": "]",
+        "{": "}",
+      };
+      const closers = {
+        ")": "(",
+        "]": "[",
+        "}": "{",
+      };
 
-    const dollarCount = (scopeText.match(/\$/g) || []).length;
-    if (dollarCount % 2 !== 0) {
-      const idx = scopeText.lastIndexOf("$");
-      pushIssue(
-        idx === -1 ? 0 : idx,
-        idx === -1 ? 1 : idx + 1,
-        "Unpaired '$' math delimiter.",
-        null,
-        "math-typo",
-        "error"
-      );
+      for (let i = 0; i < chunkText.length; i += 1) {
+        const ch = chunkText[i];
+        if (openers[ch]) {
+          stack.push({ ch, index: i });
+        } else if (closers[ch]) {
+          const top = stack[stack.length - 1];
+          if (!top || top.ch !== closers[ch]) {
+            pushIssue(baseOffset + i, baseOffset + i + 1, `Unbalanced '${ch}' bracket.`, null, "math-typo", "error");
+          } else {
+            stack.pop();
+          }
+        }
+      }
+
+      for (const unclosed of stack) {
+        pushIssue(
+          baseOffset + unclosed.index,
+          baseOffset + unclosed.index + 1,
+          `Unclosed '${unclosed.ch}' bracket.`,
+          null,
+          "math-typo",
+          "error"
+        );
+      }
+
+      const dollarCount = (chunkText.match(/\$/g) || []).length;
+      if (dollarCount % 2 !== 0) {
+        const idx = chunkText.lastIndexOf("$");
+        pushIssue(
+          idx === -1 ? baseOffset : baseOffset + idx,
+          idx === -1 ? baseOffset + 1 : baseOffset + idx + 1,
+          "Unpaired '$' math delimiter.",
+          null,
+          "math-typo",
+          "error"
+        );
+      }
+    };
+
+    for (const span of spans) {
+      if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end) || span.end <= span.start) {
+        continue;
+      }
+      const chunkText = source.slice(span.start, span.end);
+      if (!chunkText.trim()) {
+        continue;
+      }
+      scanChunk(chunkText, span.start);
     }
 
     return issues;
@@ -1435,6 +1848,7 @@ class ZetaApp {
     }
 
     this.panel.setActivity(this.activityEntries, this.undoStack.length > 0);
+    this.persistPanelSnapshot();
   }
 
   clearActivityHistory() {
@@ -1442,6 +1856,7 @@ class ZetaApp {
     this.undoStack = [];
     this.panel.setActivity(this.activityEntries, false);
     this.panel.setStatus("idle", "Activity history cleared.");
+    this.persistPanelSnapshot();
   }
 
   async undoLastAction() {
@@ -1449,6 +1864,7 @@ class ZetaApp {
     if (!action) {
       this.panel.setActivity(this.activityEntries, false);
       this.panel.setStatus("idle", "Nothing to undo.");
+      this.persistPanelSnapshot();
       return;
     }
 
@@ -1497,8 +1913,16 @@ class ZetaApp {
     const issues = ensureArray(state.issues);
 
     const score = this.computeHealthScore(issues);
+    this.currentHealthScore = score;
+    this.currentMacroList = this.extractMacroNames(
+      state?.snapshot?.context || state?.snapshot?.text || ""
+    );
     this.panel.setHealth(score);
     this.panel.setIssues(issues, this.focusedIssueIndex);
+    this.persistPanelSnapshot({
+      healthScore: score,
+      issueCount: issues.length,
+    });
 
     if (this.activeAdapter && state.snapshot) {
       this.overlay.render(this.activeAdapter, issues, state.snapshot);

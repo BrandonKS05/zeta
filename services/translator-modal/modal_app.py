@@ -19,7 +19,7 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-14-mathlib-fastcache-v2"
+APP_VERSION = "2026-02-14-mathlib-fastcache-v3"
 MODEL_ID = "FrenzyMath/Herald_translator"
 MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
 
@@ -51,6 +51,9 @@ MODEL_OUTPUT_CACHE_TTL_SECONDS = int(os.environ.get("MODEL_OUTPUT_CACHE_TTL_SECO
 MODEL_OUTPUT_CACHE_MAX_ENTRIES = int(os.environ.get("MODEL_OUTPUT_CACHE_MAX_ENTRIES", "512"))
 LEAN_CHECK_CACHE_TTL_SECONDS = int(os.environ.get("LEAN_CHECK_CACHE_TTL_SECONDS", "1200"))
 LEAN_CHECK_CACHE_MAX_ENTRIES = int(os.environ.get("LEAN_CHECK_CACHE_MAX_ENTRIES", "1024"))
+INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "transformers").strip().lower()
+if INFERENCE_BACKEND not in {"transformers", "vllm"}:
+    INFERENCE_BACKEND = "transformers"
 
 SYSTEM_PROMPT = """You convert informal math to Lean 4.
 Return JSON only with keys:
@@ -127,6 +130,7 @@ inference_image = (
         "accelerate>=1.0.0",
         "safetensors>=0.4.5",
         "huggingface_hub[hf_transfer]>=0.30.0",
+        "vllm>=0.5.5",
     )
     .run_commands(
         "curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain stable",
@@ -155,6 +159,34 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+VLLM_GPU_MEMORY_UTILIZATION = _env_float("VLLM_GPU_MEMORY_UTILIZATION", 0.9)
+VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 4096)
+VLLM_MAX_NUM_SEQS = _env_int("VLLM_MAX_NUM_SEQS", 8)
+VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", False)
 
 
 def _resolve_secret(secret_name_env: str, secret_value_env: str) -> modal.Secret | None:
@@ -216,8 +248,10 @@ _lean_check_cache: OrderedDict[str, tuple[float, tuple[bool, list[dict[str, Any]
 
 @dataclass
 class Runtime:
+    backend: Literal["transformers", "vllm"]
     tokenizer: Any
-    model: Any
+    model: Any | None = None
+    llm: Any | None = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -456,6 +490,19 @@ def _ensure_model_downloaded() -> Path:
     return MODEL_LOCAL_DIR
 
 
+def _build_generation_prompt(tokenizer: Any, request: AnalyzeRequest, normalized_text: str) -> str:
+    if getattr(tokenizer, "chat_template", None):
+        return tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _user_prompt(request, normalized_text)},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    return f"{SYSTEM_PROMPT}\n\n{_user_prompt(request, normalized_text)}\n\nJSON:"
+
+
 def _load_runtime() -> Runtime:
     global _runtime
     if _runtime is not None:
@@ -465,12 +512,7 @@ def _load_runtime() -> Runtime:
         if _runtime is not None:
             return _runtime
 
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        if torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+        from transformers import AutoTokenizer
 
         model_dir = _ensure_model_downloaded()
         tokenizer = AutoTokenizer.from_pretrained(
@@ -478,6 +520,43 @@ def _load_runtime() -> Runtime:
             token=os.environ.get("HF_TOKEN"),
             local_files_only=True,
         )
+        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        if INFERENCE_BACKEND == "vllm":
+            try:
+                from vllm import LLM
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "INFERENCE_BACKEND=vllm but vLLM is unavailable in this image."
+                ) from exc
+
+            llm_kwargs: dict[str, Any] = {
+                "model": model_dir.as_posix(),
+                "tokenizer": model_dir.as_posix(),
+                "tensor_parallel_size": 1,
+                "dtype": "float16",
+                "trust_remote_code": True,
+                "gpu_memory_utilization": max(0.5, min(0.98, VLLM_GPU_MEMORY_UTILIZATION)),
+            }
+            if VLLM_MAX_MODEL_LEN > 0:
+                llm_kwargs["max_model_len"] = VLLM_MAX_MODEL_LEN
+            if VLLM_MAX_NUM_SEQS > 0:
+                llm_kwargs["max_num_seqs"] = VLLM_MAX_NUM_SEQS
+            if VLLM_ENFORCE_EAGER:
+                llm_kwargs["enforce_eager"] = True
+
+            llm = LLM(**llm_kwargs)
+            _runtime = Runtime(backend="vllm", tokenizer=tokenizer, llm=llm)
+            return _runtime
+
+        import torch
+        from transformers import AutoModelForCausalLM
+
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
         model = AutoModelForCausalLM.from_pretrained(
             model_dir.as_posix(),
             token=os.environ.get("HF_TOKEN"),
@@ -488,8 +567,6 @@ def _load_runtime() -> Runtime:
         )
         model.eval()
 
-        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-            tokenizer.pad_token = tokenizer.eos_token
         if model.generation_config is not None:
             model.generation_config.use_cache = True
             if tokenizer.eos_token_id is not None:
@@ -497,33 +574,17 @@ def _load_runtime() -> Runtime:
             if tokenizer.pad_token_id is not None:
                 model.generation_config.pad_token_id = tokenizer.pad_token_id
 
-        _runtime = Runtime(tokenizer=tokenizer, model=model)
+        _runtime = Runtime(backend="transformers", tokenizer=tokenizer, model=model)
         return _runtime
 
 
-def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str:
+def _generate_with_transformers(runtime: Runtime, prompt: str, request: AnalyzeRequest) -> str:
     import torch
 
-    model_key = _model_output_cache_key(request, normalized_text)
-    cached_output = _cache_get(_model_output_cache, model_key, MODEL_OUTPUT_CACHE_TTL_SECONDS)
-    if isinstance(cached_output, str):
-        return cached_output
-
-    runtime = _load_runtime()
     tokenizer = runtime.tokenizer
     model = runtime.model
-
-    if getattr(tokenizer, "chat_template", None):
-        prompt = tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": _user_prompt(request, normalized_text)},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-    else:
-        prompt = f"{SYSTEM_PROMPT}\n\n{_user_prompt(request, normalized_text)}\n\nJSON:"
+    if model is None:
+        raise RuntimeError("Transformers backend selected but model is unavailable.")
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     do_sample = request.temperature > 0
@@ -545,7 +606,55 @@ def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str
 
     input_tokens = inputs["input_ids"].shape[1]
     generated = outputs[0][input_tokens:]
-    text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def _generate_with_vllm(runtime: Runtime, prompt: str, request: AnalyzeRequest) -> str:
+    llm = runtime.llm
+    if llm is None:
+        raise RuntimeError("vLLM backend selected but LLM runtime is unavailable.")
+
+    try:
+        from vllm import SamplingParams
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("INFERENCE_BACKEND=vllm but vLLM is unavailable in this image.") from exc
+
+    do_sample = request.temperature > 0
+    sampling_kwargs: dict[str, Any] = {
+        "max_tokens": request.max_new_tokens,
+        "temperature": request.temperature if do_sample else 0.0,
+        "top_p": 0.95 if do_sample else 1.0,
+    }
+    eos_token_id = getattr(runtime.tokenizer, "eos_token_id", None)
+    if isinstance(eos_token_id, int):
+        sampling_kwargs["stop_token_ids"] = [eos_token_id]
+    sampling_params = SamplingParams(**sampling_kwargs)
+
+    outputs = llm.generate([prompt], sampling_params=sampling_params, use_tqdm=False)
+    if not outputs:
+        return ""
+    first_output = outputs[0]
+    candidates = getattr(first_output, "outputs", None)
+    if not candidates:
+        return ""
+    text = getattr(candidates[0], "text", "")
+    return str(text).strip()
+
+
+def _generate_model_output(request: AnalyzeRequest, normalized_text: str) -> str:
+    model_key = _model_output_cache_key(request, normalized_text)
+    cached_output = _cache_get(_model_output_cache, model_key, MODEL_OUTPUT_CACHE_TTL_SECONDS)
+    if isinstance(cached_output, str):
+        return cached_output
+
+    runtime = _load_runtime()
+    prompt = _build_generation_prompt(runtime.tokenizer, request, normalized_text)
+
+    if runtime.backend == "vllm":
+        text = _generate_with_vllm(runtime, prompt, request)
+    else:
+        text = _generate_with_transformers(runtime, prompt, request)
+
     _cache_put(_model_output_cache, model_key, text, MODEL_OUTPUT_CACHE_MAX_ENTRIES)
     return text
 
@@ -1226,7 +1335,13 @@ def api():
 
     @app_api.get("/healthz")
     def healthz() -> dict[str, Any]:
-        return {"ok": True, "app": APP_NAME, "version": APP_VERSION, "model": MODEL_ID}
+        return {
+            "ok": True,
+            "app": APP_NAME,
+            "version": APP_VERSION,
+            "model": MODEL_ID,
+            "inference_backend": INFERENCE_BACKEND,
+        }
 
     @app_api.post("/v1/analyze")
     def analyze_endpoint(
@@ -1295,6 +1410,7 @@ def api():
         return {
             "status": "ready",
             "model": MODEL_ID,
+            "inference_backend": INFERENCE_BACKEND,
             "probe_status": result.get("status") if isinstance(result, dict) else "runtime_error",
             "probe_is_valid_lean": bool(result.get("is_valid_lean")) if isinstance(result, dict) else False,
             "mathlib_warmed": bool(

@@ -2,7 +2,7 @@
   "use strict";
 
   const zeta = window.__zetaContent || (window.__zetaContent = {});
-  const { MAX_HIGHLIGHT_RECTS, ensureArray, normalizeSeverity, normalizeTheme, clamp } = zeta;
+  const { MAX_HIGHLIGHT_RECTS, ensureArray, normalizeSeverity, clamp } = zeta;
 
 class ZetaOverlay {
   constructor() {
@@ -252,7 +252,7 @@ class ZetaPanel {
       <header class="zeta-header">
         <div class="zeta-header-top">
           <div class="zeta-brand">
-            <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/icon-128.png")}" alt="zeta" />
+            <img class="zeta-brand-logo" src="${chrome.runtime.getURL("assets/zeta-black-white-2048.png")}" alt="zeta" />
             <div>
               <h2>zeta</h2>
               <p>Grammarly for Math</p>
@@ -263,7 +263,7 @@ class ZetaPanel {
               <span id="zeta-global-dot" class="zeta-global-dot"></span>
               <span id="zeta-global-text">global · idle</span>
             </div>
-            <button type="button" id="zeta-theme-btn" class="zeta-icon-btn">Light</button>
+            <button type="button" id="zeta-collapse-btn" class="zeta-icon-btn">Hide</button>
           </div>
         </div>
         <div class="zeta-status-row">
@@ -363,17 +363,32 @@ class ZetaPanel {
             <button type="button" id="zeta-save-settings" class="zeta-btn zeta-btn--primary">Save Settings</button>
           </div>
           <ul class="zeta-shortcuts">
-            <li><code>Alt+Shift+N</code> next issue</li>
-            <li><code>Alt+Shift+P</code> previous issue</li>
-            <li><code>Ctrl/Cmd+Enter</code> run check now</li>
-            <li><code>Alt+Shift+A</code> apply focused replacement</li>
-            <li><code>Alt+Shift+U</code> undo last action</li>
+            <li><code>⌥⇧N</code> ➡️ next issue</li>
+            <li><code>⌥⇧P</code> ⬅️ previous issue</li>
+            <li><code>⌘↩</code> ⚡ run check now</li>
+            <li><code>⌥⇧R</code> 🔄 refresh checker</li>
+            <li><code>⌥⇧H</code> 🧹 clear activity history</li>
+            <li><code>⌥⇧A</code> ✅ apply focused replacement</li>
+            <li><code>⌥⇧U</code> ↩️ undo last action</li>
           </ul>
         </section>
       </div>
     `;
 
     document.body.append(this.root);
+    this.fab = document.createElement("button");
+    this.fab.type = "button";
+    this.fab.className = "zeta-fab";
+    this.fab.setAttribute("aria-label", "Open zeta panel");
+    this.fab.innerHTML = `
+      <img src="${chrome.runtime.getURL("assets/zeta-black-white-2048.png")}" alt="" />
+    `;
+    document.body.append(this.fab);
+    this.comingSoon = document.createElement("div");
+    this.comingSoon.className = "zeta-coming-soon";
+    this.comingSoon.textContent = "Coming soon";
+    document.body.append(this.comingSoon);
+    this.comingSoonTimer = null;
 
     this.refs = {
       statusDot: this.root.querySelector("#zeta-status-dot"),
@@ -400,7 +415,7 @@ class ZetaPanel {
       undoBtn: this.root.querySelector("#zeta-undo-btn"),
       clearHistoryBtn: this.root.querySelector("#zeta-clear-history-btn"),
       settingsBtn: this.root.querySelector("#zeta-settings-btn"),
-      themeBtn: this.root.querySelector("#zeta-theme-btn"),
+      collapseBtn: this.root.querySelector("#zeta-collapse-btn"),
       settingsCard: this.root.querySelector("#zeta-settings-card"),
       backendUrl: this.root.querySelector("#zeta-backend-url"),
       timeout: this.root.querySelector("#zeta-timeout"),
@@ -412,10 +427,12 @@ class ZetaPanel {
 
     this.isSettingsOpen = false;
     this.bindEvents();
+    this.setOpen(false);
   }
 
   bindEvents() {
-    this.refs.themeBtn.addEventListener("click", () => this.handlers.onToggleTheme());
+    this.refs.collapseBtn.addEventListener("click", () => this.handlers.onTogglePanel?.(false));
+    this.fab.addEventListener("click", () => this.showComingSoon());
     this.refs.runBtn.addEventListener("click", () => this.handlers.onRunNow());
     this.refs.regenerateBtn.addEventListener("click", () => this.handlers.onRegenerate());
     this.refs.undoBtn.addEventListener("click", () => this.handlers.onUndoLast());
@@ -480,13 +497,25 @@ class ZetaPanel {
 
   setOpen(open) {
     this.root.classList.toggle("is-collapsed", !open);
+    this.fab.classList.toggle("is-hidden", !!open);
+    this.fab.setAttribute("aria-expanded", open ? "true" : "false");
   }
 
-  setTheme(theme) {
-    const next = normalizeTheme(theme);
-    this.root.setAttribute("data-theme", next);
-    document.documentElement.setAttribute("data-zeta-theme", next);
-    this.refs.themeBtn.textContent = next === "dark" ? "Light" : "Dark";
+  setTheme(_theme) {
+    this.root.setAttribute("data-theme", "light");
+    document.documentElement.setAttribute("data-zeta-theme", "light");
+  }
+
+  showComingSoon() {
+    if (this.comingSoonTimer) {
+      clearTimeout(this.comingSoonTimer);
+      this.comingSoonTimer = null;
+    }
+    this.comingSoon.classList.add("is-visible");
+    this.comingSoonTimer = window.setTimeout(() => {
+      this.comingSoon.classList.remove("is-visible");
+      this.comingSoonTimer = null;
+    }, 1600);
   }
 
   setGlobalState(state, text) {
@@ -626,6 +655,11 @@ class ZetaPanel {
   }
 
   remove() {
+    if (this.comingSoonTimer) {
+      clearTimeout(this.comingSoonTimer);
+    }
+    this.comingSoon.remove();
+    this.fab.remove();
     this.root.remove();
   }
 }
