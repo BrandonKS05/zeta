@@ -238,7 +238,9 @@ def _resolve_modal_complete_url(modal_endpoint_url: str) -> str:
     elif path.endswith(_QUERY_ENDPOINT_SUFFIX):
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{_COMPLETE_ENDPOINT_SUFFIX}"
     elif path == "" or path == "/":
-        return urlunsplit((parsed.scheme, parsed.netloc, "/", parsed.query, parsed.fragment))
+        # Default autocomplete contract is /v1/complete even when the configured
+        # endpoint is the app root.
+        return urlunsplit((parsed.scheme, parsed.netloc, _COMPLETE_ENDPOINT_SUFFIX, parsed.query, parsed.fragment))
     else:
         path = _COMPLETE_ENDPOINT_SUFFIX
     return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
@@ -561,12 +563,15 @@ async def complete_autocomplete(
         raise ModalClientError(
             "MODAL_ENDPOINT_URL is not configured. Set it on the lean-backend server (e.g. to your Modal app URL like https://user--app.modal.run or .../v1/generate) so autocomplete can run."
         )
-    # Autocomplete always uses the translator/Herald contract: POST to base URL only (no /v1/...).
-    complete_url = _modal_base_url(settings.modal_endpoint_url)
+    complete_url = _resolve_modal_complete_url(settings.modal_endpoint_url)
+    fallback_url = _modal_base_url(settings.modal_endpoint_url)
+    url_candidates: list[str] = [complete_url]
+    if fallback_url not in url_candidates:
+        url_candidates.append(fallback_url)
     logger.info(
-        "modal_autocomplete_request configured=%s resolved_url=%s",
+        "modal_autocomplete_request configured=%s resolved_urls=%s",
         settings.modal_endpoint_url,
-        complete_url,
+        url_candidates,
     )
     herald_system = (system_prompt or getattr(settings, "modal_complete_system_prompt", None) or HERALD_AUTOCOMPLETE_SYSTEM_PROMPT).strip()
     payload = _build_herald_autocomplete_payload(request_payload, herald_system)
@@ -577,26 +582,55 @@ async def complete_autocomplete(
         headers["x-api-key"] = settings.modal_api_key
     timeout = httpx.Timeout(getattr(settings, "modal_timeout_seconds", 20.0) * 1.5)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            response = await client.post(complete_url, json=payload, headers=headers)
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            raise ModalClientError(f"Modal complete request failed: {exc}") from exc
-        if response.status_code >= 400:
-            body_preview = (response.text or "")[:400].strip()
-            hint = ""
-            if response.status_code == 502:
-                hint = " Modal app may be cold or failing; check the Modal dashboard."
-            elif response.status_code == 500:
-                hint = (
-                    " The Modal app (POST /) must accept autocomplete payload (text, cursor_offset, context, system_prompt, autocomplete_mode) and return a completion-shaped response. If using Herald V1 Translate only, add autocomplete support or use an endpoint that does."
+        last_http_error: ModalClientError | None = None
+        for index, candidate_url in enumerate(url_candidates):
+            try:
+                response = await client.post(candidate_url, json=payload, headers=headers)
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                raise ModalClientError(f"Modal complete request failed: {exc}") from exc
+
+            if response.status_code >= 400:
+                body_preview = (response.text or "")[:400].strip()
+                hint = ""
+                if response.status_code == 502:
+                    hint = " Modal app may be cold or failing; check the Modal dashboard."
+                elif response.status_code == 500:
+                    hint = (
+                        " The Modal app must accept autocomplete payload and return a completion-shaped response."
+                    )
+                # If /v1/complete is unavailable, allow one fallback attempt at app root.
+                if index < len(url_candidates) - 1 and response.status_code in {404, 405}:
+                    continue
+                last_http_error = ModalClientError(
+                    f"Modal complete returned HTTP {response.status_code}: {body_preview or 'no body'}.{hint}"
                 )
-            raise ModalClientError(
-                f"Modal complete returned HTTP {response.status_code}: {body_preview or 'no body'}.{hint}"
-            )
-        try:
-            data = response.json()
-        except ValueError:
-            raise ModalClientError("Modal complete returned non-JSON response")
-        if not isinstance(data, dict):
-            raise ModalClientError("Modal complete returned non-object response")
-        return _normalize_herald_complete_response(data, request_payload)
+                break
+
+            try:
+                data = response.json()
+            except ValueError:
+                last_http_error = ModalClientError("Modal complete returned non-JSON response")
+                break
+            if not isinstance(data, dict):
+                last_http_error = ModalClientError("Modal complete returned non-object response")
+                break
+
+            normalized = _normalize_herald_complete_response(data, request_payload)
+            if (
+                isinstance(normalized, dict)
+                and normalized.get("status") == "no_suggestion"
+                and isinstance(normalized.get("no_suggestion_debug"), dict)
+            ):
+                debug = dict(normalized["no_suggestion_debug"])
+                try:
+                    request_preview = json.dumps(payload, ensure_ascii=False)[:800]
+                except Exception:
+                    request_preview = str(payload)[:800]
+                debug["request_url"] = candidate_url
+                debug["request_preview"] = request_preview
+                normalized["no_suggestion_debug"] = debug
+            return normalized
+
+        if last_http_error is not None:
+            raise last_http_error
+        raise ModalClientError("Modal complete returned no usable response")
