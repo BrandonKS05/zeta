@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  js-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax check JS files
+        run: |
+          node --check apps/overleaf-extension/precheck/precheck.js
+          node --check apps/overleaf-extension/precheck/cli.js
+          node --check apps/overleaf-extension/popup.js
+          node --check apps/overleaf-extension/content_app.js
+          node --check apps/overleaf-extension/content_adapters.js
+          node --check apps/overleaf-extension/content_ui.js
+
+      - name: Run JS tests
+        run: npm test
+
+      - name: Run CLI on fixture
+        run: |
+          mkdir -p /tmp/zeta-ci-demo
+          printf 'Let \\$\\sigma\\$ = covariance matrix\n\\newcommand{\\sigma}{\\Sigma}' > /tmp/zeta-ci-demo/main.tex
+          printf 'Variance is \\$\\sigma\\$\n' > /tmp/zeta-ci-demo/results.tex
+          node apps/overleaf-extension/precheck/cli.js --dir /tmp/zeta-ci-demo --out /tmp/zeta-ci-demo || true
+          cat /tmp/zeta-ci-demo/zeta-report.md
+
+      - name: Upload zeta-report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeta-report
+          path: /tmp/zeta-ci-demo
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r services/lean-backend/requirements.txt
+
+      - name: Run Python tests
+        env:
+          ENABLE_LLM_INTERPRETATION: "false"
+          ENABLE_LLM_HIGHLIGHTS: "false"
+          MODAL_ENDPOINT_URL: ""
+          LLM_API_KEY: ""
+        run: python3 -m pytest services/lean-backend/tests/ -v
