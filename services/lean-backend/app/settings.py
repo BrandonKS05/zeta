@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
+
+# Load .env from the service root (services/lean-backend/.env) if present
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 class Settings(BaseModel):
