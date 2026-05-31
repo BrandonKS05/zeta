@@ -45,6 +45,70 @@ def test_solve_success(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_run())
 
 
+def test_review_summary_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_context: dict | None = None
+
+    async def fake_generate_review_summary(context: dict, *, settings=None) -> dict:
+        nonlocal captured_context
+        captured_context = context
+        return {
+            "text": "AI reviewer: notation drift is the main submission risk.",
+            "bullets": ["Clarify sigma notation.", "Define tau before theorem use."],
+            "usedSignals": ["unified diagnostics", "math entities", "Lean/verifier info"],
+            "providerName": "fake-openai",
+            "model": "fake-model",
+            "generatedAt": "2026-05-31T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("app.main.generate_review_summary", fake_generate_review_summary)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/review/summary",
+                json={
+                    "score": 78,
+                    "diagnostics": [{"type": "notation_drift", "symbol": "\\sigma"}],
+                    "mathEntities": {"definitions": [{"title": "Covariance"}], "theorems": []},
+                    "suggestedFixes": ["Rename scalar sigma."],
+                    "verificationIssues": [{"message": "Lean warning"}],
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["providerName"] == "fake-openai"
+        assert payload["model"] == "fake-model"
+        assert payload["text"].startswith("AI reviewer")
+        assert captured_context is not None
+        assert captured_context["diagnostics"][0]["symbol"] == "\\sigma"
+        assert captured_context["mathEntities"]["definitions"][0]["title"] == "Covariance"
+        assert captured_context["suggestedRepairs"][0]["text"] == "Rename scalar sigma."
+
+    asyncio.run(_run())
+
+
+def test_review_summary_route_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_review_summary(context: dict, *, settings=None) -> dict:
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr("app.main.generate_review_summary", fake_generate_review_summary)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/v1/review/summary",
+                json={"diagnostics": [], "mathEntities": {}},
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "review_summary_unavailable"
+
+    asyncio.run(_run())
+
+
 def test_solve_compile_failure_with_interpretation(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_nl_input: str | None = None
 

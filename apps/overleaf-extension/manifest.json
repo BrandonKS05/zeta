@@ -28,6 +28,7 @@
         "popup.html",
         "popup.css",
         "popup.js",
+        "precheck/precheck.js",
         "assets/vendor/latex_parser_simple.browser.js",
         "assets/fonts/dm-sans.woff2",
         "assets/icon-16.png",
@@ -43,6 +44,7 @@
     {
       "matches": ["https://www.overleaf.com/*", "https://*.overleaf.com/*"],
       "js": [
+        "precheck/precheck.js",
         "content_shared.js",
         "content_adapters.js",
         "content_ui.js",

@@ -1,8 +1,8 @@
-# Modal backend for math Grammarly (`FrenzyMath/Herald_translator`)
+# Modal backend for math Grammarly (`deepseek-ai/DeepSeek-Prover-V2-7B`)
 
 This service deploys a full NL -> Lean backend on Modal:
 
-- GPU inference with `FrenzyMath/Herald_translator`
+- GPU inference with `deepseek-ai/DeepSeek-Prover-V2-7B`
 - Lean syntax/type checking with `lean`
 - HTTP API for extension/frontend integration
 - Modal RPC function for direct Python calls
@@ -43,6 +43,9 @@ modal setup
 You can pass values directly via env vars, or reference existing Modal secrets by name.
 
 ```bash
+export APP_NAME=deepseek-prover-v2
+export MODEL_ID=deepseek-ai/DeepSeek-Prover-V2-7B
+
 # Hugging Face access
 export HF_TOKEN=hf_xxx
 # or: export HF_SECRET_NAME=your-hf-secret-name

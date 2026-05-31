@@ -163,10 +163,13 @@ def _build_modal_payload(
     if _uses_backend_payload_shape(endpoint_url):
         return {
             "nl_input": prompt,
-            "context": _compact_dict({
-                "theorem_name": theorem_name,
-                "imports": imports,
-            }),
+            "context": _compact_dict(
+                {
+                    **context_payload,
+                    "theorem_name": theorem_name,
+                    "imports": imports,
+                }
+            ),
             "max_iters": max_iters,
         }
 
@@ -199,8 +202,8 @@ def _resolve_modal_endpoint(endpoint_url: str, *, use_generate: bool) -> str:
         path = f"{path[: -len(_QUERY_ENDPOINT_SUFFIX)]}{target_suffix}"
         rewritten = True
     elif path == "" or path == "/":
-        path = ""
-        rewritten = False
+        path = target_suffix
+        rewritten = True
 
     resolved = urlunsplit((parsed.scheme, parsed.netloc, path if path else "/", parsed.query, parsed.fragment))
     if rewritten:

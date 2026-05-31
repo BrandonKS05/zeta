@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Any, Literal
@@ -444,6 +445,149 @@ def _fallback_interpretation(
 
 
 _REPAIR_CODE_MAX_CHARS = 4_000
+_REVIEW_SUMMARY_CONTEXT_MAX_CHARS = 12_000
+
+
+def _review_summary_system_prompt() -> str:
+    return (
+        "You are Zeta's AI reviewer summary engine for mathematical LaTeX papers. "
+        "Analyze the supplied pre-check context as a scientific peer reviewer would. "
+        "Use unified diagnostics, extracted math entities, suggested repairs, and Lean/verifier signals when present. "
+        "Be concise, high-impact, and specific. Focus on notation consistency, undefined or late-defined symbols, "
+        "assumption clarity, and verification errors. Do not claim the document is mathematically correct or formally "
+        "certified. Use careful language such as 'potential issue', 'submission risk', and 'recommended author review'. "
+        "Return only a JSON object with keys: text, bullets, usedSignals. text must be a 2-3 sentence executive "
+        "summary. bullets must contain 2-4 short action-oriented reviewer bullets. usedSignals must name the input "
+        "signal types you relied on."
+    )
+
+
+def _review_summary_user_prompt(context: dict[str, Any]) -> str:
+    context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
+    return (
+        "Generate a Zeta AI Reviewer Summary from this provider-neutral pre-check context.\n\n"
+        "Rules:\n"
+        "- Prioritize concrete issues over generic praise.\n"
+        "- Mention Lean/verifier information only if it is present.\n"
+        "- Mention repairs only if repair or suggested-fix data is present.\n"
+        "- Keep the output readable inside a small Overleaf extension panel.\n"
+        "- JSON only; no markdown fences.\n\n"
+        f"Context JSON:\n{truncate_text(context_json, _REVIEW_SUMMARY_CONTEXT_MAX_CHARS)}"
+    )
+
+
+def _normalize_review_summary_payload(data: dict[str, Any], *, model: str) -> dict[str, Any]:
+    text = _as_str(data.get("text")) or _as_str(data.get("summary"))
+    if not text:
+        raise LLMClientError("review_summary_missing_text")
+
+    raw_bullets = data.get("bullets")
+    bullets: list[str] = []
+    if isinstance(raw_bullets, list):
+        bullets = [str(item).strip() for item in raw_bullets if str(item).strip()][:4]
+
+    raw_signals = data.get("usedSignals") or data.get("used_signals")
+    used_signals: list[str] = []
+    if isinstance(raw_signals, list):
+        used_signals = [str(item).strip() for item in raw_signals if str(item).strip()][:8]
+    if not used_signals:
+        used_signals = ["unified diagnostics", "math entities"]
+
+    return {
+        "text": text.strip(),
+        "bullets": bullets,
+        "usedSignals": used_signals,
+        "providerName": "openai",
+        "model": model,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def generate_review_summary(
+    context: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Generate an AI reviewer summary from provider-neutral pre-check context."""
+    settings = settings or get_settings()
+    if not settings.enable_llm_interpretation:
+        raise LLMClientError("llm_disabled")
+    if not settings.llm_model:
+        raise LLMClientError("llm_model_not_set")
+    if not settings.llm_api_key:
+        raise LLMClientError("llm_api_key_not_set")
+
+    endpoint, use_responses_api = _interpretation_endpoint_and_api(settings)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.llm_api_key}",
+    }
+    system_prompt = _review_summary_system_prompt()
+    user_prompt = _review_summary_user_prompt(context)
+    token_key = _token_limit_key(use_responses_api=use_responses_api)
+    limit = max(180, min(settings.llm_max_completion_tokens or 300, 600))
+
+    if use_responses_api:
+        payload: dict[str, Any] = {
+            "model": settings.llm_model,
+            "instructions": system_prompt,
+            "input": user_prompt,
+            token_key: limit,
+            "text": {"format": _response_format_json_object()},
+        }
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            token_key: limit,
+        }
+        if _should_enforce_json_mode(endpoint):
+            payload["response_format"] = _response_format_json_object()
+
+    timeout = httpx.Timeout(max(8.0, min(settings.llm_timeout_seconds, 30.0)))
+
+    async def _post() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(endpoint, json=payload, headers=headers)
+        if response.status_code >= 500:
+            raise _RetriableLLMError(f"llm_http_{response.status_code}")
+        return response
+
+    try:
+        response = await retry_async(
+            _post,
+            attempts=max(1, settings.llm_max_retries + 1),
+            backoff_seconds=0.4,
+            retriable_exceptions=(_RetriableLLMError, httpx.TimeoutException, httpx.TransportError),
+            logger=logger,
+            operation_name="generate_review_summary",
+        )
+    except httpx.TimeoutException as exc:
+        raise LLMClientError("timeout") from exc
+    except httpx.TransportError as exc:
+        raise LLMClientError("transport_error") from exc
+
+    if response.status_code >= 400:
+        body_preview = (response.text or "")[:400].replace("\n", " ")
+        raise LLMClientError(f"api_{response.status_code}: {body_preview}")
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise LLMClientError("response_not_json") from exc
+
+    content = _extract_message_content(data)
+    if not content:
+        _log_llm_response_when_content_missing(data, logger)
+        raise LLMClientError("empty_content")
+
+    parsed = extract_json_object(content)
+    if parsed is None:
+        raise LLMClientError("summary_not_json")
+    return _normalize_review_summary_payload(parsed, model=settings.llm_model)
 
 
 async def repair_lean_compile_errors(

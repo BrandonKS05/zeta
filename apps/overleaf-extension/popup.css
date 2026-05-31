@@ -224,6 +224,242 @@ body[data-zeta-embedded="1"] .zeta-panel[data-panel-content="assistant"] {
   padding: 12px;
 }
 
+.zeta-panel[data-panel-content="readiness"] {
+  overflow-y: auto;
+  min-height: 0;
+  align-content: start;
+}
+
+.zeta-readiness-card {
+  background: var(--zeta-surface);
+  border: 1px solid var(--zeta-border);
+  padding: 12px;
+}
+
+.zeta-readiness-hero {
+  background: linear-gradient(180deg, #fffdf9 0%, #f8efe6 100%);
+  border-color: #d8b37a;
+  box-shadow: var(--tw-shadow-soft);
+}
+
+.zeta-readiness-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.zeta-readiness-head h2 {
+  margin: 0;
+  font-size: 36px;
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.zeta-readiness-status {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--zeta-accent);
+}
+
+.zeta-certified-stamp {
+  min-width: 108px;
+  border: 2px solid #8c1515;
+  color: #8c1515;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 9px 8px;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+  transform: rotate(-5deg);
+  box-shadow: 0 4px 0 rgba(140, 21, 21, 0.12);
+}
+
+.zeta-certified-stamp--checking {
+  border-color: #9a6a19;
+  color: #9a6a19;
+}
+
+.zeta-certified-stamp--needs-review {
+  border-color: #a33b1f;
+  color: #a33b1f;
+}
+
+.zeta-certified-stamp--passed,
+.zeta-certified-stamp--demo {
+  border-color: #1f6f43;
+  color: #1f6f43;
+}
+
+.zeta-certified-explainer {
+  margin: 12px 0 0;
+  color: var(--zeta-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.zeta-readiness-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.zeta-reviewer-btn {
+  border: 1px solid var(--zeta-border);
+  background: #fff;
+  color: var(--zeta-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.zeta-reviewer-btn:hover {
+  background: var(--zeta-hover);
+}
+
+.zeta-reviewer-btn--primary {
+  border-color: var(--zeta-accent);
+  background: var(--zeta-accent);
+  color: #fff;
+}
+
+.zeta-reviewer-btn--primary:hover {
+  background: var(--zeta-accent-strong);
+}
+
+.zeta-copy-status {
+  min-height: 16px;
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--zeta-muted);
+}
+
+.zeta-reviewer-report-preview {
+  display: none;
+  width: 100%;
+  min-height: 130px;
+  margin-top: 8px;
+  border: 1px solid var(--zeta-border);
+  background: #fff;
+  color: var(--zeta-text);
+  font-family: "Berkeley Mono", "SF Mono", "Menlo", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 8px;
+  resize: vertical;
+}
+
+.zeta-reviewer-report-preview.is-visible {
+  display: block;
+}
+
+.zeta-readiness-state {
+  display: grid;
+  gap: 4px;
+  color: var(--zeta-muted);
+  font-size: 12px;
+}
+
+.zeta-readiness-state strong {
+  color: var(--zeta-text);
+  font-size: 13px;
+}
+
+.zeta-readiness-state--error {
+  border-color: #c96d52;
+  background: #fff4ef;
+}
+
+.zeta-readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.zeta-readiness-metric {
+  border: 1px solid #eadbcc;
+  background: #fffaf4;
+  padding: 9px;
+}
+
+.zeta-readiness-metric strong {
+  display: block;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.zeta-readiness-metric span {
+  display: block;
+  margin-top: 5px;
+  color: var(--zeta-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.zeta-readiness-list,
+.zeta-ledger-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.zeta-readiness-list li,
+.zeta-ledger-list li {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.zeta-counterexample-box {
+  border-left: 3px solid #e5a100;
+  background: #fff8e6;
+  padding: 10px;
+  color: #51412b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.zeta-ledger-event {
+  padding-left: 2px;
+}
+
+.zeta-ledger-event strong {
+  display: block;
+  font-size: 12px;
+}
+
+.zeta-ledger-event span {
+  display: block;
+  color: var(--zeta-muted);
+}
+
+.zeta-ledger-status {
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.zeta-ledger-status--warning {
+  color: #a66a00;
+}
+
+.zeta-ledger-status--success {
+  color: #1f6f43;
+}
+
+.zeta-ledger-status--error {
+  color: #a33b1f;
+}
+
 .zeta-backend-section--stacked .zeta-backend-toggle-row {
   display: block;
   margin-bottom: 4px;
