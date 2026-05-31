@@ -7,12 +7,14 @@ import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from .highlight_llm import resolve_highlights_with_llm
 from .highlight_locator import resolve_highlights
 from .lean_compile import compile_lean
 from .llm_client import (
     explain_issue_chat,
+    generate_review_summary,
     interpret_errors,
     interpret_semantic_sanity,
     repair_lean_compile_errors,
@@ -35,12 +37,16 @@ from .models import (
     InterpretationItem,
     PipelineStage,
     PipelineTrace,
+    ReviewSummaryRequest,
+    ReviewSummaryResponse,
     SemanticValidation,
     SolveRequest,
     SolveResponse,
 )
 from .settings import get_settings
 from .utils import configure_logging, request_id_ctx
+from .database import ensure_demo_project, init_db
+from .routers.project import router as project_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -50,14 +56,30 @@ logger = logging.getLogger(__name__)
 _env_line = (
     f"env_check ENABLE_LLM_INTERPRETATION={settings.enable_llm_interpretation} "
     f"LLM_MODEL={settings.llm_model or '(none)'} LLM_API_KEY_set={bool(settings.llm_api_key)} "
-    f"LLM_ENDPOINT_URL={settings.llm_endpoint_url or '(default)'} "
-    f"MODAL_ENDPOINT_URL={settings.modal_endpoint_url or '(none)'} "
+    f"LLM_ENDPOINT_URL_set={bool(settings.llm_endpoint_url)} "
+    f"MODAL_ENDPOINT_URL_set={bool(settings.modal_endpoint_url)} "
     f"LAKE_PROJECT_DIR={settings.lake_project_dir or '(none)'}"
 )
 print(_env_line, flush=True)
 logger.info("%s", _env_line)
 
 app = FastAPI(title="Lean Solver Backend", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_origin_regex=r"^chrome-extension://.*$",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+init_db()
+ensure_demo_project()
+app.include_router(project_router)
 
 _FALSE_DECL_RE = re.compile(
     r"(?m)^\s*(?:axiom|theorem|lemma)\s+(?P<name>[A-Za-z0-9_'.]+)\s*:\s*False(?:\b|$)"
@@ -117,6 +139,26 @@ async def add_request_context(request: Request, call_next):
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/status")
+async def service_status() -> dict:
+    return {
+        "status": "ok",
+        "llm_configured": bool(settings.llm_api_key),
+        "modal_configured": bool(settings.modal_endpoint_url),
+    }
+
+
+@app.post("/v1/review/summary", response_model=ReviewSummaryResponse)
+async def review_summary(request: ReviewSummaryRequest) -> ReviewSummaryResponse:
+    """Generate an AI reviewer summary from the extension's unified diagnostics context."""
+    try:
+        payload = await generate_review_summary(request.summary_context(), settings=settings)
+    except Exception as exc:
+        logger.warning("review_summary_failed reason=%s", exc)
+        raise HTTPException(status_code=503, detail="review_summary_unavailable") from exc
+    return ReviewSummaryResponse(**payload)
 
 
 def _as_int(value: Any) -> int | None:

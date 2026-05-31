@@ -256,3 +256,106 @@ test("review ledger events are JSON-serializable for export", () => {
   assert.ok(Array.isArray(parsed), "serialized ledger round-trips as array");
   assert.ok(events.length > 0, "demo mode produces at least one ledger event");
 });
+
+// ---------------------------------------------------------------------------
+// normalizeBackendDiagnostic tests
+// ---------------------------------------------------------------------------
+
+test("normalizeBackendDiagnostic maps precheck issue to standard shape", () => {
+  const raw = {
+    source: "precheck",
+    severity: "warning",
+    type: "notation_drift",
+    symbol: "\\sigma",
+    message: "sigma used as both matrix and scalar",
+    file: "main.tex",
+    line: 12,
+  };
+  const d = precheck.normalizeBackendDiagnostic(raw);
+  assert.equal(d.source, "precheck");
+  assert.equal(d.severity, "warning");
+  assert.equal(d.symbol, "\\sigma");
+  assert.equal(d.file, "main.tex");
+  assert.equal(d.line, 12);
+  assert.ok(d.message.includes("sigma"));
+});
+
+test("normalizeBackendDiagnostic maps Lean compiler diagnostic shape", () => {
+  const raw = {
+    source: "lean",
+    level: "error",
+    message: "unknown identifier 'foo'",
+    lean_line: 5,
+    file_path: "proof.lean",
+    suggested_fix: "Check definition of foo",
+  };
+  const d = precheck.normalizeBackendDiagnostic(raw);
+  assert.equal(d.source, "lean");
+  assert.equal(d.severity, "error");
+  assert.equal(d.line, 5);
+  assert.equal(d.suggestedFix, "Check definition of foo");
+});
+
+test("normalizeBackendDiagnostic maps LLM interpretation shape", () => {
+  const raw = {
+    source: "llm",
+    severity: "warning",
+    title: "Notation inconsistency",
+    message: "Symbol reused with different meaning",
+    explanation: "This breaks proof readability",
+    fix: "Introduce distinct symbols",
+  };
+  const d = precheck.normalizeBackendDiagnostic(raw);
+  assert.equal(d.source, "llm");
+  assert.equal(d.title, "Notation inconsistency");
+  assert.equal(d.whyThisMatters, "This breaks proof readability");
+  assert.equal(d.suggestedFix, "Introduce distinct symbols");
+});
+
+test("normalizeBackendDiagnostic maps Modal/DeepSeek-style response", () => {
+  const raw = {
+    provider: "modal",
+    severity: "warning",
+    message_type: "semantic_gap",
+    text: "Proof step is missing a case",
+    why_this_matters: "Incomplete case split leads to incorrect conclusion",
+  };
+  const d = precheck.normalizeBackendDiagnostic(raw);
+  assert.equal(d.source, "modal");
+  assert.ok(d.title.length > 0);
+  assert.equal(d.whyThisMatters, "Incomplete case split leads to incorrect conclusion");
+});
+
+test("normalizeBackendDiagnostic handles malformed/null input safely", () => {
+  assert.doesNotThrow(() => precheck.normalizeBackendDiagnostic(null));
+  assert.doesNotThrow(() => precheck.normalizeBackendDiagnostic(undefined));
+  assert.doesNotThrow(() => precheck.normalizeBackendDiagnostic("bare string"));
+  const d = precheck.normalizeBackendDiagnostic(null);
+  assert.equal(d.source, "unknown");
+  assert.equal(d.severity, "warning");
+  assert.ok(typeof d.title === "string");
+});
+
+// ---------------------------------------------------------------------------
+// Overleaf extraction guardrail tests (via precheck engine behavior)
+// ---------------------------------------------------------------------------
+
+test("extraction success: precheck on real files records document length", () => {
+  const files = [{ file_path: "main.tex", content: "\\section{Intro}\nLet $x = 1$." }];
+  const report = precheck.buildPrecheckReport(files);
+  assert.ok(typeof report.score === "number", "report has score");
+  assert.ok(report.demoMode === false, "non-demo when real files provided");
+});
+
+test("extraction empty: precheck on empty document falls back gracefully", () => {
+  const files = [{ file_path: "main.tex", content: "" }];
+  assert.doesNotThrow(() => precheck.buildPrecheckReport(files));
+  const report = precheck.buildPrecheckReport(files);
+  assert.ok(typeof report.score === "number");
+});
+
+test("extraction null/no files: precheck falls back to demo mode", () => {
+  const report = precheck.buildPrecheckReport(null, { demoMode: true });
+  assert.equal(report.demoMode, true, "demo mode when no files");
+  assert.ok(Array.isArray(report.analysis?.allIssues), "analysis has allIssues array");
+});

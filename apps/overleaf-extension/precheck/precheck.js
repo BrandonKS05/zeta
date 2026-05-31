@@ -800,5 +800,56 @@ Finally define $\tau$ as the stopping-time parameter for the estimator.
     generateReviewerSummary,
     buildPrecheckReport,
     markdownReviewerReport,
+    normalizeBackendDiagnostic,
   };
+
+  // ---------------------------------------------------------------------------
+  // Unified diagnostic normalizer
+  // Maps backend Lean/LLM/Modal responses to a common shape for the frontend.
+  // ---------------------------------------------------------------------------
+
+  function normalizeBackendDiagnostic(raw) {
+    if (!raw || typeof raw !== "object") {
+      return {
+        source: "unknown",
+        severity: "warning",
+        title: "Malformed diagnostic",
+        message: String(raw ?? ""),
+        category: "backend",
+        file: null,
+        line: null,
+        symbol: null,
+        whyThisMatters: null,
+        suggestedFix: null,
+        raw,
+      };
+    }
+    // Lean compiler diagnostic (lean-backend interpretation shape)
+    const source = String(raw.source || raw.provider || "backend");
+    const severity = String(raw.severity || raw.level || "warning");
+    const title =
+      raw.title ||
+      raw.short_message ||
+      raw.message_type ||
+      (raw.message ? String(raw.message).slice(0, 80) : "Backend diagnostic");
+    const message =
+      raw.message ||
+      raw.text ||
+      raw.description ||
+      raw.detail ||
+      "";
+    return {
+      source,
+      severity: /^(error|fatal)$/i.test(severity) ? "error" : severity,
+      title: String(title),
+      message: String(message),
+      category: String(raw.category || raw.type || "backend"),
+      file: raw.file || raw.file_path || null,
+      line: raw.line ?? raw.lean_line ?? null,
+      symbol: raw.symbol || null,
+      whyThisMatters: raw.whyThisMatters || raw.why_this_matters || raw.explanation || null,
+      suggestedFix: raw.suggestedFix || raw.suggested_fix || raw.fix || null,
+      raw,
+    };
+  }
 });

@@ -2142,13 +2142,16 @@
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 2000);
     try {
-      const response = await fetch("http://localhost:8000/healthz", {
+      const response = await fetch("http://localhost:8000/v1/status", {
         method: "GET",
         signal: controller.signal,
       });
       window.clearTimeout(timeoutId);
       if (response.ok) {
-        renderBackendStatus("Backend: connected — local Lean/LLM analysis available.", "ok");
+        const data = await response.json().catch(() => ({}));
+        const llm = data.llm_configured ? "LLM: configured" : "LLM: not configured";
+        const modal = data.modal_configured ? " · Modal: configured" : "";
+        renderBackendStatus(`Backend: connected · ${llm}${modal}`, "ok");
       } else {
         renderBackendStatus("Backend: unavailable — using deterministic local mode.", "error");
       }

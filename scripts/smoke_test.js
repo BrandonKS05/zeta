@@ -114,6 +114,18 @@ async function runSmokeTest() {
 
     console.log("✓ Backend health: ok");
 
+    // Step 1b: Check service status (LLM / Modal config)
+    try {
+      const statusResp = await httpRequest(`${backendUrl}/v1/status`, { method: "GET" });
+      if (statusResp.status === 200) {
+        const statusData = JSON.parse(statusResp.body);
+        const llmLabel = statusData.llm_configured ? "configured" : "not configured";
+        const modalLabel = statusData.modal_configured ? "configured" : "not configured";
+        console.log(`  LLM:   ${llmLabel}`);
+        console.log(`  Modal: ${modalLabel}`);
+      }
+    } catch (_e) { /* /v1/status optional */ }
+
     // Step 2: Test solve endpoint
     const solvePayload = JSON.stringify({
       nl_input:
@@ -156,7 +168,8 @@ async function runSmokeTest() {
       process.exit(1);
     }
 
-    console.log("✓ Solve response received");
+    const provider = solveData.provider || solveData.source || solveData.model || "backend";
+    console.log(`✓ Solve response received (provider: ${provider})`);
 
     // Success
     console.log("✓ Smoke test passed");
