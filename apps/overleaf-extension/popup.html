@@ -32,6 +32,7 @@
       <nav class="zeta-top-nav" aria-label="zeta sections">
         <span class="zeta-top-nav-indicator" aria-hidden="true"></span>
         <button type="button" class="zeta-top-nav-btn is-active" data-panel="main">Main</button>
+        <button type="button" class="zeta-top-nav-btn" data-panel="readiness">Readiness</button>
         <button type="button" class="zeta-top-nav-btn" data-panel="history">History</button>
         <button type="button" class="zeta-top-nav-btn" data-panel="graph">Graph View</button>
         <button type="button" class="zeta-top-nav-btn" data-panel="assistant">Assistant</button>
@@ -140,6 +141,76 @@
         </section>
       </section>
 
+      <section class="zeta-panel" data-panel-content="readiness">
+        <section class="zeta-readiness-card zeta-readiness-hero">
+          <div class="zeta-readiness-head">
+            <div>
+              <p class="zeta-section-label">Zeta Journal Readiness</p>
+              <h2 id="zeta-readiness-score">--/100</h2>
+              <p id="zeta-readiness-status" class="zeta-readiness-status">Preparing pre-check...</p>
+            </div>
+            <div id="zeta-certified-stamp" class="zeta-certified-stamp zeta-certified-stamp--checking">
+              Checking
+            </div>
+          </div>
+          <p id="zeta-certified-explainer" class="zeta-certified-explainer">
+            Zeta is preparing a prototype scientific pre-check.
+          </p>
+          <div class="zeta-readiness-actions">
+            <button id="zeta-precheck-demo" class="zeta-reviewer-btn" type="button">Run Demo Mode</button>
+            <button id="zeta-copy-reviewer-report" class="zeta-reviewer-btn zeta-reviewer-btn--primary" type="button">Copy Reviewer Report</button>
+            <button id="zeta-export-ledger" class="zeta-reviewer-btn" type="button">Export Ledger</button>
+          </div>
+          <p id="zeta-copy-status" class="zeta-copy-status" aria-live="polite"></p>
+          <textarea
+            id="zeta-reviewer-report-preview"
+            class="zeta-reviewer-report-preview"
+            readonly
+            aria-label="Generated reviewer report Markdown"
+          ></textarea>
+        </section>
+
+        <section id="zeta-readiness-loading" class="zeta-readiness-card zeta-readiness-state">
+          <strong>Loading Pre-Check</strong>
+          <span>Building a local scientific publishing report from deterministic prototype checks.</span>
+        </section>
+
+        <section id="zeta-readiness-error" class="zeta-readiness-card zeta-readiness-state zeta-readiness-state--error" style="display:none">
+          <strong>Pre-Check unavailable</strong>
+          <span id="zeta-readiness-error-text">The local pre-check engine could not be loaded.</span>
+        </section>
+
+        <section class="zeta-readiness-card">
+          <div class="zeta-row">
+            <p class="zeta-section-label">Detected Structure</p>
+            <p id="zeta-readiness-mode" class="zeta-chip">Demo Mode</p>
+          </div>
+          <div id="zeta-readiness-counts" class="zeta-readiness-grid"></div>
+        </section>
+
+        <section class="zeta-readiness-card">
+          <p class="zeta-section-label">Top Reviewer Concerns</p>
+          <ol id="zeta-reviewer-concerns" class="zeta-readiness-list"></ol>
+        </section>
+
+        <section class="zeta-readiness-card">
+          <p class="zeta-section-label">Suggested Author Fixes</p>
+          <ul id="zeta-author-fixes" class="zeta-readiness-list"></ul>
+        </section>
+
+        <section class="zeta-readiness-card">
+          <p class="zeta-section-label">Counterexample Playground</p>
+          <div id="zeta-counterexample-box" class="zeta-counterexample-box">
+            Select a warning to generate a local explanation.
+          </div>
+        </section>
+
+        <section class="zeta-readiness-card">
+          <p class="zeta-section-label">Review Ledger</p>
+          <ol id="zeta-review-ledger" class="zeta-ledger-list"></ol>
+        </section>
+      </section>
+
       <section class="zeta-panel" data-panel-content="history">
         <section class="zeta-legend zeta-history-legend">
           <div class="zeta-row">
@@ -201,6 +272,7 @@
       </section>
     </main>
 
+    <script src="precheck/precheck.js"></script>
     <script src="assets/vendor/latex_parser_simple.browser.js"></script>
     <script src="popup.js"></script>
   </body>

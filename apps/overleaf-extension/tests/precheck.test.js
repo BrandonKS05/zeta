@@ -246,3 +246,13 @@ Let $\sigma > 0$ be the scalar variance.
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("review ledger events are JSON-serializable for export", () => {
+  const report = precheck.buildPrecheckReport(precheck.DEMO_LATEX_FILES, { demoMode: true });
+  const events = report.reviewLedger || [];
+  assert.ok(Array.isArray(events), "reviewLedger is an array");
+  const serialized = JSON.stringify(events);
+  const parsed = JSON.parse(serialized);
+  assert.ok(Array.isArray(parsed), "serialized ledger round-trips as array");
+  assert.ok(events.length > 0, "demo mode produces at least one ledger event");
+});

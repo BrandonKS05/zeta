@@ -2587,6 +2587,30 @@
     });
   }
 
+  const exportLedgerBtn = document.getElementById("zeta-export-ledger");
+  if (exportLedgerBtn) {
+    exportLedgerBtn.addEventListener("click", () => {
+      const report = currentPrecheckReport;
+      const events = report?.reviewLedger || [];
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        score: report?.score ?? null,
+        certification: report?.certification?.label ?? null,
+        mode: report?.demoMode ? "demo" : "live",
+        events,
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "zeta-ledger.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
   window.addEventListener("resize", () => {
     const activePanelButton = panelNavButtons.find((button) => button.classList.contains("is-active"));
     if (activePanelButton) {
