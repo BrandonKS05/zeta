@@ -6,11 +6,17 @@
  *
  * Usage:
  *   node cli.js --dir <path>         scan all .tex files recursively
- *   node cli.js --file <path>        single file (repeatable)
+ *   node cli.js --file <path>        single file (repeatable, must be .tex)
  *   node cli.js --out <dir>          output directory (defaults to cwd)
  *   node cli.js --quiet              suppress stdout summary
- *   node cli.js --strict             exit 1 on ANY issue, not just high-severity
+ *   node cli.js --strict             exit 1 on ANY issue regardless of severity
  *   node cli.js --help               show this help
+ *
+ * Exit codes:
+ *   Normal mode : exit 1 only when there are "error" or "high" severity issues.
+ *                 (precheck.js currently emits "warning" by default, so normal
+ *                 mode exits 0 for demo data — use --strict to catch warnings.)
+ *   --strict    : exit 1 on ANY issue including "warning" severity.
  */
 
 const fs = require("fs");
@@ -81,7 +87,8 @@ Options:
   --file <path>   Include a specific .tex file (repeatable)
   --out <dir>     Output directory for reports (default: current directory)
   --quiet         Suppress stdout summary
-  --strict        Exit 1 on ANY issue (not just high-severity)
+  --strict        Exit 1 on ANY issue including warnings (normal mode exits 1
+                  only for "error" or "high" severity issues)
   --help          Show this help message
 
 Outputs:
@@ -158,6 +165,9 @@ function main() {
 
   for (const f of files) {
     const absFile = path.resolve(f);
+    if (!absFile.endsWith(".tex")) {
+      die(`zeta: --file must point to a .tex file: ${absFile}`);
+    }
     if (!fs.existsSync(absFile) || !fs.statSync(absFile).isFile()) {
       die(`--file path does not exist or is not a file: ${absFile}`);
     }
@@ -171,7 +181,13 @@ function main() {
   // Read file contents
   const filesInput = [];
   for (const absPath of allPaths) {
-    const content = fs.readFileSync(absPath, "utf8");
+    let content;
+    try {
+      content = fs.readFileSync(absPath, "utf8");
+    } catch (err) {
+      process.stderr.write(`zeta: could not read file: ${absPath} (${err.message}), skipping\n`);
+      continue;
+    }
     filesInput.push({ file_path: path.basename(absPath), content });
   }
 
@@ -222,8 +238,18 @@ function main() {
   const jsonOutPath = path.join(absOut, "zeta-report.json");
   const mdOutPath = path.join(absOut, "zeta-report.md");
 
-  fs.writeFileSync(jsonOutPath, JSON.stringify(jsonPayload, null, 2), "utf8");
-  fs.writeFileSync(mdOutPath, markdownContent, "utf8");
+  try {
+    fs.writeFileSync(jsonOutPath, JSON.stringify(jsonPayload, null, 2), "utf8");
+  } catch (err) {
+    process.stderr.write(`zeta: could not write report: ${jsonOutPath} (${err.message})\n`);
+    process.exit(1);
+  }
+  try {
+    fs.writeFileSync(mdOutPath, markdownContent, "utf8");
+  } catch (err) {
+    process.stderr.write(`zeta: could not write report: ${mdOutPath} (${err.message})\n`);
+    process.exit(1);
+  }
 
   // Stdout summary (unless --quiet)
   if (!quiet) {
