@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "zeta:check": "node apps/overleaf-extension/precheck/cli.js",
+    "zeta:smoke:live": "node scripts/smoke_test.js",
     "test:js": "node --test apps/overleaf-extension/tests/precheck.test.js",
     "test": "npm run test:js"
   }
