@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/Users/brandonlee/zeta/logs/.f01103ae2a0e77bea707dd9c8c8e5efc592b8bb7-audit.json",
+    "files": [
+        {
+            "date": 1780188085389,
+            "name": "/Users/brandonlee/zeta/logs/mcp-puppeteer-2026-05-30.log",
+            "hash": "469929e4bc494f1ca76ef84506e8345683a1feb1a1d308a144975cd2380f3708"
+        },
+        {
+            "date": 1780215804942,
+            "name": "/Users/brandonlee/zeta/logs/mcp-puppeteer-2026-05-31.log",
+            "hash": "5a0be059f1291d632ee79013f960a6d88e976f29312a3cbc120e08a0b1f735d1"
+        }
+    ],
+    "hashType": "sha256"
+}

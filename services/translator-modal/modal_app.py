@@ -20,13 +20,31 @@ import modal
 from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "herald-math-grammarly"
-APP_VERSION = "2026-02-15-llm-semantic-interpretation-v6"
-MODEL_ID = "FrenzyMath/Herald_translator"
-MODEL_REVISION = os.environ.get("HERALD_MODEL_REVISION")
+APP_VERSION = "2026-05-30-deepseek-prover-v2-7b-v1"
+MODEL_ID = os.environ.get("MODEL_ID", "deepseek-ai/DeepSeek-Prover-V2-7B")
+MODEL_REVISION = os.environ.get("MODEL_REVISION")
 
 HF_CACHE_DIR = Path("/cache/hf")
 MODEL_ROOT_DIR = Path("/cache/models")
 MODEL_LOCAL_DIR = MODEL_ROOT_DIR / MODEL_ID.replace("/", "__")
+
+# LoRA target modules for DeepSeek-Prover-V2 7B.
+# DeepSeek-V2-Lite (the backbone) uses Multi-head Latent Attention (MLA):
+#   - q_a_proj / q_b_proj  — query low-rank decomposition
+#   - kv_a_proj_with_mqa / kv_b_proj — compressed KV projection
+#   - o_proj               — output projection
+#   - gate_proj / up_proj / down_proj — MLP (SwiGLU)
+# These replace the q/k/v_proj names used by Herald (Mistral/LLaMA architecture).
+LORA_TARGET_MODULES = [
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
 
 LEAN_BIN = "/root/.elan/bin/lean"
 LAKE_BIN = "/root/.elan/bin/lake"
@@ -79,20 +97,29 @@ INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "transformers").strip().
 if INFERENCE_BACKEND not in {"transformers", "vllm"}:
     INFERENCE_BACKEND = "transformers"
 
-SYSTEM_PROMPT = """You convert informal math to Lean 4.
-Return JSON only with keys:
-- lean_statement_type: a Lean proposition/type usable in `axiom t : ...`
-- assumptions: list of assumptions you made
-- notes: short explanation
-Rules:
-1) No markdown/code fences.
-2) No proofs (`by`, `sorry`), no imports, no declarations.
-3) Use explicit binders, e.g. `forall n : Nat, ...` or `∀ n : Nat, ...`.
-4) Use Lean core identifiers, not textbook Unicode sets:
-   - Natural numbers: `Nat` (never `ℕ` or `\\mathbb{N}`)
-   - Integers: `Int` (never `ℤ` or `\\mathbb{Z}`)
-   - Rationals: `Rat` (never `ℚ` or `\\mathbb{Q}`)
-5) Prefer conservative formalizations when ambiguous.
+SYSTEM_PROMPT = """Translate the math statement to a Lean 4 type. Reply with ONLY the type expression. Nothing else.
+
+CORRECT output examples:
+  1 + 1 = 2
+  ∀ (n : Nat), n + 0 = n
+  ∀ (a b : Int), a + b = b + a
+  ∀ (x : Real), x ^ 2 ≥ 0
+
+WRONG output — never do this:
+  ### Step 1: ...
+  Here is the Lean 4 formalization: ...
+  ```lean4 ... ```
+  theorem foo : ...
+  axiom foo : ...
+  def foo : ...
+
+STRICT rules:
+1) Your entire response is the Lean 4 type expression and nothing else.
+2) No headings, no steps, no explanation, no markdown, no code fences.
+3) No `theorem`, `lemma`, `axiom`, `def`, `import`, `namespace`, `#check`.
+4) No proofs: no `by`, no `sorry`, no `:=`.
+5) Use `Nat` not `ℕ`, `Int` not `ℤ`, `Rat` not `ℚ`, `Real` not `ℝ`.
+6) Use explicit binders: `∀ (n : Nat), ...`
 """
 
 COMPLETE_SYSTEM_PROMPT = """You are a math writing autocomplete model.
@@ -360,7 +387,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 VLLM_GPU_MEMORY_UTILIZATION = _env_float("VLLM_GPU_MEMORY_UTILIZATION", 0.9)
-VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 4096)
+VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 8192)
 VLLM_MAX_NUM_SEQS = _env_int("VLLM_MAX_NUM_SEQS", 8)
 VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", False)
 ENABLE_FINAL_FEEDBACK_LLM = _env_bool("ENABLE_FINAL_FEEDBACK_LLM", True)
@@ -894,7 +921,7 @@ def _build_completion_prompt(
             tokenize=False,
             add_generation_prompt=True,
         )
-    return f"{system_content}\n\n{user_prompt}\n\nJSON:"
+    return f"{system_content}\n\n{user_prompt}\n\nLean 4 type:"
 
 
 def _ensure_model_downloaded() -> Path:
@@ -917,15 +944,36 @@ def _ensure_model_downloaded() -> Path:
 
 def _build_generation_prompt(tokenizer: Any, request: AnalyzeRequest, normalized_text: str) -> str:
     if getattr(tokenizer, "chat_template", None):
-        return tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": _user_prompt(request, normalized_text)},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-    return f"{SYSTEM_PROMPT}\n\n{_user_prompt(request, normalized_text)}\n\nJSON:"
+        # DeepSeek-Prover-V2's chat template appends <think>\n when
+        # add_generation_prompt=True, forcing chain-of-thought before the
+        # model can act on SYSTEM_PROMPT.  Passing skip_thinking=True (supported
+        # in transformers >= 4.51 for DeepSeek reasoning models) suppresses it.
+        # If the installed transformers version doesn't support skip_thinking the
+        # kwarg is silently ignored, so this is safe across versions.
+        try:
+            return tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": _user_prompt(request, normalized_text)},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+                skip_thinking=True,
+            )
+        except TypeError:
+            # Older transformers: fall back to manually closing the think block.
+            base = tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": _user_prompt(request, normalized_text)},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            # Replace the opening <think>\n injected by the template so the
+            # model starts generating the Lean type directly.
+            return base.replace("<think>\n", "<think>\n</think>\n")
+    return f"{SYSTEM_PROMPT}\n\n{_user_prompt(request, normalized_text)}\n\nLean 4 type:"
 
 
 def _load_runtime() -> Runtime:
@@ -960,7 +1008,7 @@ def _load_runtime() -> Runtime:
                 "model": model_dir.as_posix(),
                 "tokenizer": model_dir.as_posix(),
                 "tensor_parallel_size": 1,
-                "dtype": "float16",
+                "dtype": "bfloat16",
                 "trust_remote_code": True,
                 "gpu_memory_utilization": max(0.5, min(0.98, VLLM_GPU_MEMORY_UTILIZATION)),
             }
@@ -985,7 +1033,7 @@ def _load_runtime() -> Runtime:
         model = AutoModelForCausalLM.from_pretrained(
             model_dir.as_posix(),
             token=os.environ.get("HF_TOKEN"),
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
             device_map="auto",
             local_files_only=True,
@@ -1861,6 +1909,16 @@ def _strip_code_fences(text: str) -> str:
 
 def _normalize_statement_type(candidate: str) -> str:
     value = _strip_code_fences(candidate)
+
+    # Strip markdown headers anywhere in the string (e.g. "### Lean4 Formalization\n").
+    # DeepSeek-Prover-V2 sometimes prefixes output with one or more heading lines.
+    value = re.sub(r"^#{1,6}\s+[^\n]*\n?", "", value, flags=re.MULTILINE).strip()
+
+    # Re-run _strip_code_fences after removing headers, because a code fence
+    # that was preceded by a header (and therefore not at position 0) is now
+    # at the start of the string.
+    value = _strip_code_fences(value)
+
     value = re.sub(r"^lean_statement_type\s*:\s*", "", value, flags=re.IGNORECASE).strip()
     for pattern, replacement in LEAN_CANONICAL_REPLACEMENTS:
         value = re.sub(pattern, replacement, value)
