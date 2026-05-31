@@ -180,8 +180,11 @@ def call_pipeline(
     base_url: str,
     api_key: str | None = None,
     timeout: int = 180,
+    async_jobs: bool = False,
+    poll_interval_seconds: float = 2.0,
+    max_poll_seconds: int = 900,
 ) -> dict[str, Any]:
-    """Call the Herald pipeline via Modal /v1/analyze."""
+    """Call the Herald pipeline via Modal /v1/analyze or async job polling."""
     payload: dict[str, Any] = {
         "text": text,
         "theorem_name": theorem_name,
@@ -198,6 +201,67 @@ def call_pipeline(
 
     started = time.time()
     try:
+        if async_jobs:
+            base = base_url.rstrip("/")
+            submit = requests.post(
+                f"{base}/v1/analyze/jobs",
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+            if submit.status_code != 200:
+                latency_ms = (time.time() - started) * 1000
+                return {
+                    "error": f"HTTP {submit.status_code}: {submit.text[:500]}",
+                    "latency_ms": latency_ms,
+                }
+            submit_payload = submit.json()
+            poll_path = submit_payload.get("poll_path")
+            call_id = submit_payload.get("call_id")
+            if not poll_path and call_id:
+                poll_path = f"/v1/analyze/jobs/{call_id}"
+            if not isinstance(poll_path, str) or not poll_path:
+                latency_ms = (time.time() - started) * 1000
+                return {
+                    "error": f"Async submit response missing poll_path: {submit_payload}",
+                    "latency_ms": latency_ms,
+                }
+
+            deadline = time.monotonic() + max_poll_seconds
+            poll_url = f"{base}{poll_path if poll_path.startswith('/') else '/' + poll_path}"
+            while time.monotonic() < deadline:
+                poll = requests.get(poll_url, headers=headers, timeout=timeout)
+                latency_ms = (time.time() - started) * 1000
+                if poll.status_code != 200:
+                    return {
+                        "error": f"HTTP {poll.status_code}: {poll.text[:500]}",
+                        "latency_ms": latency_ms,
+                    }
+                poll_payload = poll.json()
+                status = str(poll_payload.get("status") or "")
+                if status == "completed":
+                    result = poll_payload.get("result")
+                    if isinstance(result, dict):
+                        result["latency_ms"] = latency_ms
+                        result["cost_usd"] = _pipeline_cost(latency_ms)
+                        return result
+                    return {
+                        "error": f"Async job completed without result payload: {poll_payload}",
+                        "latency_ms": latency_ms,
+                    }
+                if status in {"failed", "expired"}:
+                    return {
+                        "error": f"Async job {status}: {json.dumps(poll_payload, ensure_ascii=False)[:500]}",
+                        "latency_ms": latency_ms,
+                    }
+                time.sleep(poll_interval_seconds)
+
+            latency_ms = (time.time() - started) * 1000
+            return {
+                "error": f"Async poll timed out after {max_poll_seconds}s.",
+                "latency_ms": latency_ms,
+            }
+
         resp = requests.post(
             f"{base_url.rstrip('/')}/v1/analyze",
             headers=headers,
@@ -216,6 +280,33 @@ def call_pipeline(
 
     except Exception as exc:
         return {"error": str(exc), "latency_ms": (time.time() - started) * 1000}
+
+
+def check_pipeline_health(
+    *,
+    base_url: str,
+    api_key: str | None = None,
+    timeout: int = 20,
+) -> tuple[bool, str]:
+    """Return whether the pipeline API health endpoint responds."""
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["x-api-key"] = api_key
+    try:
+        resp = requests.get(
+            f"{base_url.rstrip('/')}/healthz",
+            headers=headers,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}: {resp.text[:500]}"
+    try:
+        payload = resp.json()
+    except json.JSONDecodeError:
+        return False, f"Non-JSON health response: {resp.text[:500]}"
+    return True, json.dumps(payload, ensure_ascii=False)
 
 
 def pipeline_says_correct(result: dict[str, Any]) -> bool | None:
@@ -344,7 +435,7 @@ def print_detailed(results: list[dict]) -> None:
     for row in results:
         case_id = row["case_id"]
         expected = row["expected_correct"]
-        print(f"\n{'─' * 72}")
+        print("\n" + "-" * 72)
         print(f"  {case_id}  (expected: {'CORRECT' if expected else 'INCORRECT'})")
         print(f"  {row['text'][:120]}")
         if row.get("error_description"):
@@ -400,6 +491,19 @@ def main() -> None:
     parser.add_argument("--cases-file", default=str(CASES_PATH))
     parser.add_argument("--output-dir", default=str(RESULTS_DIR))
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--health-timeout", type=int, default=20)
+    parser.add_argument(
+        "--skip-health-check",
+        action="store_true",
+        help="Do not probe /healthz before running pipeline cases.",
+    )
+    parser.add_argument(
+        "--pipeline-async-jobs",
+        action="store_true",
+        help="Use /v1/analyze/jobs polling so long Modal jobs do not fail as one blocking HTTP request.",
+    )
+    parser.add_argument("--poll-interval-seconds", type=float, default=2.0)
+    parser.add_argument("--max-poll-seconds", type=int, default=900)
     parser.add_argument("--skip-pipeline", action="store_true")
     parser.add_argument("--skip-gpt", action="store_true")
     args = parser.parse_args()
@@ -419,6 +523,20 @@ def main() -> None:
     if not args.skip_pipeline:
         print(f"  Pipeline URL: {args.pipeline_url}  (~${MODAL_GPU_HOURLY_RATE:.2f}/GPU-hr)")
     print()
+
+    if not args.skip_pipeline and not args.skip_health_check:
+        ok, health = check_pipeline_health(
+            base_url=args.pipeline_url,
+            api_key=args.pipeline_api_key,
+            timeout=args.health_timeout,
+        )
+        if not ok:
+            print(f"ERROR: pipeline health check failed for {args.pipeline_url}")
+            print(f"       {health}")
+            print("       Use a healthy URL, redeploy the Modal app, or pass --skip-health-check to force the run.")
+            sys.exit(2)
+        print(f"Pipeline health: {health}")
+        print()
 
     results: list[dict[str, Any]] = []
     suite_start = time.time()
@@ -464,6 +582,9 @@ def main() -> None:
                 base_url=args.pipeline_url,
                 api_key=args.pipeline_api_key,
                 timeout=args.timeout,
+                async_jobs=args.pipeline_async_jobs,
+                poll_interval_seconds=args.poll_interval_seconds,
+                max_poll_seconds=args.max_poll_seconds,
             )
             row["pipeline"] = pipe
             if "error" in pipe:

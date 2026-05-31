@@ -33,6 +33,44 @@ def test_normalize_statement_type_rewrites_unicode_sets() -> None:
     assert normalized == "∀ n : Nat, n + 0 = n"
 
 
+def test_normalize_statement_type_repairs_deepseek_mojibake() -> None:
+    raw = (
+        "### Step 1: Translate the Natural Language Statement to Lean4\n"
+        "```lean4\n"
+        "theorem foo: \u2200 (x y z : \u00e2\u0126\u013f), "
+        "x > 0 \u00e2\u0128\u0134 y > 0 \u00e2\u0128\u0134 z > 0 "
+        "\u00e2\u0128\u0134 x * y * z = 1 "
+        "\u00e2\u0128\u0134 x^2 + y^2 + z^2 \u2265 x + y + z + 3 := by\n"
+        "  sorry\n"
+        "```\n"
+    )
+    normalized = app._normalize_statement_type(raw)
+    assert normalized == (
+        "\u2200 (x y z : Real), "
+        "x > 0 \u2192 y > 0 \u2192 z > 0 "
+        "\u2192 x * y * z = 1 "
+        "\u2192 x^2 + y^2 + z^2 \u2265 x + y + z + 3"
+    )
+
+
+def test_normalize_statement_type_repairs_deepseek_divisibility_mojibake() -> None:
+    raw = (
+        "```lean4\n"
+        "theorem foo: \u2200 (n : Int), 120 \u00e2\u012a\u00a3 "
+        "(n^5 - 5*n^3 + 4*n) := by\n"
+        "  sorry\n"
+        "```\n"
+    )
+    normalized = app._normalize_statement_type(raw)
+    assert normalized == "\u2200 (n : Int), 120 \u2223 (n^5 - 5*n^3 + 4*n)"
+
+
+def test_normalize_statement_type_rewrites_continuous_real_function() -> None:
+    statement = "\u2200 (f : Real \u2192 Real), Differentiable Real f \u2192 Continuous Real f"
+    normalized = app._normalize_statement_type(statement)
+    assert normalized == "\u2200 (f : Real \u2192 Real), Differentiable Real f \u2192 Continuous f"
+
+
 def test_normalize_statement_type_rewrites_incomplete_def_header() -> None:
     """Herald-style def with no body becomes a type (params) → type for axiom _ : type."""
     statement = "def zeta_candidate (x : ℝ) : Set (ℤ × ℕ)"

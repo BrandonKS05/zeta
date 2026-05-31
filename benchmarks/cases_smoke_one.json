@@ -1,0 +1,10 @@
+[
+  {
+    "id": "smoke-nat-refl",
+    "text": "For all natural numbers n, n = n.",
+    "context": "Simple Nat reflexivity.",
+    "theorem_name": "smoke_nat_refl",
+    "imports": ["Std"],
+    "expected_correct": true
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "id": "differentiable-implies-continuous",
+    "text": "If $f$ is differentiable on $\\mathbb{R}$, then $f$ is continuous on $\\mathbb{R}$.",
+    "context": "Calculus proposition.",
+    "theorem_name": "diff_implies_cont",
+    "imports": ["Mathlib"],
+    "expected_correct": true
+  }
+]

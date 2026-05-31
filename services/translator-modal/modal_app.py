@@ -57,9 +57,6 @@ MATHLIB_REVISION = os.environ.get("MATHLIB_REVISION")
 MATHLIB_BOOTSTRAP_TOOLCHAIN = os.environ.get("MATHLIB_BOOTSTRAP_TOOLCHAIN", "stable")
 MATHLIB_PREBUILD_MODULES_DEFAULT = (
     "Mathlib.Data.Real.Basic",
-    "Mathlib.Probability.Filtration",
-    "Mathlib.MeasureTheory.Measure.Space",
-    "Mathlib.MeasureTheory.MeasurableSpace.Defs",
 )
 _mathlib_prebuild_modules_env = os.environ.get("MATHLIB_PREBUILD_MODULES")
 if _mathlib_prebuild_modules_env:
@@ -93,7 +90,7 @@ LEAN_CHECK_CACHE_MAX_ENTRIES = int(os.environ.get("LEAN_CHECK_CACHE_MAX_ENTRIES"
 COMPLETE_CACHE_TTL_SECONDS = int(os.environ.get("COMPLETE_CACHE_TTL_SECONDS", "120"))
 COMPLETE_CACHE_MAX_ENTRIES = int(os.environ.get("COMPLETE_CACHE_MAX_ENTRIES", "512"))
 COMPLETE_RETRIEVAL_TOP_K = int(os.environ.get("COMPLETE_RETRIEVAL_TOP_K", "5"))
-INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "transformers").strip().lower()
+INFERENCE_BACKEND = os.environ.get("INFERENCE_BACKEND", "vllm").strip().lower()
 if INFERENCE_BACKEND not in {"transformers", "vllm"}:
     INFERENCE_BACKEND = "transformers"
 
@@ -329,11 +326,12 @@ inference_image = (
     .pip_install(
         "fastapi>=0.115.0",
         "torch>=2.3.0",
-        "transformers>=4.48.0",
+        "transformers>=4.51.0",
         "accelerate>=1.0.0",
         "safetensors>=0.4.5",
         "huggingface_hub[hf_transfer]>=0.30.0",
-        "vllm>=0.5.5",
+        "vllm>=0.6.2",
+        "ftfy",
     )
     .run_commands(
         "curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain stable",
@@ -343,12 +341,15 @@ inference_image = (
     )
     .env(
         {
-            "HF_HOME": str(HF_CACHE_DIR),
+            "HF_HOME": HF_CACHE_DIR.as_posix(),
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "HF_XET_HIGH_PERFORMANCE": "1",
             "PATH": "/root/.elan/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "IMAGE_BUILD_DATE": "2026-05-31-v3",
+            "INFERENCE_BACKEND": "vllm",
         }
     )
+    .env({"CACHE_BUST": "2026-05-31-v4"})
 )
 
 hf_cache = modal.Volume.from_name("herald-hf-model-cache", create_if_missing=True)
@@ -387,12 +388,12 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 VLLM_GPU_MEMORY_UTILIZATION = _env_float("VLLM_GPU_MEMORY_UTILIZATION", 0.9)
-VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 8192)
+VLLM_MAX_MODEL_LEN = _env_int("VLLM_MAX_MODEL_LEN", 4096)
 VLLM_MAX_NUM_SEQS = _env_int("VLLM_MAX_NUM_SEQS", 8)
-VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", False)
-ENABLE_FINAL_FEEDBACK_LLM = _env_bool("ENABLE_FINAL_FEEDBACK_LLM", True)
+VLLM_ENFORCE_EAGER = _env_bool("VLLM_ENFORCE_EAGER", True)
+ENABLE_FINAL_FEEDBACK_LLM = _env_bool("ENABLE_FINAL_FEEDBACK_LLM", False)
 FINAL_FEEDBACK_MAX_NEW_TOKENS = _env_int("FINAL_FEEDBACK_MAX_NEW_TOKENS", 224)
-ENABLE_SEMANTIC_INTERPRETATION_LLM = _env_bool("ENABLE_SEMANTIC_INTERPRETATION_LLM", True)
+ENABLE_SEMANTIC_INTERPRETATION_LLM = _env_bool("ENABLE_SEMANTIC_INTERPRETATION_LLM", False)
 SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS = _env_int("SEMANTIC_INTERPRETATION_MAX_NEW_TOKENS", 224)
 
 
@@ -411,7 +412,7 @@ api_secret = _resolve_secret("GRAMMAR_API_SECRET_NAME", "API_KEY")
 
 gpu_function_kwargs: dict[str, Any] = {
     "image": inference_image,
-    "gpu": "L4",
+    "gpu": "a100",
     "timeout": _env_int("GPU_FUNCTION_TIMEOUT_SECONDS", 900),
     "startup_timeout": 1800,
     "scaledown_window": 600,
@@ -435,7 +436,7 @@ api_function_kwargs: dict[str, Any] = {
     "timeout": 900,
 }
 api_min_containers = _env_int("API_MIN_CONTAINERS", 1)
-api_max_containers = _env_int("API_MAX_CONTAINERS", 1)
+api_max_containers = _env_int("API_MAX_CONTAINERS", 3)
 if api_min_containers > 0:
     api_function_kwargs["min_containers"] = api_min_containers
 if api_max_containers > 0:
@@ -1003,6 +1004,9 @@ def _load_runtime() -> Runtime:
                 raise RuntimeError(
                     "INFERENCE_BACKEND=vllm but vLLM is unavailable in this image."
                 ) from exc
+
+            os.environ["VLLM_ATTENTION_BACKEND"] = "XFORMERS"
+            os.environ["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
 
             llm_kwargs: dict[str, Any] = {
                 "model": model_dir.as_posix(),
@@ -1908,20 +1912,47 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _normalize_statement_type(candidate: str) -> str:
-    value = _strip_code_fences(candidate)
-
-    # Strip markdown headers anywhere in the string (e.g. "### Lean4 Formalization\n").
-    # DeepSeek-Prover-V2 sometimes prefixes output with one or more heading lines.
-    value = re.sub(r"^#{1,6}\s+[^\n]*\n?", "", value, flags=re.MULTILINE).strip()
-
-    # Re-run _strip_code_fences after removing headers, because a code fence
-    # that was preceded by a header (and therefore not at position 0) is now
-    # at the start of the string.
-    value = _strip_code_fences(value)
+    candidate = candidate.replace("Ġ", " ").replace("Ċ", "\n")
+    UNICODE_FIXES = {
+        "âĪĢ": "∀",
+        "âĪĥ": "∃",
+        "âĪ§": "∧",
+        "âĪ¨": "∨",
+        "âĪ£": "∣",
+        "âĦĿ": "ℝ",
+        "âĦ¤": "ℤ",
+        "âĦķ": "ℕ",
+        "âĦ•": "ℚ",
+        "âĨĴ": "→",
+        "âī¥": "≥",
+        "âī¤": "≤",
+        "âī ": "≠",
+    }
+    for broken, fixed in UNICODE_FIXES.items():
+        candidate = candidate.replace(broken, fixed)
+    # 1. Find a ```lean4 (or ```lean) block anywhere in the output — DeepSeek-Prover-V2
+    # often wraps the answer in markdown preceded by headers or prose, so we cannot
+    # rely on the fence being at position 0.
+    lean_fence_match = re.search(
+        r"```(?:lean4?)[^\n]*\n([\s\S]+?)(?:```|$)", candidate, re.IGNORECASE
+    )
+    if lean_fence_match:
+        value = lean_fence_match.group(1).strip()
+    else:
+        # No lean fence found — strip any generic fence and markdown headers, then retry.
+        value = _strip_code_fences(candidate)
+        value = re.sub(r"^#{1,6}\s+[^\n]*\n?", "", value, flags=re.MULTILINE).strip()
+        value = _strip_code_fences(value)
 
     value = re.sub(r"^lean_statement_type\s*:\s*", "", value, flags=re.IGNORECASE).strip()
     for pattern, replacement in LEAN_CANONICAL_REPLACEMENTS:
         value = re.sub(pattern, replacement, value)
+
+    value = re.sub(
+        r"\bContinuous\s+Real\s+([A-Za-z_][A-Za-z0-9_']*)\b",
+        r"Continuous \1",
+        value,
+    )
 
     decl_match = LEAN_DECL_RE.match(value)
     if decl_match:
