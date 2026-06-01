@@ -175,8 +175,8 @@ const AUTOCOMPLETE_MAX_CONTEXT_WINDOW = 2400;
 const MODAL_BASE_URL =
   "https://amirzeinali--herald-translator-translator-v1-translate-batch.modal.run";
 const DEFAULT_MODAL_ANALYZE_URL = `${MODAL_BASE_URL}/v1/analyze`;
-const DEFAULT_LEAN_SOLVE_URL = "http://13.57.35.202:8000/v1/lean/solve";
-const DEFAULT_LEAN_COMPLETE_URL = "http://13.57.35.202:8000/v1/lean/complete";
+const DEFAULT_LEAN_SOLVE_URL = "http://localhost:8000/v1/lean/solve";
+const DEFAULT_LEAN_COMPLETE_URL = "http://localhost:8000/v1/lean/complete";
 const HARDCODED_ANALYZE_URL = DEFAULT_LEAN_SOLVE_URL;
 const HARDCODED_COMPLETE_URL = DEFAULT_LEAN_COMPLETE_URL;
 
@@ -277,6 +277,16 @@ class ZetaApp {
     this.boundScheduleByScroll = this.scheduleRender.bind(this);
     this.boundStorageChange = this.handleStorageChange.bind(this);
     this.boundRuntimeMessage = this.handleRuntimeMessage.bind(this);
+
+    this.multiFileAdapter = null;
+    this.notationConflicts = [];
+    this.notationDriftOverlay = null;
+    this.reviewModePanel = null;
+    this.reviewModeBody = null;
+    this.reviewModeReport = null;
+    this.reviewModeIssueIndex = 0;
+    this.reviewModeCollapsed = false;
+    this.reviewModeNotice = "";
   }
 
   async init() {
@@ -328,6 +338,562 @@ class ZetaApp {
     this.scanTimer = window.setInterval(() => {
       this.refreshAdapters();
     }, 1800);
+
+    this.initMultiFileSync();
+    this.initInDocumentReviewMode();
+  }
+
+  initMultiFileSync() {
+    if (!zeta.MultiFileOverleafAdapter) return;
+    if (!location.hostname.endsWith("overleaf.com")) return;
+
+    const backendBase = HARDCODED_ANALYZE_URL.replace(/\/v1\/lean\/solve\/?$/, "");
+    this.multiFileAdapter = new zeta.MultiFileOverleafAdapter(backendBase);
+
+    this.multiFileAdapter.onChange((state) => {
+      this.notationConflicts = state.conflicts || [];
+      this.renderNotationDriftOverlay();
+      if (this.notationConflicts.length > 0) {
+        this.addActivity(
+          `Notation drift: ${this.notationConflicts.length} conflict(s) detected across ${state.fileCount} file(s).`,
+          "warning"
+        );
+      }
+    });
+
+    this.multiFileAdapter.connect();
+
+    setTimeout(() => {
+      this.multiFileAdapter.scanAndSync();
+    }, 2000);
+  }
+
+  renderNotationDriftOverlay() {
+    if (!this.notationDriftOverlay) {
+      this.notationDriftOverlay = document.createElement("div");
+      this.notationDriftOverlay.className = "zeta-notation-drift-overlay";
+      document.body.appendChild(this.notationDriftOverlay);
+    }
+
+    const overlay = this.notationDriftOverlay;
+
+    if (!this.notationConflicts || this.notationConflicts.length === 0) {
+      overlay.classList.add("is-hidden");
+      overlay.replaceChildren();
+      return;
+    }
+
+    overlay.classList.remove("is-hidden");
+    overlay.replaceChildren();
+
+    const header = document.createElement("div");
+    header.className = "zeta-drift-header";
+    header.innerHTML = `
+      <span class="zeta-drift-icon">⚠</span>
+      <strong>Notation Drift Detected</strong>
+      <span class="zeta-drift-count">${this.notationConflicts.length}</span>
+      <button type="button" class="zeta-drift-close">✕</button>
+    `;
+    header.querySelector(".zeta-drift-close").addEventListener("click", () => {
+      overlay.classList.add("is-hidden");
+    });
+    overlay.appendChild(header);
+
+    const list = document.createElement("ul");
+    list.className = "zeta-drift-list";
+
+    for (const conflict of this.notationConflicts.slice(0, 8)) {
+      const li = document.createElement("li");
+      li.className = "zeta-drift-item";
+
+      const symbol = document.createElement("code");
+      symbol.className = "zeta-drift-symbol";
+      symbol.textContent = conflict.symbol;
+
+      const msg = document.createElement("span");
+      msg.className = "zeta-drift-message";
+      msg.textContent = conflict.message;
+
+      const defs = document.createElement("div");
+      defs.className = "zeta-drift-definitions";
+      for (const def of (conflict.definitions || [])) {
+        const defEl = document.createElement("div");
+        defEl.className = "zeta-drift-def";
+        defEl.innerHTML = `<code>${def.defined_in}</code>: <em>${def.latex_type}</em>`;
+        if (def.context_text) {
+          const ctx = document.createElement("span");
+          ctx.className = "zeta-drift-context";
+          ctx.textContent = def.context_text.slice(0, 80);
+          defEl.appendChild(ctx);
+        }
+        defs.appendChild(defEl);
+      }
+
+      li.append(symbol, msg, defs);
+      list.appendChild(li);
+    }
+
+    overlay.appendChild(list);
+  }
+
+  initInDocumentReviewMode() {
+    if (this.reviewModePanel || !document.body) return;
+
+    const panel = document.createElement("section");
+    panel.className = "zeta-review-mode-panel";
+    panel.setAttribute("aria-label", "Zeta in-document review mode");
+    panel.innerHTML = `
+      <div class="zeta-review-mode-header">
+        <div>
+          <div class="zeta-review-mode-kicker">Journal Readiness</div>
+          <strong>Zeta Review Mode</strong>
+        </div>
+        <button type="button" class="zeta-review-mode-hide" data-zeta-review-action="toggle">Hide</button>
+      </div>
+      <div class="zeta-review-mode-body"></div>
+    `;
+
+    panel.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-zeta-review-action]");
+      if (!button || !panel.contains(button)) return;
+      this.handleReviewModeAction(button);
+    });
+
+    document.body.appendChild(panel);
+    this.reviewModePanel = panel;
+    this.reviewModeBody = panel.querySelector(".zeta-review-mode-body");
+    this.renderReviewModeIdle();
+  }
+
+  handleReviewModeAction(button) {
+    const action = button.dataset.zetaReviewAction;
+    if (action === "toggle") {
+      this.reviewModeCollapsed = !this.reviewModeCollapsed;
+      this.reviewModePanel?.classList.toggle("is-collapsed", this.reviewModeCollapsed);
+      button.textContent = this.reviewModeCollapsed ? "Show" : "Hide";
+      return;
+    }
+    if (action === "run") {
+      this.runInDocumentPrecheck(false);
+      return;
+    }
+    if (action === "demo") {
+      this.runInDocumentPrecheck(true);
+      return;
+    }
+    if (action === "next") {
+      this.focusNextReviewIssue();
+      return;
+    }
+    if (action === "copy-report") {
+      this.copyCurrentReviewerReport();
+      return;
+    }
+    if (action === "copy-fix") {
+      this.copyReviewIssueField(button, "suggestedFix", "Suggested fix copied.");
+      return;
+    }
+    if (action === "copy-comment") {
+      this.copyReviewIssueField(button, "reviewerComment", "Reviewer comment copied.");
+    }
+  }
+
+  renderReviewModeIdle(message = "Run a Pre-Check on the current Overleaf document, or use the built-in demo paper for a reliable live demo.") {
+    if (!this.reviewModeBody) return;
+    this.reviewModeBody.innerHTML = `
+      <div class="zeta-review-mode-state">
+        <div class="zeta-review-mode-score is-empty">--</div>
+        <div>
+          <div class="zeta-review-mode-state-title">Ready for Pre-Check</div>
+          <p>${this.escapeHtml(message)}</p>
+        </div>
+      </div>
+      ${this.reviewModeControls()}
+      <div class="zeta-review-mode-empty">
+        <strong>No document results yet.</strong>
+        <span>Zeta will surface notation drift, used-before-definition warnings, reviewer comments, and suggested author fixes directly in this panel.</span>
+      </div>
+      ${this.reviewModeFallbackTextarea("")}
+    `;
+  }
+
+  renderReviewModeLoading(demoMode) {
+    if (!this.reviewModeBody) return;
+    this.reviewModeBody.innerHTML = `
+      <div class="zeta-review-mode-state">
+        <div class="zeta-review-mode-score is-loading">...</div>
+        <div>
+          <div class="zeta-review-mode-state-title">${demoMode ? "Loading Demo Mode" : "Running Pre-Check"}</div>
+          <p>Zeta is scanning the LaTeX, extracting symbols, and building reviewer comments.</p>
+        </div>
+      </div>
+      ${this.reviewModeControls()}
+      <div class="zeta-review-mode-loading">Building in-document review report...</div>
+      ${this.reviewModeFallbackTextarea("")}
+    `;
+  }
+
+  renderReviewModeError(message) {
+    if (!this.reviewModeBody) return;
+    this.reviewModeBody.innerHTML = `
+      <div class="zeta-review-mode-state">
+        <div class="zeta-review-mode-score is-warning">!</div>
+        <div>
+          <div class="zeta-review-mode-state-title">Could not read the active document</div>
+          <p>${this.escapeHtml(message)}</p>
+        </div>
+      </div>
+      ${this.reviewModeControls()}
+      <div class="zeta-review-mode-empty">
+        <strong>Demo-safe fallback available.</strong>
+        <span>Click <em>Use Demo Paper</em> for an instant demo, or run <code>npm run zeta:check -- --dir &lt;path&gt;</code> locally on your .tex project.</span>
+      </div>
+      ${this.reviewModeFallbackTextarea("")}
+    `;
+  }
+
+  reviewModeControls() {
+    return `
+      <div class="zeta-review-mode-actions">
+        <button type="button" data-zeta-review-action="run">Run Pre-Check</button>
+        <button type="button" data-zeta-review-action="demo">Use Demo Paper</button>
+        <button type="button" data-zeta-review-action="next">Next Issue</button>
+        <button type="button" data-zeta-review-action="copy-report">Copy Reviewer Report</button>
+      </div>
+    `;
+  }
+
+  async runInDocumentPrecheck(demoMode) {
+    const api = window.__zetaPrecheck;
+    if (!api?.buildPrecheckReport) {
+      this.renderReviewModeError("The local Zeta pre-check engine is not loaded in this page.");
+      return;
+    }
+
+    this.renderReviewModeLoading(demoMode);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    let files = null;
+    if (!demoMode) {
+      files = this.extractPrecheckFilesFromPage();
+      if (!files.length) {
+        this.renderReviewModeError("Zeta could not extract LaTeX from the active Overleaf editor. The page may still be loading or the editor DOM may be unavailable.");
+        return;
+      }
+    }
+
+    const report = api.buildPrecheckReport(demoMode ? null : files, { demoMode });
+    if (typeof api.generateReviewerSummary === "function") {
+      report.reviewerSummary = await api.generateReviewerSummary(report, {
+        reviewerSummaryProvider: (context) => this.fetchBackendReviewerSummary(context),
+        providerFailureState: "unavailable",
+      });
+    }
+    this.reviewModeReport = report;
+    this.reviewModeIssueIndex = 0;
+    this.reviewModeNotice = demoMode
+      ? "Demo Mode: sample verification result with deterministic local issues."
+      : `Real document mode: scanned ${files.length} extracted LaTeX file(s).`;
+    this.renderReviewModeReport(report);
+  }
+
+  extractPrecheckFilesFromPage() {
+    const files = [];
+
+    if (this.multiFileAdapter && typeof this.multiFileAdapter.readOverleafFileTree === "function") {
+      try {
+        const fileTree = this.multiFileAdapter.readOverleafFileTree();
+        for (const [filePath, content] of fileTree.entries()) {
+          if (String(content || "").trim()) {
+            files.push({ file_path: filePath, content: String(content) });
+          }
+        }
+      } catch (_error) {
+        // Fall through to the active adapter.
+      }
+    }
+
+    if (files.length) return files;
+
+    const snapshot = this.extractActiveDocumentSnapshot();
+    if (snapshot?.sourceText || snapshot?.text) {
+      const content = String(snapshot.sourceText || snapshot.text || "");
+      if (content.trim()) {
+        return [{ file_path: "active-document.tex", content }];
+      }
+    }
+
+    const textarea = document.querySelector("textarea.ace_text-input, textarea[name='editor'], textarea");
+    if (textarea?.value?.trim()) {
+      return [{ file_path: "active-document.tex", content: String(textarea.value) }];
+    }
+
+    return [];
+  }
+
+  async fetchBackendReviewerSummary(context) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch("http://localhost:8000/v1/review/summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(context || {}),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`review_summary_${response.status}`);
+      }
+      return await response.json();
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  extractActiveDocumentSnapshot() {
+    const adapter = this.activeAdapter;
+    if (!adapter) return null;
+    if (typeof adapter.getDocumentSnapshot === "function") {
+      try {
+        const direct = adapter.getDocumentSnapshot();
+        if (direct?.sourceText || direct?.text) return direct;
+      } catch (_error) {
+        // Fall through to scope snapshot.
+      }
+    }
+    if (typeof adapter.getScopeSnapshot === "function") {
+      try {
+        return adapter.getScopeSnapshot("document");
+      } catch (_error) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  renderReviewModeReport(report) {
+    const api = window.__zetaPrecheck;
+    if (!this.reviewModeBody || !api) return;
+
+    const items = api.inDocumentReviewItems ? api.inDocumentReviewItems(report) : [];
+    const symbols = api.problemSymbolsForReport ? api.problemSymbolsForReport(report) : [];
+    const markdown = api.markdownReviewerReport ? api.markdownReviewerReport(report) : "";
+    const activeIndex = Math.min(this.reviewModeIssueIndex, Math.max(0, items.length - 1));
+    const modeLabel = report.demoMode ? "Demo Mode" : "Real Document";
+    const issuesLabel = `${items.length} ${items.length === 1 ? "issue" : "issues"}`;
+
+    this.reviewModeBody.innerHTML = `
+      <div class="zeta-review-mode-summary">
+        <div class="zeta-review-mode-score">${report.score}</div>
+        <div class="zeta-review-mode-summary-copy">
+          <div class="zeta-review-mode-badge">${this.escapeHtml(report.certification.label)}</div>
+          <strong>${this.escapeHtml(report.statusBadge)}</strong>
+          <span>${this.escapeHtml(modeLabel)} · ${this.escapeHtml(issuesLabel)} · ${this.escapeHtml(this.reviewModeNotice)}</span>
+        </div>
+      </div>
+      <div class="zeta-review-mode-cert">
+        ${this.escapeHtml(report.certification.description)}
+      </div>
+      ${this.reviewModeControls()}
+      ${this.renderAiReviewerSummary(report.reviewerSummary)}
+      ${this.renderProblemSymbols(symbols)}
+      ${this.renderIssueCards(items, activeIndex)}
+      ${this.renderReviewerComments(items)}
+      ${this.reviewModeFallbackTextarea(markdown)}
+    `;
+  }
+
+  renderAiReviewerSummary(summary) {
+    const state = summary?.state || {
+      key: "unavailable",
+      label: "Unavailable",
+      description: "Reviewer summary could not be generated from the available document signals.",
+    };
+    const bullets = Array.isArray(summary?.bullets) ? summary.bullets : [];
+    const signals = Array.isArray(summary?.usedSignals) ? summary.usedSignals : [];
+    return `
+      <section class="zeta-review-mode-section zeta-review-ai-summary">
+        <div class="zeta-review-ai-head">
+          <h3>AI Reviewer Summary</h3>
+          <span class="zeta-review-ai-state is-${this.escapeHtml(state.key || "unavailable")}">${this.escapeHtml(state.label || "Unavailable")}</span>
+        </div>
+        <p>${this.escapeHtml(summary?.text || state.description || "Reviewer summary unavailable.")}</p>
+        ${bullets.length ? `
+          <ul>
+            ${bullets.map((item) => `<li>${this.escapeHtml(item)}</li>`).join("")}
+          </ul>
+        ` : ""}
+        ${signals.length ? `
+          <div class="zeta-review-ai-signals">Signals: ${signals.map((item) => this.escapeHtml(item)).join(", ")}</div>
+        ` : ""}
+      </section>
+    `;
+  }
+
+  renderProblemSymbols(symbols) {
+    if (!symbols.length) {
+      return `
+        <section class="zeta-review-mode-section">
+          <h3>Problem Symbols</h3>
+          <p class="zeta-review-mode-muted">No problem symbols detected by the current prototype checks.</p>
+        </section>
+      `;
+    }
+    return `
+      <section class="zeta-review-mode-section">
+        <h3>Problem Symbols</h3>
+        <div class="zeta-review-symbol-strip">
+          ${symbols.map((item) => `
+            <span class="zeta-review-symbol-chip" title="${this.escapeHtml(item.title)}">
+              <code>${this.escapeHtml(item.symbol)}</code>
+              <span>${this.escapeHtml(item.severity)}</span>
+            </span>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  renderIssueCards(items, activeIndex) {
+    if (!items.length) {
+      return `
+        <section class="zeta-review-mode-section">
+          <h3>Inline Issue Cards</h3>
+          <div class="zeta-review-mode-empty compact">
+            <strong>No high-severity notation or verification warnings detected.</strong>
+            <span>Zeta still recommends author review before submission.</span>
+          </div>
+        </section>
+      `;
+    }
+    return `
+      <section class="zeta-review-mode-section">
+        <h3>Inline Issue Cards</h3>
+        <div class="zeta-review-issue-list">
+          ${items.map((item, index) => `
+            <article class="zeta-review-issue-card ${index === activeIndex ? "is-active" : ""}" data-zeta-review-issue-index="${index}">
+              <div class="zeta-review-issue-head">
+                <span class="zeta-review-severity">${this.escapeHtml(item.severity)}</span>
+                <strong>${this.escapeHtml(item.title)}</strong>
+              </div>
+              <p>${this.escapeHtml(item.message)}</p>
+              ${item.location ? `<div class="zeta-review-location">Location: ${this.escapeHtml(item.location)}</div>` : ""}
+              ${item.symbol ? `<div class="zeta-review-symbol-callout">Problem symbol: <code>${this.escapeHtml(item.symbol)}</code></div>` : ""}
+              ${item.snippet ? `<pre class="zeta-review-snippet">${this.escapeHtml(item.snippet)}</pre>` : ""}
+              <div class="zeta-review-why">
+                <strong>Why this matters</strong>
+                <span>${this.escapeHtml(item.whyThisMatters)}</span>
+              </div>
+              <div class="zeta-review-fix">
+                <strong>Author Fix</strong>
+                <span>${this.escapeHtml(item.suggestedFix)}</span>
+                <button type="button" data-zeta-review-action="copy-fix" data-zeta-review-index="${index}">Copy Suggested Fix</button>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  renderReviewerComments(items) {
+    if (!items.length) return "";
+    return `
+      <section class="zeta-review-mode-section">
+        <h3>Reviewer Comments</h3>
+        <div class="zeta-review-comment-list">
+          ${items.slice(0, 3).map((item, index) => `
+            <div class="zeta-review-comment">
+              <strong>Reviewer Comment #${index + 1}</strong>
+              <p>${this.escapeHtml(item.reviewerComment)}</p>
+              <button type="button" data-zeta-review-action="copy-comment" data-zeta-review-index="${item.index}">Copy Comment</button>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  reviewModeFallbackTextarea(markdown) {
+    return `
+      <textarea class="zeta-review-report-fallback" readonly aria-label="Reviewer report copy fallback">${this.escapeHtml(markdown || "")}</textarea>
+      <div class="zeta-review-copy-status" aria-live="polite"></div>
+    `;
+  }
+
+  focusNextReviewIssue() {
+    const api = window.__zetaPrecheck;
+    const items = api?.inDocumentReviewItems && this.reviewModeReport
+      ? api.inDocumentReviewItems(this.reviewModeReport)
+      : [];
+    if (!items.length) {
+      this.showReviewNotice("No issues to cycle through. Use Demo Paper to show the review workflow.");
+      return;
+    }
+    this.reviewModeIssueIndex = (this.reviewModeIssueIndex + 1) % items.length;
+    this.renderReviewModeReport(this.reviewModeReport);
+    const active = this.reviewModePanel?.querySelector(".zeta-review-issue-card.is-active");
+    if (active) active.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  copyReviewIssueField(button, field, message) {
+    const api = window.__zetaPrecheck;
+    const index = Number(button.dataset.zetaReviewIndex);
+    const items = api?.inDocumentReviewItems && this.reviewModeReport
+      ? api.inDocumentReviewItems(this.reviewModeReport)
+      : [];
+    const item = items[index];
+    const text = item?.[field] || "";
+    if (!text) {
+      this.showReviewNotice("Nothing to copy for this issue.");
+      return;
+    }
+    this.copyReviewText(text, message);
+  }
+
+  copyCurrentReviewerReport() {
+    const api = window.__zetaPrecheck;
+    if (!this.reviewModeReport || !api?.markdownReviewerReport) {
+      this.showReviewNotice("Run Pre-Check or Use Demo Paper before copying a reviewer report.");
+      return;
+    }
+    this.copyReviewText(api.markdownReviewerReport(this.reviewModeReport), "Reviewer report copied.");
+  }
+
+  async copyReviewText(text, successMessage) {
+    const value = String(text || "");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(value);
+      this.showReviewNotice(successMessage);
+    } catch (_error) {
+      const fallback = this.reviewModePanel?.querySelector(".zeta-review-report-fallback");
+      if (fallback) {
+        fallback.value = value;
+        fallback.classList.add("is-visible");
+        fallback.focus();
+        fallback.select();
+      }
+      this.showReviewNotice("Clipboard blocked. The text is selected below for manual copy.");
+    }
+  }
+
+  showReviewNotice(message) {
+    const status = this.reviewModePanel?.querySelector(".zeta-review-copy-status");
+    if (!status) return;
+    status.textContent = message;
+    window.setTimeout(() => {
+      if (status.textContent === message) status.textContent = "";
+    }, 2400);
+  }
+
+  escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   async loadSettings() {
@@ -751,6 +1317,9 @@ class ZetaApp {
             }
             this.scheduleAutocomplete("typing");
             this.scheduleRender();
+            if (this.multiFileAdapter) {
+              this.multiFileAdapter.scheduleSyncDebounced();
+            }
           }
         },
         () => {
@@ -3028,7 +3597,7 @@ class ZetaApp {
   }
 
   resolveChatEndpoint() {
-    const fallback = "http://13.57.35.202:8000/v1/chat/explain";
+    const fallback = DEFAULT_LEAN_SOLVE_URL.replace(/\/v1\/lean\/solve\/?$/, "/v1/chat/explain");
     const raw = HARDCODED_ANALYZE_URL;
     if (!raw) {
       return fallback;
@@ -3089,7 +3658,6 @@ class ZetaApp {
     const primary = this.resolveChatEndpoint();
     const candidates = [
       primary,
-      "http://13.57.35.202:8000/v1/chat/explain",
     ];
     const unique = [];
     const seen = new Set();
@@ -7333,6 +7901,20 @@ class ZetaApp {
       adapter.destroy();
     }
     this.adapters = [];
+
+    if (this.multiFileAdapter) {
+      this.multiFileAdapter.destroy();
+      this.multiFileAdapter = null;
+    }
+    if (this.notationDriftOverlay && this.notationDriftOverlay.isConnected) {
+      this.notationDriftOverlay.remove();
+    }
+    this.notationDriftOverlay = null;
+    if (this.reviewModePanel && this.reviewModePanel.isConnected) {
+      this.reviewModePanel.remove();
+    }
+    this.reviewModePanel = null;
+    this.reviewModeBody = null;
   }
 }
 

@@ -248,3 +248,44 @@ class ChatExplainResponse(BaseModel):
     latency_ms: float | None = None
     model: str | None = None
     fallback_reason: str | None = None
+
+
+class ReviewSummaryRequest(BaseModel):
+    """Provider-neutral reviewer summary context from the extension pre-check layer."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    title: str | None = None
+    score: int | None = Field(default=None, ge=0, le=100)
+    status_badge: str | None = Field(default=None, alias="statusBadge")
+    certification: dict[str, Any] = Field(default_factory=dict)
+    demo_mode: bool = Field(default=False, alias="demoMode")
+    counts: dict[str, Any] = Field(default_factory=dict)
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    math_entities: dict[str, Any] = Field(default_factory=dict, alias="mathEntities")
+    suggested_repairs: list[dict[str, Any]] = Field(default_factory=list, alias="suggestedRepairs")
+    repairs: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_fixes: list[str] = Field(default_factory=list, alias="suggestedFixes")
+    verification_issues: list[dict[str, Any]] = Field(default_factory=list, alias="verificationIssues")
+    lean: dict[str, Any] = Field(default_factory=dict)
+    review_ledger: list[dict[str, Any]] = Field(default_factory=list, alias="reviewLedger")
+
+    def summary_context(self) -> dict[str, Any]:
+        payload = self.model_dump(by_alias=True)
+        repairs: list[dict[str, Any]] = []
+        repairs.extend(self.repairs)
+        repairs.extend(self.suggested_repairs)
+        if self.suggested_fixes:
+            repairs.extend({"text": fix, "source": "suggestedFixes"} for fix in self.suggested_fixes)
+        payload["repairs"] = repairs
+        payload["suggestedRepairs"] = repairs
+        return payload
+
+
+class ReviewSummaryResponse(BaseModel):
+    text: str
+    bullets: list[str] = Field(default_factory=list)
+    usedSignals: list[str] = Field(default_factory=list)
+    providerName: str = "openai"
+    model: str | None = None
+    generatedAt: str

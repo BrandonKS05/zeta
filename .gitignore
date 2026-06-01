@@ -8,6 +8,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.db
 node_modules/
 dist/
 build/
+zeta-report.json
+zeta-report.md
+*.log
+.lean-state/

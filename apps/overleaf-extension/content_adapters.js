@@ -804,10 +804,298 @@ class ContentEditableAdapter extends DomLineAdapter {
   }
 }
 
+class MultiFileOverleafAdapter {
+  constructor(backendBaseUrl) {
+    this.backendBaseUrl = backendBaseUrl || "http://localhost:8000";
+    this.ws = null;
+    this.wsReconnectTimer = null;
+    this.wsReconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.fileTree = new Map();
+    this.conflicts = [];
+    this.notations = [];
+    this.listeners = new Set();
+    this.syncInProgress = false;
+    this.lastSyncAt = 0;
+    this.syncDebounceTimer = null;
+    this.syncIntervalTimer = null;
+    this.destroyed = false;
+  }
+
+  onChange(callback) {
+    this.listeners.add(callback);
+    return () => this.listeners.delete(callback);
+  }
+
+  _notify() {
+    for (const cb of this.listeners) {
+      try {
+        cb({
+          conflicts: this.conflicts,
+          notations: this.notations,
+          fileCount: this.fileTree.size,
+          syncInProgress: this.syncInProgress,
+        });
+      } catch (_e) {
+        // ignore listener errors
+      }
+    }
+  }
+
+  connect() {
+    if (this.destroyed) return;
+    this._closeWs();
+    const wsUrl = this._projectUrl("/ws").replace(/^http/, "ws");
+    try {
+      this.ws = new WebSocket(wsUrl);
+    } catch (_e) {
+      console.warn("[zeta:multifile] WebSocket construction failed", _e);
+      this._scheduleReconnect();
+      return;
+    }
+
+    this.ws.onopen = () => {
+      console.info("[zeta:multifile] WebSocket connected");
+      this.wsReconnectAttempts = 0;
+      this._startPeriodicSync();
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "sync_result") {
+          this.notations = msg.notations || [];
+          this.conflicts = msg.conflicts || [];
+          this.syncInProgress = false;
+          this._notify();
+          console.info("[zeta:multifile] sync complete", {
+            notations: this.notations.length,
+            conflicts: this.conflicts.length,
+          });
+        } else if (msg.type === "ack") {
+          console.info("[zeta:multifile] sync ack", msg);
+        }
+      } catch (_e) {
+        // ignore parse errors
+      }
+    };
+
+    this.ws.onerror = (event) => {
+      console.warn("[zeta:multifile] WebSocket error", event);
+    };
+
+    this.ws.onclose = () => {
+      console.info("[zeta:multifile] WebSocket closed");
+      this.ws = null;
+      this._scheduleReconnect();
+    };
+  }
+
+  _closeWs() {
+    if (this.ws) {
+      try { this.ws.close(); } catch (_e) { /* ignore */ }
+      this.ws = null;
+    }
+  }
+
+  _scheduleReconnect() {
+    if (this.destroyed) return;
+    if (this.wsReconnectAttempts >= this.maxReconnectAttempts) {
+      console.warn("[zeta:multifile] max reconnect attempts reached, falling back to REST");
+      return;
+    }
+    const delay = Math.min(2000 * Math.pow(2, this.wsReconnectAttempts), 30000);
+    this.wsReconnectAttempts++;
+    this.wsReconnectTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  _startPeriodicSync() {
+    if (this.syncIntervalTimer) clearInterval(this.syncIntervalTimer);
+    this.syncIntervalTimer = setInterval(() => {
+      this.scanAndSync();
+    }, 15000);
+  }
+
+  readOverleafFileTree() {
+    const files = new Map();
+
+    const fileTreeEl = document.querySelector(".file-tree-list, [role='tree'], .outline-pane");
+    if (!fileTreeEl) {
+      const cmEditor = document.querySelector(".cm-editor .cm-content, .ace_editor .ace_text-layer");
+      if (cmEditor) {
+        const activeFileName = this._resolveActiveFileName();
+        const text = this._getEditorText();
+        if (text && activeFileName) {
+          files.set(activeFileName, text);
+        }
+      }
+      return files;
+    }
+
+    const items = fileTreeEl.querySelectorAll(
+      "[role='treeitem'], .file-tree-item, .entity, [class*='file-tree']"
+    );
+    const activeFileName = this._resolveActiveFileName();
+
+    for (const item of items) {
+      const nameEl = item.querySelector(
+        ".item-name, .entity-name, [class*='name'], span"
+      );
+      const name = nameEl ? nameEl.textContent.trim() : "";
+      if (!name || !name.endsWith(".tex")) continue;
+
+      if (name === activeFileName) {
+        const text = this._getEditorText();
+        if (text) files.set(name, text);
+      }
+    }
+
+    if (files.size === 0 && activeFileName) {
+      const text = this._getEditorText();
+      if (text) files.set(activeFileName, text);
+    }
+
+    return files;
+  }
+
+  _resolveActiveFileName() {
+    const breadcrumb = document.querySelector(
+      ".toolbar-filename, .entity-name.active, .breadcrumb .active, " +
+      "[class*='toolbar'] [class*='filename'], [class*='breadcrumb'] span"
+    );
+    if (breadcrumb) {
+      const name = breadcrumb.textContent.trim();
+      if (name) return name.endsWith(".tex") ? name : name + ".tex";
+    }
+
+    const tab = document.querySelector(
+      ".nav-tabs .active, [role='tab'][aria-selected='true'], .tab.active"
+    );
+    if (tab) {
+      const name = tab.textContent.trim();
+      if (name && (name.endsWith(".tex") || name.endsWith(".sty") || name.endsWith(".bib"))) {
+        return name;
+      }
+    }
+
+    return "main.tex";
+  }
+
+  _getEditorText() {
+    const cmContent = document.querySelector(".cm-editor .cm-content");
+    if (cmContent) {
+      const cmView = cmContent.cmView?.view || cmContent.view;
+      if (cmView?.state?.doc) {
+        try { return cmView.state.doc.toString(); } catch (_e) { /* fall through */ }
+      }
+    }
+
+    const aceLayer = document.querySelector(".ace_editor");
+    if (aceLayer) {
+      const aceEditor = aceLayer.env?.editor;
+      if (aceEditor && typeof aceEditor.getValue === "function") {
+        try { return aceEditor.getValue(); } catch (_e) { /* fall through */ }
+      }
+    }
+
+    const textarea = document.querySelector("textarea.ace_text-input, textarea[name='editor']");
+    if (textarea) return textarea.value || "";
+
+    if (cmContent) return cmContent.textContent || "";
+    return "";
+  }
+
+  async scanAndSync() {
+    if (this.destroyed || this.syncInProgress) return;
+
+    const files = this.readOverleafFileTree();
+    if (files.size === 0) return;
+
+    let changed = false;
+    for (const [name, content] of files) {
+      if (this.fileTree.get(name) !== content) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed && files.size === this.fileTree.size) return;
+
+    this.fileTree = files;
+    this.syncInProgress = true;
+    this._notify();
+
+    const payload = [];
+    for (const [filePath, content] of files) {
+      payload.push({ filePath, content });
+    }
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify({ type: "sync", files: payload }));
+        this.lastSyncAt = Date.now();
+        return;
+      } catch (_e) {
+        console.warn("[zeta:multifile] ws send failed, falling back to REST", _e);
+      }
+    }
+
+    try {
+      const url = this._projectUrl("/sync");
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: payload.map((f) => ({ file_path: f.filePath, content: f.content })),
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this.conflicts = data.conflicts || [];
+        this.notations = data.notations_extracted
+          ? Array(data.notations_extracted).fill(null)
+          : [];
+        console.info("[zeta:multifile] REST sync complete", data);
+      } else {
+        console.warn("[zeta:multifile] REST sync failed", resp.status);
+      }
+    } catch (e) {
+      console.warn("[zeta:multifile] REST sync error", e);
+    } finally {
+      this.syncInProgress = false;
+      this.lastSyncAt = Date.now();
+      this._notify();
+    }
+  }
+
+  scheduleSyncDebounced() {
+    if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
+    this.syncDebounceTimer = setTimeout(() => {
+      this.scanAndSync();
+    }, 3000);
+  }
+
+  _projectUrl(path) {
+    const base = String(this.backendBaseUrl || "http://localhost:8000")
+      .replace(/\/$/, "")
+      .replace(/\/v1\/project$/, "");
+    return `${base}/v1/project${path}`;
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this._closeWs();
+    if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+    if (this.syncIntervalTimer) clearInterval(this.syncIntervalTimer);
+    if (this.syncDebounceTimer) clearTimeout(this.syncDebounceTimer);
+    this.listeners.clear();
+  }
+}
+
   Object.assign(zeta, {
     AdapterBase,
     TextareaAdapter,
     DomLineAdapter,
     ContentEditableAdapter,
+    MultiFileOverleafAdapter,
   });
 })();

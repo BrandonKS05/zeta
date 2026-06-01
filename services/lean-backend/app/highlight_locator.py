@@ -338,13 +338,20 @@ def _matched_text(match: _SpanMatch) -> str:
     return match.chunk.text[match.start_in_chunk : match.end_in_chunk]
 
 
+def _is_acceptable_highlight(match: _SpanMatch) -> bool:
+    text = _matched_text(match)
+    if match.source in {"latex_span", "latex_excerpt", "quoted_text"}:
+        return bool(text and text.strip())
+    return not _is_boilerplate_highlight(text)
+
+
 def _resolve_item(
     item: InterpretationItem,
     chunks: list[HighlightChunk],
     active_chunk_id: str | None,
 ) -> _SpanMatch | None:
     by_span = _resolve_by_latex_span(item, chunks, active_chunk_id)
-    if by_span is not None and not _is_boilerplate_highlight(_matched_text(by_span)):
+    if by_span is not None and _is_acceptable_highlight(by_span):
         return by_span
 
     by_excerpt = _resolve_by_text(
@@ -354,7 +361,7 @@ def _resolve_item(
         source="latex_excerpt",
         confidence=0.9,
     )
-    if by_excerpt is not None and not _is_boilerplate_highlight(_matched_text(by_excerpt)):
+    if by_excerpt is not None and _is_acceptable_highlight(by_excerpt):
         return by_excerpt
 
     for candidate in _extract_quoted_candidates(item):
@@ -365,7 +372,7 @@ def _resolve_item(
             source="quoted_text",
             confidence=0.8,
         )
-        if by_quote is not None and not _is_boilerplate_highlight(_matched_text(by_quote)):
+        if by_quote is not None and _is_acceptable_highlight(by_quote):
             return by_quote
 
     by_replacement = _resolve_by_text(
@@ -375,7 +382,7 @@ def _resolve_item(
         source="replacement_text",
         confidence=0.72,
     )
-    if by_replacement is not None and not _is_boilerplate_highlight(_matched_text(by_replacement)):
+    if by_replacement is not None and _is_acceptable_highlight(by_replacement):
         return by_replacement
 
     for keyword in _extract_keywords(item):
@@ -386,7 +393,7 @@ def _resolve_item(
             source="keyword",
             confidence=0.6,
         )
-        if by_keyword is not None and not _is_boilerplate_highlight(_matched_text(by_keyword)):
+        if by_keyword is not None and _is_acceptable_highlight(by_keyword):
             return by_keyword
 
     return None

@@ -19,7 +19,7 @@ from typing import Any, Literal
 import modal
 from pydantic import BaseModel, Field, field_validator
 
-APP_NAME = "herald-math-grammarly"
+APP_NAME = os.environ.get("APP_NAME", "deepseek-prover-v2")
 APP_VERSION = "2026-05-30-deepseek-prover-v2-7b-v1"
 MODEL_ID = os.environ.get("MODEL_ID", "deepseek-ai/DeepSeek-Prover-V2-7B")
 MODEL_REVISION = os.environ.get("MODEL_REVISION")

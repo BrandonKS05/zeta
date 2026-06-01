@@ -87,11 +87,29 @@
   const backendTopKToggle = document.getElementById("zeta-autocomplete-topk-toggle");
   const backendManualToggle = document.getElementById("zeta-autocomplete-manual-toggle");
   const backendStatus = document.getElementById("zeta-backend-status");
+  const readinessScore = document.getElementById("zeta-readiness-score");
+  const readinessStatus = document.getElementById("zeta-readiness-status");
+  const certifiedStamp = document.getElementById("zeta-certified-stamp");
+  const certifiedExplainer = document.getElementById("zeta-certified-explainer");
+  const precheckDemoBtn = document.getElementById("zeta-precheck-demo");
+  const copyReviewerReportBtn = document.getElementById("zeta-copy-reviewer-report");
+  const copyStatus = document.getElementById("zeta-copy-status");
+  const readinessLoading = document.getElementById("zeta-readiness-loading");
+  const readinessError = document.getElementById("zeta-readiness-error");
+  const readinessErrorText = document.getElementById("zeta-readiness-error-text");
+  const readinessMode = document.getElementById("zeta-readiness-mode");
+  const readinessCounts = document.getElementById("zeta-readiness-counts");
+  const reviewerConcerns = document.getElementById("zeta-reviewer-concerns");
+  const authorFixes = document.getElementById("zeta-author-fixes");
+  const counterexampleBox = document.getElementById("zeta-counterexample-box");
+  const reviewLedger = document.getElementById("zeta-review-ledger");
+  const reviewerReportPreview = document.getElementById("zeta-reviewer-report-preview");
 
   let hasInitialized = false;
   let hasInitializedPanelNav = false;
   let lastAnimatedShortcutPulseId = 0;
   let currentSettings = {};
+  let currentPrecheckReport = null;
   let assistantSnapshot = {
     threads: [],
     activeThreadId: null,
@@ -2120,6 +2138,29 @@
     }
   }
 
+  async function checkBackendHealth() {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await fetch("http://localhost:8000/v1/status", {
+        method: "GET",
+        signal: controller.signal,
+      });
+      window.clearTimeout(timeoutId);
+      if (response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const llm = data.llm_configured ? "LLM: configured" : "LLM: not configured";
+        const modal = data.modal_configured ? " · Modal: configured" : "";
+        renderBackendStatus(`Backend: connected · ${llm}${modal}`, "ok");
+      } else {
+        renderBackendStatus("Backend: unavailable — using deterministic local mode.", "error");
+      }
+    } catch (_err) {
+      window.clearTimeout(timeoutId);
+      renderBackendStatus("Backend: unavailable — using deterministic local mode.", "error");
+    }
+  }
+
   function renderBackendStatus(message, tone = "muted") {
     if (!backendStatus) {
       return;
@@ -2131,6 +2172,200 @@
       backendStatus.classList.add("is-error");
     }
     backendStatus.textContent = String(message || "").trim();
+  }
+
+  function setPrecheckLoading(message = "Building deterministic demo report...") {
+    if (readinessLoading) {
+      readinessLoading.style.display = "grid";
+      const text = readinessLoading.querySelector("span");
+      if (text) text.textContent = message;
+    }
+    if (readinessError) readinessError.style.display = "none";
+    if (readinessScore) readinessScore.textContent = "--/100";
+    if (readinessStatus) readinessStatus.textContent = "Preparing pre-check...";
+    if (certifiedStamp) {
+      certifiedStamp.className = "zeta-certified-stamp zeta-certified-stamp--checking";
+      certifiedStamp.textContent = "Checking";
+    }
+    if (certifiedExplainer) {
+      certifiedExplainer.textContent = "Zeta is preparing a prototype scientific pre-check.";
+    }
+  }
+
+  function setPrecheckError(message) {
+    if (readinessLoading) readinessLoading.style.display = "none";
+    if (readinessError) readinessError.style.display = "grid";
+    if (readinessErrorText) readinessErrorText.textContent = message;
+    if (readinessStatus) readinessStatus.textContent = "Pre-Check unavailable";
+    if (certifiedStamp) {
+      certifiedStamp.className = "zeta-certified-stamp zeta-certified-stamp--needs-review";
+      certifiedStamp.textContent = "Not checked";
+    }
+    if (copyStatus) copyStatus.textContent = "Run Demo Mode after the pre-check engine loads.";
+  }
+
+  function stampClassForCertification(certification) {
+    const key = String(certification?.key || "");
+    if (key === "checking") return "zeta-certified-stamp--checking";
+    if (key === "needs_review" || key === "not_checked") return "zeta-certified-stamp--needs-review";
+    if (key === "certified_demo_mode") return "zeta-certified-stamp--demo";
+    return "zeta-certified-stamp--passed";
+  }
+
+  function renderList(target, items, ordered = false) {
+    if (!target) return;
+    target.replaceChildren();
+    for (const item of items || []) {
+      const li = document.createElement("li");
+      li.innerHTML = escapeHtml(String(item || ""));
+      target.appendChild(li);
+    }
+    if ((items || []).length === 0) {
+      const li = document.createElement("li");
+      li.textContent = ordered ? "No reviewer concerns detected by the current prototype checks." : "No suggested fixes available.";
+      target.appendChild(li);
+    }
+  }
+
+  function renderReadinessCounts(counts) {
+    if (!readinessCounts) return;
+    const metrics = [
+      ["Definitions", counts.definitionsDetected],
+      ["Theorems & lemmas", counts.theoremsLemmasDetected],
+      ["Assumptions", counts.assumptionsDetected],
+      ["Notation warnings", counts.notationWarnings],
+      ["Undefined symbols", counts.undefinedSymbols],
+      ["Verification issues", counts.verificationIssues],
+    ];
+    readinessCounts.replaceChildren();
+    for (const [label, value] of metrics) {
+      const div = document.createElement("div");
+      div.className = "zeta-readiness-metric";
+      div.innerHTML = `<strong>${Number(value) || 0}</strong><span>${escapeHtml(label)}</span>`;
+      readinessCounts.appendChild(div);
+    }
+  }
+
+  function renderReviewLedger(events) {
+    if (!reviewLedger) return;
+    reviewLedger.replaceChildren();
+    for (const event of events || []) {
+      const li = document.createElement("li");
+      li.className = "zeta-ledger-event";
+      const status = String(event.status || "info").toLowerCase();
+      li.innerHTML = `
+        <strong><span class="zeta-ledger-status zeta-ledger-status--${escapeHtml(status)}">${escapeHtml(status)}</span>${escapeHtml(event.title)}</strong>
+        <span>${escapeHtml(event.description)}</span>
+      `;
+      reviewLedger.appendChild(li);
+    }
+  }
+
+  function renderPrecheckReport(report) {
+    currentPrecheckReport = report;
+    if (readinessLoading) readinessLoading.style.display = "none";
+    if (readinessError) readinessError.style.display = "none";
+    if (readinessScore) readinessScore.textContent = `${report.score}/100`;
+    if (readinessStatus) readinessStatus.textContent = report.statusBadge;
+    if (readinessMode) readinessMode.textContent = report.demoMode ? "Demo Mode" : "Live Document";
+    if (certifiedStamp) {
+      certifiedStamp.className = `zeta-certified-stamp ${stampClassForCertification(report.certification)}`;
+      certifiedStamp.textContent = report.certification.label;
+    }
+    if (certifiedExplainer) {
+      certifiedExplainer.textContent = report.certification.description;
+    }
+    renderReadinessCounts(report.counts || {});
+    renderList(reviewerConcerns, report.topReviewerConcerns || [], true);
+    renderList(authorFixes, report.suggestedAuthorFixes || [], false);
+    if (counterexampleBox) {
+      counterexampleBox.textContent = report.counterexample || "No warning selected. Run Zeta Pre-Check to generate an explanation.";
+    }
+    renderReviewLedger(report.reviewLedger || []);
+    if (copyStatus) {
+      copyStatus.textContent = report.demoMode
+        ? "Demo Mode is active. Report is ready to copy."
+        : "Reviewer report is ready to copy.";
+    }
+    if (reviewerReportPreview) {
+      reviewerReportPreview.value = "";
+      reviewerReportPreview.classList.remove("is-visible");
+    }
+  }
+
+  function runPrecheckDemo() {
+    setPrecheckLoading("Running Demo Mode with a sample LaTeX paper...");
+    window.setTimeout(() => {
+      try {
+        const engine = window.__zetaPrecheck;
+        if (!engine?.buildPrecheckReport) {
+          setPrecheckError("The local pre-check engine is missing. Reload the extension and try again.");
+          return;
+        }
+        const report = engine.buildPrecheckReport(null, {
+          demoMode: true,
+          timestamp: new Date().toISOString(),
+        });
+        renderPrecheckReport(report);
+      } catch (error) {
+        setPrecheckError(`Demo Mode failed: ${String(error?.message || error)}`);
+      }
+    }, 120);
+  }
+
+  function fallbackCopyText(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    return ok;
+  }
+
+  async function copyReviewerReport() {
+    try {
+      const engine = window.__zetaPrecheck;
+      if (!engine?.markdownReviewerReport) {
+        throw new Error("Pre-check report engine is not loaded.");
+      }
+      if (!currentPrecheckReport) {
+        runPrecheckDemo();
+        throw new Error("Report is still generating. Click copy again in a moment.");
+      }
+      const markdown = engine.markdownReviewerReport(currentPrecheckReport);
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(markdown);
+          copied = true;
+        } catch (_error) {
+          copied = false;
+        }
+      }
+      if (!copied) {
+        copied = fallbackCopyText(markdown);
+      }
+      if (!copied) {
+        if (reviewerReportPreview) {
+          reviewerReportPreview.value = markdown;
+          reviewerReportPreview.classList.add("is-visible");
+          reviewerReportPreview.focus();
+          reviewerReportPreview.select();
+        }
+        throw new Error("Clipboard blocked. Markdown report is open below for manual copy.");
+      }
+      if (copyStatus) copyStatus.textContent = "Reviewer report copied as Markdown.";
+      if (reviewerReportPreview) {
+        reviewerReportPreview.value = "";
+        reviewerReportPreview.classList.remove("is-visible");
+      }
+    } catch (error) {
+      if (copyStatus) copyStatus.textContent = String(error?.message || error);
+    }
   }
 
   function applySettingsToBackendControls(settings) {
@@ -2343,6 +2578,42 @@
     });
   }
 
+  if (precheckDemoBtn) {
+    precheckDemoBtn.addEventListener("click", () => {
+      runPrecheckDemo();
+    });
+  }
+
+  if (copyReviewerReportBtn) {
+    copyReviewerReportBtn.addEventListener("click", () => {
+      copyReviewerReport();
+    });
+  }
+
+  const exportLedgerBtn = document.getElementById("zeta-export-ledger");
+  if (exportLedgerBtn) {
+    exportLedgerBtn.addEventListener("click", () => {
+      const report = currentPrecheckReport;
+      const events = report?.reviewLedger || [];
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        score: report?.score ?? null,
+        certification: report?.certification?.label ?? null,
+        mode: report?.demoMode ? "demo" : "live",
+        events,
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "zeta-ledger.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
   window.addEventListener("resize", () => {
     const activePanelButton = panelNavButtons.find((button) => button.classList.contains("is-active"));
     if (activePanelButton) {
@@ -2435,6 +2706,7 @@
     renderTelemetry(null);
     renderPanelSnapshot(null);
     renderAssistantSnapshot(null);
+    runPrecheckDemo();
     return;
   }
 
@@ -2455,6 +2727,8 @@
     setActiveMode(normalizeMode(modeFromSettings));
     applySettingsToBackendControls(settings);
     renderBackendStatus("Autocomplete uses the deployed Modal endpoint.");
+    checkBackendHealth();
+    runPrecheckDemo();
   });
 
   if (chrome.storage?.local) {

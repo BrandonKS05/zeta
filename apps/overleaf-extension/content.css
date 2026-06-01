@@ -985,3 +985,604 @@
   }
 
 }
+
+/* ── Notation Drift Overlay ──────────────────────────────── */
+
+.zeta-notation-drift-overlay {
+  position: fixed;
+  bottom: 72px;
+  right: 16px;
+  width: 380px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #e5c07b;
+  border-left: 4px solid #e5a100;
+  border-radius: 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+  z-index: 2147483640;
+  font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  color: #1a1a1a;
+  padding: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.zeta-notation-drift-overlay.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+
+.zeta-drift-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #fef7e0;
+  border-bottom: 1px solid #e5c07b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.zeta-drift-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.zeta-drift-count {
+  background: #e5a100;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 0;
+  margin-left: auto;
+}
+
+.zeta-drift-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: #666;
+  padding: 2px 4px;
+  line-height: 1;
+  margin-left: 4px;
+}
+
+.zeta-drift-close:hover {
+  color: #1a1a1a;
+}
+
+.zeta-drift-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.zeta-drift-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.zeta-drift-item:last-child {
+  border-bottom: none;
+}
+
+.zeta-drift-symbol {
+  display: inline-block;
+  background: #f5f0e6;
+  color: #8b6914;
+  padding: 1px 6px;
+  font-family: "Berkeley Mono", "SF Mono", "Menlo", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.zeta-drift-message {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #555;
+  line-height: 1.4;
+}
+
+.zeta-drift-definitions {
+  margin-top: 6px;
+  padding-left: 4px;
+}
+
+.zeta-drift-def {
+  font-size: 11px;
+  color: #666;
+  margin-top: 3px;
+  line-height: 1.3;
+}
+
+.zeta-drift-def code {
+  background: #f0f0f0;
+  padding: 0 4px;
+  font-size: 11px;
+  font-family: "Berkeley Mono", "SF Mono", "Menlo", monospace;
+}
+
+.zeta-drift-def em {
+  color: #8b6914;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.zeta-drift-context {
+  display: block;
+  color: #888;
+  font-size: 10px;
+  margin-top: 1px;
+  font-family: "Berkeley Mono", "SF Mono", "Menlo", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+/* ── In-Document Review Mode ─────────────────────────────── */
+
+.zeta-review-mode-panel,
+.zeta-review-mode-panel * {
+  box-sizing: border-box;
+}
+
+.zeta-review-mode-panel {
+  position: fixed;
+  top: 82px;
+  right: 18px;
+  z-index: 2147483645;
+  width: min(420px, calc(100vw - 28px));
+  max-height: min(760px, calc(100vh - 110px));
+  overflow: hidden;
+  border: 1px solid #d7c7a7;
+  border-left: 4px solid #8c1515;
+  border-radius: 8px !important;
+  background: #fffdf8;
+  color: #25231f;
+  font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 22px 48px rgba(33, 24, 18, 0.28);
+}
+
+.zeta-review-mode-panel.is-collapsed {
+  max-height: 54px;
+}
+
+.zeta-review-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eadfc8;
+  background: linear-gradient(180deg, #fffaf0 0%, #f6ead5 100%);
+}
+
+.zeta-review-mode-kicker {
+  margin-bottom: 2px;
+  color: #8c1515;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.zeta-review-mode-header strong {
+  display: block;
+  color: #251f1c;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.zeta-review-mode-hide,
+.zeta-review-mode-actions button,
+.zeta-review-fix button,
+.zeta-review-comment button {
+  border: 1px solid #d9c19a;
+  border-radius: 6px !important;
+  background: #fffaf0;
+  color: #362817;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.zeta-review-mode-hide {
+  padding: 7px 9px;
+}
+
+.zeta-review-mode-actions button {
+  padding: 8px 9px;
+}
+
+.zeta-review-fix button,
+.zeta-review-comment button {
+  width: fit-content;
+  margin-top: 8px;
+  padding: 7px 9px;
+}
+
+.zeta-review-mode-hide:hover,
+.zeta-review-mode-actions button:hover,
+.zeta-review-fix button:hover,
+.zeta-review-comment button:hover {
+  border-color: #8c1515;
+  background: #f9ead6;
+}
+
+.zeta-review-mode-body {
+  max-height: calc(min(760px, calc(100vh - 110px)) - 54px);
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.zeta-review-mode-panel.is-collapsed .zeta-review-mode-body {
+  display: none;
+}
+
+.zeta-review-mode-state,
+.zeta-review-mode-summary {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+
+.zeta-review-mode-score {
+  display: grid;
+  place-items: center;
+  width: 66px;
+  height: 66px;
+  border: 1px solid #8c1515;
+  border-radius: 50% !important;
+  background: #8c1515;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.zeta-review-mode-score.is-empty,
+.zeta-review-mode-score.is-loading {
+  border-color: #b8a784;
+  background: #efe3ce;
+  color: #6f5939;
+}
+
+.zeta-review-mode-score.is-warning {
+  border-color: #b85f00;
+  background: #ffe5bf;
+  color: #783b00;
+}
+
+.zeta-review-mode-state-title,
+.zeta-review-mode-summary-copy strong {
+  display: block;
+  color: #251f1c;
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.zeta-review-mode-state p,
+.zeta-review-mode-summary-copy span,
+.zeta-review-mode-cert,
+.zeta-review-mode-muted {
+  margin: 4px 0 0;
+  color: #695f50;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.zeta-review-mode-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 5px;
+  padding: 4px 7px;
+  border: 1px solid #c8b37e;
+  border-radius: 999px !important;
+  background: #fff3cb;
+  color: #6f4c00;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.zeta-review-mode-cert {
+  margin-bottom: 11px;
+  padding: 9px 10px;
+  border: 1px solid #eadfc8;
+  border-radius: 7px !important;
+  background: #fffaf0;
+}
+
+.zeta-review-mode-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.zeta-review-mode-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eadfc8;
+}
+
+.zeta-review-mode-section h3 {
+  margin: 0 0 8px;
+  color: #251f1c;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.zeta-review-ai-summary {
+  border: 1px solid #d8ddeb;
+  border-radius: 8px !important;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.zeta-review-ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.zeta-review-ai-head h3 {
+  margin: 0;
+}
+
+.zeta-review-ai-state {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border-radius: 999px !important;
+  border: 1px solid #b9c4df;
+  background: #eef4ff;
+  color: #27395f;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.zeta-review-ai-state.is-ai_generated {
+  border-color: #6aa980;
+  background: #eaf8ef;
+  color: #245332;
+}
+
+.zeta-review-ai-state.is-heuristic_fallback {
+  border-color: #d6b66a;
+  background: #fff6d8;
+  color: #6b4d00;
+}
+
+.zeta-review-ai-state.is-unavailable {
+  border-color: #cfc9c1;
+  background: #f1eeea;
+  color: #675f55;
+}
+
+.zeta-review-ai-summary p,
+.zeta-review-ai-summary li,
+.zeta-review-ai-signals {
+  color: #4f5a68;
+  font-size: 12px;
+  line-height: 1.38;
+}
+
+.zeta-review-ai-summary p {
+  margin: 0;
+}
+
+.zeta-review-ai-summary ul {
+  margin: 8px 0 0;
+  padding-left: 17px;
+}
+
+.zeta-review-ai-summary li {
+  margin: 3px 0;
+}
+
+.zeta-review-ai-signals {
+  margin-top: 8px;
+  color: #657284;
+  font-weight: 700;
+}
+
+.zeta-review-mode-empty,
+.zeta-review-mode-loading {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px dashed #d8c8a8;
+  border-radius: 7px !important;
+  background: #fffaf0;
+  color: #5b5145;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.zeta-review-mode-empty.compact {
+  padding: 9px;
+}
+
+.zeta-review-symbol-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.zeta-review-symbol-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid #e0a52d;
+  border-radius: 999px !important;
+  background: #fff1c7;
+  color: #5c3d00;
+}
+
+.zeta-review-symbol-chip code,
+.zeta-review-symbol-callout code {
+  color: #8c1515;
+  font-family: "Berkeley Mono", "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.zeta-review-symbol-chip span {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.zeta-review-issue-list,
+.zeta-review-comment-list {
+  display: grid;
+  gap: 10px;
+}
+
+.zeta-review-issue-card,
+.zeta-review-comment {
+  border: 1px solid #e2d4bc;
+  border-radius: 8px !important;
+  background: #fff;
+  padding: 10px;
+}
+
+.zeta-review-issue-card.is-active {
+  border-color: #8c1515;
+  box-shadow: inset 3px 0 0 #8c1515, 0 10px 22px rgba(140, 21, 21, 0.11);
+}
+
+.zeta-review-issue-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.zeta-review-severity {
+  display: inline-flex;
+  padding: 3px 6px;
+  border-radius: 999px !important;
+  background: #ffe8b5;
+  color: #744600;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.zeta-review-issue-head strong,
+.zeta-review-why strong,
+.zeta-review-fix strong,
+.zeta-review-comment strong {
+  color: #251f1c;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.zeta-review-issue-card p,
+.zeta-review-comment p,
+.zeta-review-why span,
+.zeta-review-fix span,
+.zeta-review-location,
+.zeta-review-symbol-callout {
+  display: block;
+  margin: 7px 0 0;
+  color: #5f554a;
+  font-size: 12px;
+  line-height: 1.38;
+}
+
+.zeta-review-location {
+  font-weight: 750;
+}
+
+.zeta-review-snippet {
+  max-height: 88px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid #eadfc8;
+  border-radius: 6px !important;
+  background: #fffaf0;
+  color: #3d352c;
+  font-family: "Berkeley Mono", "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.zeta-review-why,
+.zeta-review-fix {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #f0e7d6;
+}
+
+.zeta-review-report-fallback {
+  display: none;
+  width: 100%;
+  min-height: 96px;
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid #d8c8a8;
+  border-radius: 7px !important;
+  background: #fff;
+  color: #2d2924;
+  font-family: "Berkeley Mono", "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.zeta-review-report-fallback.is-visible {
+  display: block;
+}
+
+.zeta-review-copy-status {
+  min-height: 16px;
+  margin-top: 8px;
+  color: #34613d;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+@media (max-width: 780px) {
+  .zeta-review-mode-panel {
+    top: auto;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-height: min(72vh, 680px);
+  }
+
+  .zeta-review-mode-body {
+    max-height: calc(min(72vh, 680px) - 54px);
+  }
+}
